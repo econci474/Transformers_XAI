@@ -48,7 +48,7 @@ def make_sidecar(row_sess, row_sel=None) -> dict:
     # Acceleration
     accel = str(row_sess.get("Acceleration", "")).strip()
 
-    # SeriesDescription → PulseSequenceType heuristic
+    # SeriesDescription -> PulseSequenceType heuristic
     desc = str(row_sess.get("SeriesDescription", "")).upper()
     if "MPRAGE" in desc or "MP-RAGE" in desc:
         pulse_seq = "MPRAGE"
@@ -111,7 +111,7 @@ sess_map = sess_map.merge(
     on=["bids_sub", "bids_ses"], how="left"
 )
 
-# Build ImageUID → row lookup
+# Build ImageUID -> row lookup
 sess_map["ImageUID_str"] = sess_map["ImageUID_int"].apply(
     lambda x: str(int(x)) if pd.notna(x) else ""
 )

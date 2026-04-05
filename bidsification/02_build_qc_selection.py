@@ -1,25 +1,42 @@
 """
-Script 02 — Build QC Selection Table
-======================================
-For each (subject, session), rank available T1w scans by:
-  1. QC quality score from MAYOADIRL_MRI_IMAGEQC (series_quality: 1=best → 4=fail)
-  2. Series preference:
-       N3m + GradWarp + B1-corrected  → score 0 (top)
-       GradWarp + N3m                 → score 1
-       N3m only                       → score 2
-       Other accepted                 → score 3
-  3. If no QC entry exists, select first by ImageUID (numeric order).
+Script 02 — Build QC Selection Table (v3)
+==========================================
+For each BIDS (subject, session) selects the preferred T1w image and
+documents all alternatives in scan_selection.csv.
+
+EXCLUSION (hard filter — these are never T1w inputs for sMRIprep):
+  - *__Mask           : brain mask images (binary)
+  - Spatially_Normalized__Masked* : pre-normalised + skull-stripped
+  - HHP_6_DOF*        : hippocampal-protocol MPRAGE (AC-PC registered)
+  - HarP_135*         : hippocampus atlas-registered version
+  - EPI_current*      : EPI distortion-corrected (not T1w)
+
+PREFERENCE HIERARCHY (lower rank = preferred):
+  Rank 0 : MPR__GradWarp__B1_Correction__N3 (±R, ±Scaled, ±Scaled_2)
+  Rank 1 : MPR__GradWarp__N3 (±R, ±Scaled variants)
+  Rank 2 : MT1__GradWarp__N3m
+  Rank 3 : MT1__N3m
+  Rank 4 : MPR__GradWarp__B1_Correction (no N3)  — (GW+B1 but unbiased)
+  Rank 5 : MPR__GradWarp (GW only, no bias correction)
+  Rank 6 : MPR____N3 (N3 only, no GW)
+  Rank 7 : MPR (raw / minimal preprocessing)
+  Rank 99: anything else not explicitly recognised
+
+QC sort (applied before preference rank):
+  - mayo_qc_quality (1=pass → 4=unusable) if available (ADNI3 only, ~29 images)
+  - Otherwise prefer by rank, then by ImageUID ascending (tiebreaker)
+
+COVERAGE SUMMARY (from session_map, after exclusions):
+  After excluding 1,193 images, 6,026 remain across 2,175 sessions.
+  Top series: MT1__GradWarp__N3m (2,467), MT1__N3m (1,344),
+              MPR__GradWarp__B1_Correction__N3 (245+192+16+6=459),
+              MPR__GradWarp__N3 (90+80+63+21+8+7=269)
+
+ADNI4 note: MRIQC has 1,421 ADNI4 T1w records but NONE are in the
+downloaded sourcedata — dataset covers ADNI1, ADNI1/GO, ADNI2, ADNI3.
 
 Outputs:
-    metadata/scan_selection.csv  — Per-session scan selection table
-    
-Columns:
-    bids_sub, bids_ses, adni_viscode,
-    ImageUID_selected, SeriesDescription_selected, selection_reason,
-    ImageUID_run1, SeriesDescription_run1,
-    ImageUID_run2, SeriesDescription_run2,   (if multiple scans exist)
-    qc_quality_selected (1-4 or NaN if no QC),
-    series_pref_rank_selected (0-3)
+    metadata/scan_selection.csv
 """
 
 import pandas as pd
@@ -28,139 +45,163 @@ import os
 import re
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
-PROJECT_ROOT = r"D:\ADNI_BIDS_project"
+PROJECT_ROOT    = r"D:\ADNI_BIDS_project"
 SESSION_MAP_CSV = os.path.join(PROJECT_ROOT, "metadata", "session_map.csv")
-MAYOADIRL_CSV = os.path.join(
-    PROJECT_ROOT, "sourcedata", "clinical", "MAYOADIRL_MRI_IMAGEQC_12_08_15.csv"
-)
-OUT_SELECTION = os.path.join(PROJECT_ROOT, "metadata", "scan_selection.csv")
+OUT_SELECTION   = os.path.join(PROJECT_ROOT, "metadata", "scan_selection.csv")
 
-# ── Series preference ranking ──────────────────────────────────────────────────
-# Lower rank = more preferred
-SERIES_PREF = {
-    # GradWarp + B1 + N3 (best) — ADNI-specific preprocessing labels
-    r"(?i).*GradWarp.*B1.*N3.*":       0,
-    r"(?i).*B1.*GradWarp.*N3.*":       0,
-    r"(?i).*N3m.*GradWarp.*":          0,
-    r"(?i).*GradWarp.*N3m.*":          0,
-    # GradWarp + N3 only
-    r"(?i).*GradWarp.*N3.*":           1,
-    r"(?i).*N3.*GradWarp.*":           1,
-    # N3 corrected only
-    r"(?i).*MT1__N3m.*":               2,
-    r"(?i).*N3m.*":                    2,
-    r"(?i).*N3.*":                     2,
-    # GradWarp only
-    r"(?i).*GradWarp.*":               3,
-    # Accelerated MPRAGE (ADNI3 standard)
-    r"(?i).*Accelerated.*MPRAGE.*":    4,
-    r"(?i).*MPRAGE.*GRAPPA.*":         4,
-    # Standard MPRAGE
-    r"(?i).*MPRAGE.*":                 5,
-    r"(?i).*MP.RAGE.*":                5,
-    r"(?i).*IR.FSPGR.*":               5,
-}
+# ── Hard exclusion patterns ────────────────────────────────────────────────────
+# These series should NEVER be used as T1w inputs for sMRIprep.
+EXCLUDE_PATTERNS = [
+    r"(?i).*__Mask$",                              # brain masks
+    r"(?i).*__Mask__.*",                           # mask in middle of name
+    r"(?i).*Spatially_Normalized.*",               # pre-normalised + skull-stripped
+    r"(?i).*HHP_6_DOF.*",                          # hippocampus AC-PC registered
+    r"(?i).*HarP_135.*",                           # hippocampus atlas-registered
+    r"(?i).*EPI_current.*",                        # EPI-corrected, not T1w
+]
 
-def series_pref_rank(desc: str) -> int:
-    """Return preference rank for a series description (lower = better)."""
-    if pd.isna(desc):
+def is_excluded(series_name: str) -> bool:
+    if not series_name or pd.isna(series_name):
+        return False
+    return any(re.match(p, str(series_name)) for p in EXCLUDE_PATTERNS)
+
+# ── Preference ranking ─────────────────────────────────────────────────────────
+# Matches on the sourcedata folder name (actual downloaded series).
+# Lower rank = more preferred for sMRIprep T1w input.
+PREF_RULES = [
+    # Rank 0 — GradWarp + B1 correction + N3 bias correction (best chain)
+    # Covers: MPR__GradWarp__B1_Correction__N3, MPR-R variant, ±Scaled, ±Scaled_2
+    (r"(?i)^MPR-?R?__GradWarp__B1_Correction__N3",   0),
+
+    # Rank 1 — GradWarp + N3 (no B1)
+    # Covers: MPR__GradWarp__N3, MPR-R, MPR__GradWarp__N3__Scaled, etc.
+    (r"(?i)^MPR-?R?__GradWarp__N3",                   1),
+    (r"(?i)^MPR-?R?____N3",                            1),  # no GW, N3 only (MPR____N3)
+
+    # Rank 2 — MT1 with GradWarp + N3m (ADNI standard pipeline)
+    (r"(?i)^MT1__GradWarp__N3m",                       2),
+
+    # Rank 3 — MT1 N3m only (no GradWarp)
+    (r"(?i)^MT1__N3m",                                 3),
+
+    # Rank 4 — GradWarp + B1, no N3
+    (r"(?i)^MPR-?R?__GradWarp__B1_Correction$",        4),
+
+    # Rank 5 — GradWarp only
+    (r"(?i)^MPR-?R?__GradWarp$",                       5),
+
+    # Rank 6 — raw MPR (no preprocessing)
+    (r"(?i)^MPR",                                       6),
+    (r"(?i)^MT1$",                                      6),
+
+    # Rank 7 — Accelerated/standard MPRAGE (ADNI3/4 raw)
+    (r"(?i).*MPRAGE.*",                                 7),
+    (r"(?i).*IR.FSPGR.*",                               7),
+]
+
+def pref_rank(series_name: str) -> int:
+    if not series_name or pd.isna(series_name):
         return 99
-    for pattern, rank in SERIES_PREF.items():
-        if re.match(pattern, str(desc)):
+    for pattern, rank in PREF_RULES:
+        if re.match(pattern, str(series_name)):
             return rank
-    return 10  # unknown but accepted
+    return 99
 
-# ── Load data ──────────────────────────────────────────────────────────────────
-print("Loading session map ...")
+# ── Load and filter session map ────────────────────────────────────────────────
+print("Loading session_map.csv ...")
 sess = pd.read_csv(SESSION_MAP_CSV, low_memory=False)
-print(f"  → {len(sess):,} rows, {sess['SubjectID'].nunique():,} subjects")
+print(f"  -> {len(sess):,} total images")
 
-print("Loading MAYOADIRL QC table ...")
-qc = pd.read_csv(MAYOADIRL_CSV, low_memory=False)
-# series_quality: 1=pass, 2=acceptable, 3=fail (but selected), 4=unusable, -1=N/A
-# loni_image maps to ImageUID
-qc_cols = ["PTID", "loni_image", "series_quality", "series_selected",
-           "series_type", "series_description", "series_comments",
-           "protocol_status", "protocol_comments"]
-qc_cols = [c for c in qc_cols if c in qc.columns]
-qc_t1 = qc[qc.get("series_type", qc.get("series_type", pd.Series())).isin(["MT1", "MT1_N3m"]) 
-            if "series_type" in qc.columns else pd.Series(dtype=bool)].copy()
-# If filtering didn't work (series_type mismatch), keep all and merge on image id
-if len(qc_t1) == 0:
-    qc_t1 = qc.copy()
-print(f"  → QC rows available for merge: {len(qc_t1):,}")
+# Apply hard exclusions
+sess["excluded"] = sess["sourcedata_series_name"].apply(is_excluded)
+n_excl = sess["excluded"].sum()
+sess_ok = sess[~sess["excluded"]].copy()
+print(f"  -> {n_excl:,} images hard-excluded (masks/normalised/hippocampus-registered)")
+print(f"  -> {len(sess_ok):,} images remaining for selection")
 
-# Normalise loni_image → ImageUID
-qc_t1["ImageUID_int"] = pd.to_numeric(qc_t1.get("loni_image", pd.Series()), errors="coerce")
-sess["ImageUID_int"] = pd.to_numeric(sess["ImageUID"], errors="coerce")
+# Apply preference rank
+sess_ok["pref_rank"] = sess_ok["sourcedata_series_name"].apply(pref_rank)
 
-# Merge QC into session map
-sess_qc = sess.merge(
-    qc_t1[["ImageUID_int", "series_quality", "series_selected", "series_comments"]].drop_duplicates("ImageUID_int"),
-    on="ImageUID_int", how="left"
+# ImageUID numeric for tiebreaker
+sess_ok["uid_int"] = pd.to_numeric(
+    sess_ok["ImageUID"].astype(str).str.replace("I", "", regex=False),
+    errors="coerce"
 )
 
-# Map series_quality: treat -1 and NaN as 99 (no QC available, neutral)
-sess_qc["qc_quality"] = pd.to_numeric(sess_qc.get("series_quality", pd.Series()), errors="coerce")
-sess_qc["qc_quality"] = sess_qc["qc_quality"].replace(-1, np.nan)
+# QC sort (MAYOADIRL: 1=pass, 4=unusable; NaN=unavailable → sort as 99)
+sess_ok["sort_qc"] = pd.to_numeric(
+    sess_ok.get("mayo_qc_quality", pd.Series(dtype=float)),
+    errors="coerce"
+).fillna(99)
 
-# Add series preference rank
-sess_qc["pref_rank"] = sess_qc["SeriesDescription"].apply(series_pref_rank)
-
-# ── Rank within each (bids_sub, bids_ses) group ────────────────────────────────
-# Priority: qc_quality ASC (lower=better), then pref_rank ASC, then ImageUID_int ASC
-sess_qc["sort_qc"] = sess_qc["qc_quality"].fillna(99)
-sess_qc_sorted = sess_qc.sort_values(
-    ["bids_sub", "bids_ses", "sort_qc", "pref_rank", "ImageUID_int"],
+# Sort within groups
+sess_sorted = sess_ok.sort_values(
+    ["bids_sub", "bids_ses", "sort_qc", "pref_rank", "uid_int"],
     ascending=[True, True, True, True, True],
     na_position="last"
 )
 
+# ── Build selection table ─────────────────────────────────────────────────────
 records = []
-for (bids_sub, bids_ses), grp in sess_qc_sorted.groupby(["bids_sub", "bids_ses"], sort=False):
+for (bids_sub, bids_ses), grp in sess_sorted.groupby(["bids_sub", "bids_ses"], sort=False):
     grp = grp.reset_index(drop=True)
     n = len(grp)
-    
-    # Determine selection reason
-    has_qc = grp["sort_qc"].min() < 99
-    
+    top = grp.iloc[0]
+
+    has_qc = top["sort_qc"] < 99
+    reason = "mayo_qc+pref" if has_qc else ("pref_rank" if n > 1 else "only_image")
+
     rec = {
-        "bids_sub":                     bids_sub,
-        "bids_ses":                     bids_ses,
-        "SubjectID":                    grp.loc[0, "SubjectID"],
-        "adni_viscode":                 grp.loc[0, "adni_viscode"] if "adni_viscode" in grp.columns else "",
-        "n_scans":                      n,
-        # Preferred / selected scan
-        "ImageUID_selected":            grp.loc[0, "ImageUID"],
-        "SeriesDescription_selected":   grp.loc[0, "SeriesDescription"],
-        "nii_source_selected":          grp.loc[0, "nii_source_path"] if "nii_source_path" in grp.columns else "",
-        "qc_quality_selected":          grp.loc[0, "qc_quality"] if has_qc else None,
-        "pref_rank_selected":           grp.loc[0, "pref_rank"],
-        "selection_reason":             "qc_score+series_pref" if has_qc else "first_by_imageuid_no_qc",
+        "bids_sub":                   bids_sub,
+        "bids_ses":                   bids_ses,
+        "SubjectID":                  top["SubjectID"],
+        "adni_viscode":               top.get("adni_viscode", ""),
+        "n_scans_after_exclusion":    n,
+        # Selected (run-1)
+        "ImageUID_selected":          top["ImageUID"],
+        "sourcedata_series_selected": top.get("sourcedata_series_name", ""),
+        "SeriesDescription_selected": top.get("SeriesDescription", ""),
+        "nii_source_selected":        top.get("nii_source_path", ""),
+        "pref_rank_selected":         int(top["pref_rank"]),
+        "mayo_qc_quality_selected":   top["sort_qc"] if has_qc else None,
+        "selection_reason":           reason,
+        "Manufacturer":               top.get("Manufacturer", ""),
+        "ManufacturerModelName":      top.get("ManufacturerModelName", ""),
+        "MagneticFieldStrength":      top.get("MagneticFieldStrength", ""),
+        "SoftwareVersion":            top.get("SoftwareVersion", ""),
+        "SliceThickness":             top.get("SliceThickness", ""),
         # run-1 (same as selected)
-        "ImageUID_run1":                grp.loc[0, "ImageUID"],
-        "SeriesDescription_run1":       grp.loc[0, "SeriesDescription"],
-        "nii_source_run1":              grp.loc[0, "nii_source_path"] if "nii_source_path" in grp.columns else "",
-        # run-2 (only if >1 scan)
-        "ImageUID_run2":                grp.loc[1, "ImageUID"] if n > 1 else "",
-        "SeriesDescription_run2":       grp.loc[1, "SeriesDescription"] if n > 1 else "",
-        "nii_source_run2":              grp.loc[1, "nii_source_path"] if (n > 1 and "nii_source_path" in grp.columns) else "",
+        "ImageUID_run1":              top["ImageUID"],
+        "sourcedata_series_run1":     top.get("sourcedata_series_name", ""),
+        "nii_source_run1":            top.get("nii_source_path", ""),
+        # run-2 (second-ranked, if present after exclusion)
+        "ImageUID_run2":              grp.iloc[1]["ImageUID"] if n > 1 else "",
+        "sourcedata_series_run2":     grp.iloc[1].get("sourcedata_series_name", "") if n > 1 else "",
+        "nii_source_run2":            grp.iloc[1].get("nii_source_path", "") if n > 1 else "",
     }
-    
-    # Add QC comment if available
-    comments = grp["series_comments"].dropna().tolist()
-    rec["qc_comments"] = "; ".join(str(c) for c in comments[:3]) if comments else ""
-    
     records.append(rec)
 
-selection_df = pd.DataFrame(records)
-selection_df.to_csv(OUT_SELECTION, index=False)
+sel = pd.DataFrame(records)
+sel.to_csv(OUT_SELECTION, index=False)
 print(f"\nSaved: {OUT_SELECTION}")
-print(f"Total sessions: {len(selection_df):,}")
-print(f"  With QC data: {(selection_df['qc_quality_selected'].notna()).sum():,}")
-print(f"  No QC found:  {(selection_df['qc_quality_selected'].isna()).sum():,}")
-print(f"  Multi-scan sessions (run-1 + run-2): {(selection_df['n_scans'] > 1).sum():,}")
+print(f"Sessions: {len(sel):,} | Subjects: {sel['SubjectID'].nunique():,}")
 
-# Summary of selection reasons
-print("\nSelection reason breakdown:")
-print(selection_df["selection_reason"].value_counts().to_string())
+print("\nPreference rank distribution (selected scan):")
+rank_labels = {
+    0: "MPR GW+B1+N3", 1: "MPR GW+N3 / MPR N3",
+    2: "MT1 GW+N3m",   3: "MT1 N3m",
+    4: "MPR GW+B1",    5: "MPR GW only",
+    6: "Raw MPR/MT1",  7: "MPRAGE/IR-FSPGR", 99: "Unrecognised"
+}
+for rank, grp_df in sel.groupby("pref_rank_selected"):
+    label = rank_labels.get(rank, "?")
+    print(f"  Rank {rank} ({label}): {len(grp_df):,} sessions")
+
+print("\nTop selected series:")
+print(sel["sourcedata_series_selected"].value_counts().head(10).to_string())
+
+print("\nSelection reason:")
+print(sel["selection_reason"].value_counts().to_string())
+
+print("\nWith MAYOADIRL QC available:", (sel["mayo_qc_quality_selected"].notna()).sum())
+print("Multi-scan sessions (run-2 available):", (sel["n_scans_after_exclusion"] > 1).sum())

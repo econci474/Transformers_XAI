@@ -38,7 +38,7 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 def gzip_copy(src: str, dst: str):
-    """Copy src → dst.gz (gzip compress). dst should already end in .nii.gz."""
+    """Copy src -> dst.gz (gzip compress). dst should already end in .nii.gz."""
     os.makedirs(os.path.dirname(dst), exist_ok=True)
     with open(src, "rb") as f_in, gzip.open(dst, "wb") as f_out:
         shutil.copyfileobj(f_in, f_out)
@@ -86,7 +86,7 @@ for _, row in sel.iterrows():
             log.info(f"  OK: {fname}")
         except Exception as e:
             errors += 1
-            log.error(f"  ERROR copying {src_path} → {dst}: {e}")
+            log.error(f"  ERROR copying {src_path} -> {dst}: {e}")
 
     if n == 1:
         # Single scan: no run label

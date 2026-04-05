@@ -5,20 +5,20 @@ Copies selected clinical CSV tables into bids/phenotype/ in BIDS format
 and generates JSON sidecar descriptors for each.
 
 Selected tables (covering key clinical domains):
-  ADNIMERGE.csv     → adnimerge.tsv          (core longitudinal clinical data)
-  CDR.csv           → cdr.tsv                (Clinical Dementia Rating)
-  ADAS.csv          → adas.tsv               (Alzheimer's Disease Assessment Scale)
-  MMSE.csv          → mmse.tsv               (Mini-Mental State Examination)
-  BACKMEDS.csv      → backmeds.tsv           (background medications — if exists)
-  BIOMARK.csv       → biomarkers.tsv         (CSF / plasma biomarkers — if exists)
-  APOERES.csv       → apoe.tsv               (APOE genotype)
-  ARM.csv           → study_arm.tsv          (ADNI arm / protocol assignment)
+  ADNIMERGE.csv     -> adnimerge.tsv          (core longitudinal clinical data)
+  CDR.csv           -> cdr.tsv                (Clinical Dementia Rating)
+  ADAS.csv          -> adas.tsv               (Alzheimer's Disease Assessment Scale)
+  MMSE.csv          -> mmse.tsv               (Mini-Mental State Examination)
+  BACKMEDS.csv      -> backmeds.tsv           (background medications — if exists)
+  BIOMARK.csv       -> biomarkers.tsv         (CSF / plasma biomarkers — if exists)
+  APOERES.csv       -> apoe.tsv               (APOE genotype)
+  ARM.csv           -> study_arm.tsv          (ADNI arm / protocol assignment)
 
 BIDS phenotype format:
   • TSV: tab-separated, 'participant_id' column, 'session_id' if longitudinal
   • JSON: parallel sidecar with column descriptions
 
-Each TSV maps PTID → participant_id (BIDS sub- label) using session_map.csv.
+Each TSV maps PTID -> participant_id (BIDS sub- label) using session_map.csv.
 VISCODE columns are kept for longitudinal linkage.
 
 Note: The full list of 298 clinical CSVs is intentionally NOT included here —
@@ -28,6 +28,9 @@ only the subset most relevant to sMRI / cognitive analyses of ADNI.
 import pandas as pd
 import os
 import json
+import sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from exclusions import is_excluded_subject
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 PROJECT_ROOT   = r"D:\ADNI_BIDS_project"
@@ -40,13 +43,17 @@ os.makedirs(PHENO_DIR, exist_ok=True)
 # ── Load subject ID mapping ────────────────────────────────────────────────────
 print("Loading session map ...")
 sess = pd.read_csv(SESSION_MAP, low_memory=False)
+# Apply exclusions before building the PTID -> bids_sub lookup
+n_before_excl = sess["SubjectID"].nunique()
+sess = sess[~sess["SubjectID"].apply(is_excluded_subject)]
+print(f"  -> {n_before_excl - sess['SubjectID'].nunique():,} excluded subjects removed from phenotype outputs")
 ptid_to_bids = (
     sess[["SubjectID", "bids_sub"]]
     .drop_duplicates("SubjectID")
     .set_index("SubjectID")["bids_sub"]
     .to_dict()
 )
-print(f"  → {len(ptid_to_bids):,} subject ID mappings")
+print(f"  -> {len(ptid_to_bids):,} subject ID mappings")
 
 # ── BIDS phenotype JSON sidecars ───────────────────────────────────────────────
 PHENOTYPE_JSONS = {
@@ -141,7 +148,7 @@ for (csv_name, out_name, ptid_col, date_col) in TABLE_DEFS:
         print(f"  SKIP (not found): {csv_name}")
         continue
     
-    print(f"Processing {csv_name} → {out_name}.tsv ...")
+    print(f"Processing {csv_name} -> {out_name}.tsv ...")
     df = pd.read_csv(src, low_memory=False)
     
     # Add participant_id column
@@ -154,7 +161,7 @@ for (csv_name, out_name, ptid_col, date_col) in TABLE_DEFS:
     )
     # Keep only subjects present in the imaging data
     df_filt = df[df["participant_id"] != "n/a"].copy()
-    print(f"  → {len(df_filt):,} rows for {df_filt['participant_id'].nunique():,} imaging subjects")
+    print(f"  -> {len(df_filt):,} rows for {df_filt['participant_id'].nunique():,} imaging subjects")
     
     # Add session_id if date column exists
     if date_col and date_col in df_filt.columns:

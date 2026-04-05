@@ -20,6 +20,9 @@ Output:
 import pandas as pd
 import os
 import json
+import sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from exclusions import is_excluded_subject
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 PROJECT_ROOT = r"D:\ADNI_BIDS_project"
@@ -37,7 +40,7 @@ merge = pd.read_csv(ADNIMERGE_CSV, low_memory=False)
 bl = merge[merge["VISCODE"] == "bl"].copy()
 # Deduplicate — keep one baseline row per subject
 bl = bl.drop_duplicates(subset="PTID", keep="first")
-print(f"  → {len(bl):,} unique subjects at baseline from ADNIMERGE")
+print(f"  -> {len(bl):,} unique subjects at baseline from ADNIMERGE")
 
 # ── Load APOE genotype ─────────────────────────────────────────────────────────
 print("Loading APOERES.csv ...")
@@ -49,6 +52,10 @@ apoe_clean["apoe_genotype"] = apoe_clean["APGEN1"].astype(str) + "/" + apoe_clea
 print("Loading session map ...")
 sess_map = pd.read_csv(SESSION_MAP_CSV, low_memory=False)
 subjects_with_mri = sess_map[["SubjectID", "bids_sub"]].drop_duplicates("SubjectID")
+# Apply subject exclusions
+subjets_before = len(subjects_with_mri)
+subjects_with_mri = subjects_with_mri[~subjects_with_mri["SubjectID"].apply(is_excluded_subject)]
+print(f"  -> {subjets_before - len(subjects_with_mri):,} excluded subjects removed; {len(subjects_with_mri):,} retained")
 
 # ── Merge all data ─────────────────────────────────────────────────────────────
 df = subjects_with_mri.merge(bl, left_on="SubjectID", right_on="PTID", how="left")

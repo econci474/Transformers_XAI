@@ -1,147 +1,273 @@
 """
-Script 01 — Build Session Map
-==============================
-Parses MRIQUALITY.csv (which contains VISCODE2 i.e., ADNI visit codes)
-and image_series_mapping.csv to create a comprehensive session map.
+Script 01 — Build Session Map (REVISED)
+========================================
+Builds the master session map by joining:
+
+  image_series_mapping.csv (7,219 downloaded images)
+    → primary source: ImageUID (I-prefixed), SeriesUID (S-prefixed), SubjectID, StudyUID
+
+  MRIQC_15Feb2026.csv (most up-to-date MRIQUALITY-style table, all ADNI phases)
+    → join key: LONISeries == int(SeriesUID[1:])   [strip 'S' prefix]
+    → provides: VISCODE2, StudyDate, SeriesDescription, scanner metadata
+
+  MAYOADIRL_MRI_IMAGEQC_12_08_15.csv  (ADNI1/GO/2 QC)
+  MAYOADIRL_MRI_QUALITY_ADNI3.csv     (ADNI3 QC, original)
+  MAYOADIRL_MRI_QUALITY_ADNI3_15Feb2026.csv  (ADNI3 QC, updated Feb 2026)
+    → join key: PTID + series_date (YYYYMMDD) — at session level
+    → provides: series_quality (1=pass,2=acceptable,3=fail,4=unusable), series_selected
+
+Join strategy:
+  1. img_map is the spine (7,219 rows = all downloaded NIfTIs)
+  2. Merge MRIQC on LONISeries (series-level, 1:many reduced to best match)
+  3. Merge MAYOADIRL on SubjectID + StudyDate (session-level QC)
+  4. Locate NIfTI paths by scanning sourcedata I-dirs (fast pre-index)
 
 Outputs:
-    metadata/session_map.csv        — Full session-level inventory (one row per image)
-    metadata/ses_to_visit_code.csv  — Correspondence table: bids_ses ↔ ADNI VISCODE2
+    metadata/session_map.csv        — full session/image inventory
+    metadata/ses_to_visit_code.csv  — bids_ses <-> ADNI VISCODE2 correspondence
 """
 
 import pandas as pd
+import numpy as np
 import os
 import re
+import sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from exclusions import is_excluded_subject
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
-PROJECT_ROOT = r"D:\ADNI_BIDS_project"
-MRIQUALITY_CSV = os.path.join(PROJECT_ROOT, "sourcedata", "clinical", "MRIQUALITY.csv")
-IMAGE_MAPPING_CSV = os.path.join(PROJECT_ROOT, "metadata", "image_series_mapping.csv")
+PROJECT_ROOT   = r"D:\ADNI_BIDS_project"
+IMG_MAP_CSV    = os.path.join(PROJECT_ROOT, "metadata", "image_series_mapping.csv")
 SOURCEDATA_DIR = os.path.join(PROJECT_ROOT, "sourcedata", "ADNI")
+CLINICAL_DIR   = os.path.join(PROJECT_ROOT, "sourcedata", "clinical")
+
+# QC / metadata files (use most up-to-date versions)
+MRIQC_CSV      = os.path.join(CLINICAL_DIR, "MRIQC_15Feb2026.csv")   # preferred; fallback below
+MRIQUALITY_CSV = os.path.join(CLINICAL_DIR, "MRIQUALITY.csv")        # fallback if MRIQC not present
+
+MAYO1_CSV      = os.path.join(CLINICAL_DIR, "MAYOADIRL_MRI_IMAGEQC_12_08_15.csv")
+MAYO3_CSV      = os.path.join(CLINICAL_DIR, "MAYOADIRL_MRI_QUALITY_ADNI3_15Feb2026.csv")
+MAYO3_ORIG_CSV = os.path.join(CLINICAL_DIR, "MAYOADIRL_MRI_QUALITY_ADNI3.csv")  # fallback
+
 OUT_SESSION_MAP = os.path.join(PROJECT_ROOT, "metadata", "session_map.csv")
-OUT_SES_VISIT = os.path.join(PROJECT_ROOT, "metadata", "ses_to_visit_code.csv")
+OUT_SES_VISIT   = os.path.join(PROJECT_ROOT, "metadata", "ses_to_visit_code.csv")
 
-# ── T1w series type codes to keep (from ADNI documentation) ───────────────────
-# These correspond to the series_type values in MAYOADIRL / MRIQUALITY
-T1W_SERIES_TYPES = {"T1w", "MT1"}          # MRIQUALITY uses 'T1w'
-T1W_SERIES_DESC_KEYWORDS = [
-    "MPRAGE", "MP-RAGE", "MPRAGE GRAPPA", "IR-FSPGR",
-    "Accelerated Sagittal MPRAGE", "Sagittal MPRAGE",
-    "MT1", "MT1__N3m", "MT1__GradWarp__N3m",
-]
-
+# ── Helper functions ───────────────────────────────────────────────────────────
 def normalize_subject_id(ptid: str) -> str:
-    """Convert e.g. '002_S_0295' → '002S0295' (remove underscores)."""
-    return re.sub(r'[_\-]', '', ptid)
+    """'002_S_0295' -> '002S0295' (BIDS sub label, underscores removed)."""
+    return re.sub(r"[_\-]", "", str(ptid))
 
-def normalize_study_date(date_str: str) -> str:
-    """Convert e.g. '2011-06-02' or '2011-06-02 09:30:00' → '20110602'."""
+def normalize_date(date_str) -> str:
+    """'2011-06-02' or '2011-06-02 09:30:00' -> '20110602'. Returns '' if NaN."""
     if pd.isna(date_str):
         return ""
     return str(date_str)[:10].replace("-", "")
 
-print("Loading MRIQUALITY.csv ...")
-mri_quality = pd.read_csv(MRIQUALITY_CSV, low_memory=False)
-print(f"  → {len(mri_quality):,} rows, columns: {list(mri_quality.columns)}")
-
-# Filter to T1w only
-t1w_mask = mri_quality["SeriesType"].isin(T1W_SERIES_TYPES)
-mri_t1w = mri_quality[t1w_mask].copy()
-print(f"  → T1w rows: {len(mri_t1w):,}")
-
+# ── 1. Load image_series_mapping (spine) ──────────────────────────────────────
 print("Loading image_series_mapping.csv ...")
-img_map = pd.read_csv(IMAGE_MAPPING_CSV, low_memory=False)
-print(f"  → {len(img_map):,} rows, columns: {list(img_map.columns)}")
-# Normalise column names
+img_map = pd.read_csv(IMG_MAP_CSV, low_memory=False)
 img_map.columns = [c.strip() for c in img_map.columns]
+# Numeric series ID for join: e.g. 'S17197' -> 17197
+img_map["series_int"] = pd.to_numeric(
+    img_map["SeriesUID"].astype(str).str.replace("S", "", regex=False),
+    errors="coerce"
+)
+# Numeric study ID
+img_map["study_int"] = pd.to_numeric(img_map["StudyUID"], errors="coerce")
+print(f"  -> {len(img_map):,} rows, {img_map['SubjectID'].nunique():,} subjects")
 
-# ── Rename key columns in mri_quality for clarity ─────────────────────────────
-mri_t1w = mri_t1w.rename(columns={
-    "image_id":           "ImageUID",
-    "ParticipantID":      "SubjectID",
-    "VISCODE2":           "adni_viscode",
-    "StudyDate":          "StudyDate",
-    "SeriesType":         "SeriesType",
-    "SeriesDescription":  "SeriesDescription",
-    "ScannerManufacturer":"Manufacturer",
-    "ScannerModel":       "ManufacturerModelName",
-    "MagneticFieldStrength": "MagneticFieldStrength",
-    "StudyInstanceUID":   "StudyInstanceUID",
-    "SeriesInstanceUID":  "SeriesInstanceUID",
-    "LONIStudy":          "LONIStudy",
-    "LONISeries":         "LONISeries",
-    "LONIImage":          "LONIImage",
-}).copy()
+# Apply subject-level exclusions
+n_before = len(img_map)
+img_map = img_map[~img_map["SubjectID"].apply(is_excluded_subject)]
+print(f"  -> {n_before - len(img_map):,} rows excluded (excluded subject list); {len(img_map):,} remaining")
 
-# ── Merge with image_series_mapping (adds SeriesUID and StudyUID) ──────────────
-# image_series_mapping columns: ImageUID, SeriesUID, SubjectID, StudyUID
-# LONIImage in mri_quality = ImageUID
+# ── 2. Load MRIQC (most up-to-date metadata table) ────────────────────────────
+mriqc_path = MRIQC_CSV if os.path.isfile(MRIQC_CSV) else MRIQUALITY_CSV
+print(f"Loading {os.path.basename(mriqc_path)} ...")
+mriqc = pd.read_csv(mriqc_path, low_memory=False)
+mriqc_t1 = mriqc[mriqc["SeriesType"] == "T1w"].copy()
+print(f"  -> {len(mriqc_t1):,} T1w rows across {mriqc_t1['ParticipantID'].nunique():,} subjects")
 
-mri_t1w["ImageUID_int"] = pd.to_numeric(mri_t1w["ImageUID"], errors="coerce")
-img_map["ImageUID_int"] = pd.to_numeric(img_map.get("ImageUID", img_map.iloc[:, 0]), errors="coerce")
+# Numeric join key on LONISeries
+mriqc_t1["series_int"] = pd.to_numeric(mriqc_t1["LONISeries"], errors="coerce")
 
-# Try merge on ImageUID
-try:
-    merged = mri_t1w.merge(
-        img_map[["ImageUID_int", "SeriesUID", "StudyUID"]].drop_duplicates("ImageUID_int"),
-        on="ImageUID_int", how="left"
-    )
-except KeyError:
-    print("  WARNING: Could not merge SeriesUID/StudyUID — check image_series_mapping columns.")
-    merged = mri_t1w.copy()
-    merged["SeriesUID"] = ""
-    merged["StudyUID"] = ""
+# Deduplicate: one MRIQC row per series_int (keep by image_id ascending for reproducibility)
+mriqc_t1_dedup = (
+    mriqc_t1.sort_values("image_id")
+    .drop_duplicates(subset="series_int", keep="first")
+)
+print(f"  -> {len(mriqc_t1_dedup):,} unique T1w series in MRIQC")
 
-# ── Add BIDS labels ────────────────────────────────────────────────────────────
+# Merge img_map -> MRIQC on series_int
+merged = img_map.merge(
+    mriqc_t1_dedup.rename(columns={
+        "image_id":            "mriqc_image_id",
+        "ParticipantID":       "SubjectID_mriqc",
+        "VISCODE2":            "adni_viscode",
+        "StudyDate":           "StudyDate",
+        "SeriesDescription":   "SeriesDescription",
+        "ScannerManufacturer": "Manufacturer",
+        "ScannerModel":        "ManufacturerModelName",
+        "MagneticFieldStrength": "MagneticFieldStrength",
+        "SoftwareVersion":     "SoftwareVersion",
+        "Acceleration":        "Acceleration",
+        "SliceThickness":      "SliceThickness",
+        "AcquisitionType":     "AcquisitionType",
+        "StudyInstanceUID":    "StudyInstanceUID",
+        "SeriesInstanceUID":   "SeriesInstanceUID",
+        "LONIStudy":           "LONIStudy",
+        "LONISeries":          "LONISeries",
+        "LONIImage":           "LONIImage_mriqc",
+    })[
+        ["series_int", "mriqc_image_id", "SubjectID_mriqc", "adni_viscode", "StudyDate",
+         "SeriesDescription", "Manufacturer", "ManufacturerModelName", "MagneticFieldStrength",
+         "SoftwareVersion", "Acceleration", "SliceThickness", "AcquisitionType",
+         "StudyInstanceUID", "SeriesInstanceUID", "LONIStudy", "LONISeries", "LONIImage_mriqc"]
+    ].drop_duplicates("series_int"),
+    on="series_int", how="left"
+)
+n_matched = merged["adni_viscode"].notna().sum()
+print(f"  -> MRIQC join: {n_matched:,}/{len(merged):,} images matched to MRIQC metadata")
+
+# ── 3. Load and concatenate MAYOADIRL QC tables ────────────────────────────────
+print("Loading MAYOADIRL QC tables ...")
+
+def load_mayo(path, phase_label):
+    """Load a MAYOADIRL QC file, normalise column names to lowercase."""
+    df = pd.read_csv(path, low_memory=False)
+    df.columns = [c.lower().strip() for c in df.columns]
+    df["mayo_phase"] = phase_label
+    return df
+
+mayo1 = load_mayo(MAYO1_CSV, "ADNI1/GO/2")
+mayo3_path = MAYO3_CSV if os.path.isfile(MAYO3_CSV) else MAYO3_ORIG_CSV
+mayo3 = load_mayo(mayo3_path, "ADNI3")
+mayo_all = pd.concat([mayo1, mayo3], ignore_index=True)
+print(f"  -> Combined MAYOADIRL: {len(mayo_all):,} rows")
+
+# Normalise date column (may be 'series_date' in both)
+mayo_all["series_date_norm"] = mayo_all["series_date"].apply(normalize_date)
+
+# Filter to T1w only in MAYOADIRL (series_type codes for T1w)
+T1_TYPES = {"T1", "MT1", "MT1w", "T1w"}
+if "series_type" in mayo_all.columns:
+    mayo_t1 = mayo_all[mayo_all["series_type"].str.upper().isin({t.upper() for t in T1_TYPES})].copy()
+    if len(mayo_t1) == 0:
+        mayo_t1 = mayo_all  # fallback: no filter if types don't match
+else:
+    mayo_t1 = mayo_all
+print(f"  -> MAYOADIRL T1w rows: {len(mayo_t1):,}")
+
+# Build session-level QC: best quality score per (PTID + series_date)
+# series_quality: 1=pass, 2=acceptable, 3=fail, 4=unusable, -1=N/A -> treat as 99
+mayo_t1["qc_num"] = pd.to_numeric(mayo_t1["series_quality"], errors="coerce").replace(-1, np.nan)
+mayo_t1_sorted = mayo_t1.sort_values("qc_num", ascending=True, na_position="last")
+mayo_sess = mayo_t1_sorted.drop_duplicates(subset=["ptid", "series_date_norm"], keep="first")
+
+# Keep only relevant columns
+mayo_keep = ["ptid", "series_date_norm", "qc_num", "series_selected", "series_comments",
+             "study_overallpass", "series_description", "loni_study", "loni_series", "loni_image",
+             "field_strength", "mayo_phase"]
+mayo_keep = [c for c in mayo_keep if c in mayo_sess.columns]
+mayo_sess = mayo_sess[mayo_keep].rename(columns={
+    "ptid":               "SubjectID",
+    "series_date_norm":   "StudyDate_norm",
+    "qc_num":             "mayo_qc_quality",
+    "series_selected":    "mayo_series_selected",
+    "series_comments":    "mayo_series_comments",
+    "study_overallpass":  "mayo_study_overallpass",
+    "loni_study":         "mayo_loni_study",
+    "loni_series":        "mayo_loni_series",
+    "loni_image":         "mayo_loni_image",
+    "field_strength":     "mayo_field_strength",
+    "mayo_phase":         "ADNI_phase",
+})
+
+# ── 4. Merge MAYOADIRL QC into main table ─────────────────────────────────────
+# Need StudyDate_norm on merged first
+merged["StudyDate_norm"] = merged["StudyDate"].apply(normalize_date)
+
+merged = merged.merge(
+    mayo_sess,
+    left_on=["SubjectID", "StudyDate_norm"],
+    right_on=["SubjectID", "StudyDate_norm"],
+    how="left"
+)
+n_mayo = merged["mayo_qc_quality"].notna().sum()
+print(f"  -> MAYOADIRL join: {n_mayo:,}/{len(merged):,} images matched to QC scores")
+
+# ── 5. Add BIDS labels ─────────────────────────────────────────────────────────
 merged["bids_sub"] = merged["SubjectID"].apply(normalize_subject_id)
-merged["bids_ses"] = merged["StudyDate"].apply(normalize_study_date)
+merged["bids_ses"] = merged["StudyDate"].apply(normalize_date)
 
-# ── Build NIfTI source path (in sourcedata/ADNI/) ─────────────────────────────
-def find_nii_path(row):
-    """
-    Search for the NIfTI file corresponding to this ImageUID in sourcedata/ADNI/.
-    Expected structure: sourcedata/ADNI/<SubjectID>/MT1__N3m/<date_dir>/<ImageUID>/<file.nii>
-    Returns the path to the .nii file or empty string if not found.
-    """
-    sub_dir = os.path.join(SOURCEDATA_DIR, str(row["SubjectID"]))
+# ── 6. Build sourcedata NIfTI index ───────────────────────────────────────────
+print("Building sourcedata NIfTI index ...")
+nii_index = {}        # {uid_int: nii_path}
+series_name_index = {}  # {uid_int: series_folder_name}
+
+for sub_name in os.listdir(SOURCEDATA_DIR):
+    sub_dir = os.path.join(SOURCEDATA_DIR, sub_name)
     if not os.path.isdir(sub_dir):
-        return ""
-    image_uid_str = str(int(row["ImageUID_int"])) if pd.notna(row["ImageUID_int"]) else ""
-    if not image_uid_str:
-        return ""
-    # Walk series subdirectories
+        continue
     for series_name in os.listdir(sub_dir):
         series_dir = os.path.join(sub_dir, series_name)
         if not os.path.isdir(series_dir):
             continue
         for date_dir in os.listdir(series_dir):
-            img_dir = os.path.join(series_dir, date_dir, image_uid_str)
-            if os.path.isdir(img_dir):
-                niis = [f for f in os.listdir(img_dir) if f.endswith(".nii")]
+            date_path = os.path.join(series_dir, date_dir)
+            if not os.path.isdir(date_path):
+                continue
+            for img_dir_name in os.listdir(date_path):
+                if not img_dir_name.startswith("I"):
+                    continue
+                img_dir = os.path.join(date_path, img_dir_name)
+                if not os.path.isdir(img_dir):
+                    continue
+                try:
+                    uid_int = int(img_dir_name[1:])
+                except ValueError:
+                    continue
+                niis = [f for f in os.listdir(img_dir)
+                        if f.endswith(".nii") or f.endswith(".nii.gz")]
                 if niis:
-                    return os.path.join(img_dir, niis[0])
-    return ""
+                    nii_index[uid_int] = os.path.join(img_dir, niis[0])
+                    series_name_index[uid_int] = series_name
 
-print("Locating NIfTI source files (this may take a few minutes) ...")
-merged["nii_source_path"] = merged.apply(find_nii_path, axis=1)
+print(f"  -> {len(nii_index):,} NIfTI files indexed (should match img_map rows: {len(img_map):,})")
+
+# Match ImageUID (strip 'I') -> NIfTI path
+merged["uid_int"] = pd.to_numeric(
+    merged["ImageUID"].astype(str).str.replace("I", "", regex=False),
+    errors="coerce"
+)
+merged["nii_source_path"] = merged["uid_int"].apply(
+    lambda x: nii_index.get(int(x), "") if pd.notna(x) else ""
+)
+merged["sourcedata_series_name"] = merged["uid_int"].apply(
+    lambda x: series_name_index.get(int(x), "") if pd.notna(x) else ""
+)
 found = (merged["nii_source_path"] != "").sum()
-print(f"  → {found}/{len(merged)} NIfTI files located in sourcedata/ADNI/")
+print(f"  -> {found:,}/{len(merged):,} NIfTI files located")
 
-# ── Save session map ───────────────────────────────────────────────────────────
+# ── 7. Save outputs ────────────────────────────────────────────────────────────
 cols_out = [
     "SubjectID", "ImageUID", "bids_sub", "bids_ses", "adni_viscode",
-    "StudyDate", "SeriesType", "SeriesDescription",
+    "StudyDate", "StudyDate_norm", "SeriesUID", "study_int",
+    "SeriesDescription", "sourcedata_series_name",
     "Manufacturer", "ManufacturerModelName", "MagneticFieldStrength",
+    "SoftwareVersion", "Acceleration", "SliceThickness", "AcquisitionType",
     "StudyInstanceUID", "SeriesInstanceUID",
-    "SeriesUID", "StudyUID",
-    "LONIStudy", "LONISeries", "LONIImage",
+    "LONIStudy", "LONISeries", "LONIImage_mriqc",
+    "mayo_qc_quality", "mayo_series_selected", "mayo_study_overallpass",
+    "mayo_series_comments", "mayo_loni_study", "mayo_loni_series", "mayo_loni_image",
+    "ADNI_phase", "mriqc_image_id",
     "nii_source_path",
 ]
 cols_out = [c for c in cols_out if c in merged.columns]
 merged[cols_out].to_csv(OUT_SESSION_MAP, index=False)
 print(f"Saved: {OUT_SESSION_MAP}")
 
-# ── Save visit-code correspondence table ───────────────────────────────────────
+# Visit-code correspondence table
 ses_visit = (
     merged[["bids_sub", "bids_ses", "adni_viscode", "StudyDate", "SubjectID"]]
     .drop_duplicates(subset=["bids_sub", "bids_ses"])
@@ -149,4 +275,11 @@ ses_visit = (
 )
 ses_visit.to_csv(OUT_SES_VISIT, index=False)
 print(f"Saved: {OUT_SES_VISIT}")
-print(f"\nDone. {len(merged):,} T1w image records across {merged['SubjectID'].nunique():,} subjects.")
+
+print(f"\nDone.")
+print(f"  Total images: {len(merged):,}")
+print(f"  Subjects: {merged['SubjectID'].nunique():,}")
+print(f"  With MRIQC metadata: {merged['adni_viscode'].notna().sum():,}")
+print(f"  With MAYOADIRL QC: {merged['mayo_qc_quality'].notna().sum():,}")
+print(f"  With NIfTI path: {found:,}")
+print(f"  Unique BIDS sessions: {merged[['bids_sub','bids_ses']].drop_duplicates().shape[0]:,}")

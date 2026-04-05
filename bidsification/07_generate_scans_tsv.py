@@ -22,7 +22,7 @@ BIDS_DIR       = os.path.join(PROJECT_ROOT, "bids")
 SESSION_MAP    = os.path.join(PROJECT_ROOT, "metadata", "session_map.csv")
 SES_VISIT      = os.path.join(PROJECT_ROOT, "metadata", "ses_to_visit_code.csv")
 
-# Load session date lookup (bids_ses = YYYYMMDD → ISO date for scans.tsv)
+# Load session date lookup (bids_ses = YYYYMMDD -> ISO date for scans.tsv)
 ses_visit = pd.read_csv(SES_VISIT, low_memory=False)
 ses_date_lookup = {
     f"{row['bids_sub']}|{row['bids_ses']}": str(row["StudyDate"])[:10]
@@ -53,7 +53,7 @@ for ses_dir in sorted(session_dirs):
     key = f"{sub_label}|{ses_label}"
     study_date = ses_date_lookup.get(key, "")
     if study_date and study_date != "nan":
-        # Format as ISO 8601 datetime (time unknown → T00:00:00)
+        # Format as ISO 8601 datetime (time unknown -> T00:00:00)
         acq_time = f"{study_date}T00:00:00"
     else:
         acq_time = "n/a"
