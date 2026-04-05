@@ -1,39 +1,45 @@
 """
-Script 02 — Build QC Selection Table (v3)
+Script 02 — Build QC Selection Table (v4)
 ==========================================
-For each BIDS (subject, session) selects the preferred T1w image and
-documents all alternatives in scan_selection.csv.
+Selects ONE native-space structural T1w per BIDS session using
+FEATURE-based priority (what corrections are present) rather than
+LABEL-based priority (MPR vs MT1).
 
-EXCLUSION (hard filter — these are never T1w inputs for sMRIprep):
-  - *__Mask           : brain mask images (binary)
-  - Spatially_Normalized__Masked* : pre-normalised + skull-stripped
-  - HHP_6_DOF*        : hippocampal-protocol MPRAGE (AC-PC registered)
-  - HarP_135*         : hippocampus atlas-registered version
-  - EPI_current*      : EPI distortion-corrected (not T1w)
+Rationale:
+  ADNI1/GO  → "MPR__GradWarp__B1_Correction__N3" naming
+  ADNI2/3   → "MT1__GradWarp__N3m" naming
+  The label is an artefact of the ADNI processing pipeline version;
+  the features present (GradWarp, B1 correction, N3 bias correction)
+  are what matter for sMRIprep input quality.
 
-PREFERENCE HIERARCHY (lower rank = preferred):
-  Rank 0 : MPR__GradWarp__B1_Correction__N3 (±R, ±Scaled, ±Scaled_2)
-  Rank 1 : MPR__GradWarp__N3 (±R, ±Scaled variants)
-  Rank 2 : MT1__GradWarp__N3m
-  Rank 3 : MT1__N3m
-  Rank 4 : MPR__GradWarp__B1_Correction (no N3)  — (GW+B1 but unbiased)
-  Rank 5 : MPR__GradWarp (GW only, no bias correction)
-  Rank 6 : MPR____N3 (N3 only, no GW)
-  Rank 7 : MPR (raw / minimal preprocessing)
-  Rank 99: anything else not explicitly recognised
+HARD EXCLUSIONS (never included, regardless of QC):
+  - *__Mask                           : binary brain masks
+  - Spatially_Normalized__Masked*     : pre-normalised + skull-stripped
+  - HHP_6_DOF*                        : hippocampal AC-PC registration
+  - HarP_135*                         : hippocampus atlas-registered
+  - EPI_current*                      : EPI-corrected (not structural T1)
+  - SERIES_QUALITY == 4 (unusable)    : flagged unusable by MAYOADIRL QC
 
-QC sort (applied before preference rank):
-  - mayo_qc_quality (1=pass → 4=unusable) if available (ADNI3 only, ~29 images)
-  - Otherwise prefer by rank, then by ImageUID ascending (tiebreaker)
+FEATURE-BASED PRIORITY (label-agnostic, lower rank = preferred):
+  Rank 0 : GradWarp + B1 correction + N3 bias correction (all three)
+           [MPR__GradWarp__B1_Correction__N3, MPR-R variant, ±Scaled]
+  Rank 1 : GradWarp + N3 (no B1)
+           [MPR__GradWarp__N3, MT1__GradWarp__N3m, ±Scaled variants]
+  Rank 2 : GradWarp + B1 (no N3)
+           [MPR__GradWarp__B1_Correction]
+  Rank 3 : N3 only (no GradWarp)
+           [MT1__N3m, MPR____N3]
+  Rank 4 : GradWarp only (no bias correction)
+           [MPR__GradWarp, MT1__GradWarp]
+  Rank 5 : Raw / minimal preprocessing
+           [MPRAGE, IR-FSPGR, bare MT1/MPR]
 
-COVERAGE SUMMARY (from session_map, after exclusions):
-  After excluding 1,193 images, 6,026 remain across 2,175 sessions.
-  Top series: MT1__GradWarp__N3m (2,467), MT1__N3m (1,344),
-              MPR__GradWarp__B1_Correction__N3 (245+192+16+6=459),
-              MPR__GradWarp__N3 (90+80+63+21+8+7=269)
+Secondary sort (within same rank):
+  mayo_qc_quality ASC (1=pass preferred; 4 already excluded)
+  ImageUID ASC (tiebreaker)
 
-ADNI4 note: MRIQC has 1,421 ADNI4 T1w records but NONE are in the
-downloaded sourcedata — dataset covers ADNI1, ADNI1/GO, ADNI2, ADNI3.
+→ Only ONE image per session is selected as the BIDS run-1.
+  The next-best (run-2) is recorded for reference only (not copied by default).
 
 Outputs:
     metadata/scan_selection.csv
@@ -43,105 +49,116 @@ import pandas as pd
 import numpy as np
 import os
 import re
+import sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from exclusions import is_excluded_subject
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 PROJECT_ROOT    = r"D:\ADNI_BIDS_project"
 SESSION_MAP_CSV = os.path.join(PROJECT_ROOT, "metadata", "session_map.csv")
 OUT_SELECTION   = os.path.join(PROJECT_ROOT, "metadata", "scan_selection.csv")
 
-# ── Hard exclusion patterns ────────────────────────────────────────────────────
-# These series should NEVER be used as T1w inputs for sMRIprep.
-EXCLUDE_PATTERNS = [
-    r"(?i).*__Mask$",                              # brain masks
-    r"(?i).*__Mask__.*",                           # mask in middle of name
-    r"(?i).*Spatially_Normalized.*",               # pre-normalised + skull-stripped
-    r"(?i).*HHP_6_DOF.*",                          # hippocampus AC-PC registered
-    r"(?i).*HarP_135.*",                           # hippocampus atlas-registered
-    r"(?i).*EPI_current.*",                        # EPI-corrected, not T1w
+# ── Hard exclusion patterns (series folder name) ───────────────────────────────
+EXCLUDE_SERIES = [
+    r"(?i).*__Mask$",
+    r"(?i).*__Mask__.*",
+    r"(?i).*Spatially_Normalized.*",
+    r"(?i).*HHP_6_DOF.*",
+    r"(?i).*HarP_135.*",
+    r"(?i).*EPI_current.*",
 ]
 
-def is_excluded(series_name: str) -> bool:
-    if not series_name or pd.isna(series_name):
+def is_excluded_series(name: str) -> bool:
+    if not name or pd.isna(name):
         return False
-    return any(re.match(p, str(series_name)) for p in EXCLUDE_PATTERNS)
+    return any(re.match(p, str(name)) for p in EXCLUDE_SERIES)
 
-# ── Preference ranking ─────────────────────────────────────────────────────────
-# Matches on the sourcedata folder name (actual downloaded series).
-# Lower rank = more preferred for sMRIprep T1w input.
+# ── Feature-based priority (label-agnostic) ────────────────────────────────────
+# Detects which corrections are present in the series folder name.
+# Both MPR__ and MT1__ naming conventions are handled by the same rules.
 PREF_RULES = [
-    # Rank 0 — GradWarp + B1 correction + N3 bias correction (best chain)
-    # Covers: MPR__GradWarp__B1_Correction__N3, MPR-R variant, ±Scaled, ±Scaled_2
-    (r"(?i)^MPR-?R?__GradWarp__B1_Correction__N3",   0),
+    # Rank 0 — GradWarp + B1 + N3 (full preprocessing chain)
+    (r"(?i).*(GradWarp).*(B1).*(N3).*",           0),
+    (r"(?i).*(B1).*(Correction).*(N3).*",         0),
+    (r"(?i).*(B1_Correction).*(N3).*",            0),
 
-    # Rank 1 — GradWarp + N3 (no B1)
-    # Covers: MPR__GradWarp__N3, MPR-R, MPR__GradWarp__N3__Scaled, etc.
-    (r"(?i)^MPR-?R?__GradWarp__N3",                   1),
-    (r"(?i)^MPR-?R?____N3",                            1),  # no GW, N3 only (MPR____N3)
+    # Rank 1 — GradWarp + N3 (no B1); covers MT1__GradWarp__N3m too
+    (r"(?i).*(GradWarp).*(N3).*",                  1),
+    (r"(?i).*(N3).*(GradWarp).*",                  1),
 
-    # Rank 2 — MT1 with GradWarp + N3m (ADNI standard pipeline)
-    (r"(?i)^MT1__GradWarp__N3m",                       2),
+    # Rank 2 — GradWarp + B1 only (no N3)
+    (r"(?i).*(GradWarp).*(B1).*",                  2),
+    (r"(?i).*(B1).*(GradWarp).*",                  2),
 
-    # Rank 3 — MT1 N3m only (no GradWarp)
-    (r"(?i)^MT1__N3m",                                 3),
+    # Rank 3 — N3 only (no GradWarp)
+    (r"(?i).*N3m.*",                               3),
+    (r"(?i).*N3.*",                                3),
 
-    # Rank 4 — GradWarp + B1, no N3
-    (r"(?i)^MPR-?R?__GradWarp__B1_Correction$",        4),
+    # Rank 4 — GradWarp only
+    (r"(?i).*GradWarp.*",                          4),
 
-    # Rank 5 — GradWarp only
-    (r"(?i)^MPR-?R?__GradWarp$",                       5),
-
-    # Rank 6 — raw MPR (no preprocessing)
-    (r"(?i)^MPR",                                       6),
-    (r"(?i)^MT1$",                                      6),
-
-    # Rank 7 — Accelerated/standard MPRAGE (ADNI3/4 raw)
-    (r"(?i).*MPRAGE.*",                                 7),
-    (r"(?i).*IR.FSPGR.*",                               7),
+    # Rank 5 — Raw / standard protocol (no specific preprocessing)
+    (r"(?i).*MPRAGE.*",                            5),
+    (r"(?i).*IR.FSPGR.*",                          5),
+    (r"(?i).*IR.SPGR.*",                           5),
+    (r"(?i)^MPR",                                  5),
+    (r"(?i)^MT1$",                                 5),
 ]
 
 def pref_rank(series_name: str) -> int:
     if not series_name or pd.isna(series_name):
         return 99
+    s = str(series_name)
     for pattern, rank in PREF_RULES:
-        if re.match(pattern, str(series_name)):
+        if re.match(pattern, s):
             return rank
     return 99
 
-# ── Load and filter session map ────────────────────────────────────────────────
+# ── Load ────────────────────────────────────────────────────────────────────────
 print("Loading session_map.csv ...")
 sess = pd.read_csv(SESSION_MAP_CSV, low_memory=False)
-print(f"  -> {len(sess):,} total images")
+print(f"  -> {len(sess):,} total images, {sess['SubjectID'].nunique():,} subjects")
 
-# Apply hard exclusions
-sess["excluded"] = sess["sourcedata_series_name"].apply(is_excluded)
-n_excl = sess["excluded"].sum()
-sess_ok = sess[~sess["excluded"]].copy()
-print(f"  -> {n_excl:,} images hard-excluded (masks/normalised/hippocampus-registered)")
-print(f"  -> {len(sess_ok):,} images remaining for selection")
+# Subject-level exclusions
+n0 = len(sess)
+sess = sess[~sess["SubjectID"].apply(is_excluded_subject)]
+print(f"  -> {n0 - len(sess):,} subject-excluded rows removed")
 
-# Apply preference rank
+# Hard series exclusions
+sess["excl_series"] = sess["sourcedata_series_name"].apply(is_excluded_series)
+
+# Hard QC exclusion: SERIES_QUALITY == 4 (unusable)
+sess["excl_qc4"] = (
+    pd.to_numeric(sess.get("mayo_qc_quality", pd.Series(dtype=float)), errors="coerce") == 4
+)
+
+sess_ok = sess[~sess["excl_series"] & ~sess["excl_qc4"]].copy()
+n_excl_series = sess["excl_series"].sum()
+n_excl_qc4   = (~sess["excl_series"] & sess["excl_qc4"]).sum()
+print(f"  -> {n_excl_series:,} excluded (series type) + {n_excl_qc4:,} excluded (QC=4 unusable)")
+print(f"  -> {len(sess_ok):,} images remain for selection")
+
+# ── Apply feature-based preference rank ───────────────────────────────────────
 sess_ok["pref_rank"] = sess_ok["sourcedata_series_name"].apply(pref_rank)
 
-# ImageUID numeric for tiebreaker
+# ImageUID numeric tiebreaker
 sess_ok["uid_int"] = pd.to_numeric(
     sess_ok["ImageUID"].astype(str).str.replace("I", "", regex=False),
     errors="coerce"
 )
 
-# QC sort (MAYOADIRL: 1=pass, 4=unusable; NaN=unavailable → sort as 99)
+# QC sort: NaN -> 99 (unknown/unavailable); 4 already excluded above
 sess_ok["sort_qc"] = pd.to_numeric(
-    sess_ok.get("mayo_qc_quality", pd.Series(dtype=float)),
-    errors="coerce"
+    sess_ok.get("mayo_qc_quality", pd.Series(dtype=float)), errors="coerce"
 ).fillna(99)
 
-# Sort within groups
+# ── Rank and select ───────────────────────────────────────────────────────────
 sess_sorted = sess_ok.sort_values(
-    ["bids_sub", "bids_ses", "sort_qc", "pref_rank", "uid_int"],
+    ["bids_sub", "bids_ses", "pref_rank", "sort_qc", "uid_int"],
     ascending=[True, True, True, True, True],
     na_position="last"
 )
 
-# ── Build selection table ─────────────────────────────────────────────────────
 records = []
 for (bids_sub, bids_ses), grp in sess_sorted.groupby(["bids_sub", "bids_ses"], sort=False):
     grp = grp.reset_index(drop=True)
@@ -149,7 +166,7 @@ for (bids_sub, bids_ses), grp in sess_sorted.groupby(["bids_sub", "bids_ses"], s
     top = grp.iloc[0]
 
     has_qc = top["sort_qc"] < 99
-    reason = "mayo_qc+pref" if has_qc else ("pref_rank" if n > 1 else "only_image")
+    reason = "mayo_qc+feature" if has_qc else ("feature_rank" if n > 1 else "only_image")
 
     rec = {
         "bids_sub":                   bids_sub,
@@ -157,7 +174,7 @@ for (bids_sub, bids_ses), grp in sess_sorted.groupby(["bids_sub", "bids_ses"], s
         "SubjectID":                  top["SubjectID"],
         "adni_viscode":               top.get("adni_viscode", ""),
         "n_scans_after_exclusion":    n,
-        # Selected (run-1)
+        # Selected
         "ImageUID_selected":          top["ImageUID"],
         "sourcedata_series_selected": top.get("sourcedata_series_name", ""),
         "SeriesDescription_selected": top.get("SeriesDescription", ""),
@@ -174,7 +191,7 @@ for (bids_sub, bids_ses), grp in sess_sorted.groupby(["bids_sub", "bids_ses"], s
         "ImageUID_run1":              top["ImageUID"],
         "sourcedata_series_run1":     top.get("sourcedata_series_name", ""),
         "nii_source_run1":            top.get("nii_source_path", ""),
-        # run-2 (second-ranked, if present after exclusion)
+        # run-2 (next-best, for reference)
         "ImageUID_run2":              grp.iloc[1]["ImageUID"] if n > 1 else "",
         "sourcedata_series_run2":     grp.iloc[1].get("sourcedata_series_name", "") if n > 1 else "",
         "nii_source_run2":            grp.iloc[1].get("nii_source_path", "") if n > 1 else "",
@@ -186,22 +203,24 @@ sel.to_csv(OUT_SELECTION, index=False)
 print(f"\nSaved: {OUT_SELECTION}")
 print(f"Sessions: {len(sel):,} | Subjects: {sel['SubjectID'].nunique():,}")
 
-print("\nPreference rank distribution (selected scan):")
+print("\nFeature-based rank distribution (selected scan):")
 rank_labels = {
-    0: "MPR GW+B1+N3", 1: "MPR GW+N3 / MPR N3",
-    2: "MT1 GW+N3m",   3: "MT1 N3m",
-    4: "MPR GW+B1",    5: "MPR GW only",
-    6: "Raw MPR/MT1",  7: "MPRAGE/IR-FSPGR", 99: "Unrecognised"
+    0: "GW + B1 + N3",
+    1: "GW + N3",
+    2: "GW + B1",
+    3: "N3 only",
+    4: "GW only",
+    5: "Raw",
+    99: "Unrecognised",
 }
 for rank, grp_df in sel.groupby("pref_rank_selected"):
     label = rank_labels.get(rank, "?")
     print(f"  Rank {rank} ({label}): {len(grp_df):,} sessions")
 
-print("\nTop selected series:")
-print(sel["sourcedata_series_selected"].value_counts().head(10).to_string())
+print("\nTop selected series folder names:")
+print(sel["sourcedata_series_selected"].value_counts().head(12).to_string())
 
 print("\nSelection reason:")
 print(sel["selection_reason"].value_counts().to_string())
-
-print("\nWith MAYOADIRL QC available:", (sel["mayo_qc_quality_selected"].notna()).sum())
-print("Multi-scan sessions (run-2 available):", (sel["n_scans_after_exclusion"] > 1).sum())
+print(f"\nWith MAYOADIRL QC score: {(sel['mayo_qc_quality_selected'].notna()).sum():,}")
+print(f"Multi-scan sessions (run-2 available): {(sel['n_scans_after_exclusion'] > 1).sum():,}")
