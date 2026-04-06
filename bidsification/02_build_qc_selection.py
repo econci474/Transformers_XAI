@@ -116,7 +116,9 @@ def pref_rank(series_name: str) -> int:
 
 # ── Load ────────────────────────────────────────────────────────────────────────
 print("Loading session_map.csv ...")
-sess = pd.read_csv(SESSION_MAP_CSV, low_memory=False)
+sess = pd.read_csv(SESSION_MAP_CSV, low_memory=False, dtype={'bids_ses': str, 'bids_sub': str})
+# Ensure bids_ses is always clean 8-digit string (no float suffix)
+sess['bids_ses'] = sess['bids_ses'].astype(str).str.replace(r'\.0$', '', regex=True)
 print(f"  -> {len(sess):,} total images, {sess['SubjectID'].nunique():,} subjects")
 
 # Subject-level exclusions

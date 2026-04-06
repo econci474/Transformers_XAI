@@ -58,10 +58,16 @@ def normalize_subject_id(ptid: str) -> str:
     return re.sub(r"[_\-]", "", str(ptid))
 
 def normalize_date(date_str) -> str:
-    """'2011-06-02' or '2011-06-02 09:30:00' -> '20110602'. Returns '' if NaN."""
+    """Normalize ADNI study dates to YYYYMMDD string.
+    Handles ISO ('2011-06-02'), MRIQC float (20110602.0), and 8-digit strings."""
     if pd.isna(date_str):
         return ""
-    return str(date_str)[:10].replace("-", "")
+    s = str(date_str).strip()
+    if s.endswith('.0'):          # MRIQC stores dates as float, e.g. 20110602.0
+        s = s[:-2]
+    if len(s) >= 10 and '-' in s:  # ISO format: 2011-06-02
+        return s[:10].replace('-', '')
+    return s[:8]                  # already YYYYMMDD
 
 # ── 1. Load image_series_mapping (spine) ──────────────────────────────────────
 print("Loading image_series_mapping.csv ...")
@@ -196,9 +202,72 @@ merged = merged.merge(
 n_mayo = merged["mayo_qc_quality"].notna().sum()
 print(f"  -> MAYOADIRL join: {n_mayo:,}/{len(merged):,} images matched to QC scores")
 
-# ── 5. Add BIDS labels ─────────────────────────────────────────────────────────
+# ── 5. MRI3META fallback for images without MRIQC metadata ────────────────────────
+# 536 ADNI1 images have old SeriesUIDs not catalogued in MRIQC.
+# MRI3META (session-level MRI protocol CRF) provides PTID+VISCODE2+EXAMDATE
+# for every 3T MRI session. We recover scan dates from the sourcedata dir structure
+# and join via SubjectID + EXAMDATE to fill missing visit info.
+
+_missing_mask = merged["adni_viscode"].isna()
+if _missing_mask.sum() > 0:
+    print(f"Recovering visit info via MRI3META for {_missing_mask.sum()} images without MRIQC match ...")
+
+    # Load MRI3META (prefer Feb 2026 version)
+    _mri3_path = os.path.join(CLINICAL_DIR, "MRI3META_15Feb2026.csv")
+    if not os.path.isfile(_mri3_path):
+        _mri3_path = os.path.join(CLINICAL_DIR, "MRI3META.csv")
+    _mri3 = pd.read_csv(_mri3_path, low_memory=False)
+    _mri3["examdate_str"] = _mri3["EXAMDATE"].astype(str).str[:10]
+    _mri3_lookup = _mri3[["PTID","VISCODE2","examdate_str"]].drop_duplicates(["PTID","examdate_str"])
+
+    # Recover scan dates from sourcedata timestamp directories
+    _missing_idx = merged[_missing_mask].index
+    _scan_dates = {}
+    for _, row in merged.loc[_missing_idx].iterrows():
+        sub_dir = os.path.join(SOURCEDATA_DIR, str(row["SubjectID"]))
+        uid_dir = str(row["ImageUID"]) if str(row["ImageUID"]).startswith("I") else "I" + str(row["ImageUID"])
+        if not os.path.isdir(sub_dir):
+            continue
+        for series in os.listdir(sub_dir):
+            s_path = os.path.join(sub_dir, series)
+            if not os.path.isdir(s_path): continue
+            for date_folder in os.listdir(s_path):
+                d_path = os.path.join(s_path, date_folder)
+                if os.path.isdir(d_path) and uid_dir in os.listdir(d_path):
+                    _scan_dates[row["ImageUID"]] = date_folder[:10]
+                    break
+            if row["ImageUID"] in _scan_dates: break
+
+    merged.loc[_missing_idx, "StudyDate"] = merged.loc[_missing_idx, "ImageUID"].map(_scan_dates)
+
+    # Join MRI3META on SubjectID + scan date
+    _tmp = merged.loc[_missing_idx, ["SubjectID","StudyDate"]].copy()
+    _tmp["scan_date_str"] = _tmp["StudyDate"].astype(str).str[:10]
+    _tmp = _tmp.merge(
+        _mri3_lookup.rename(columns={"PTID":"SubjectID","examdate_str":"scan_date_str"}),
+        on=["SubjectID","scan_date_str"], how="left"
+    )
+    _tmp.index = _missing_idx
+    merged.loc[_missing_idx, "adni_viscode"] = _tmp["VISCODE2"].values
+
+    _now_matched = merged.loc[_missing_idx, "adni_viscode"].notna().sum()
+    print(f"  -> {_now_matched}/{_missing_mask.sum()} images recovered via MRI3META")
+
+# ── 6. Add BIDS labels ─────────────────────────────────────────────────────────
 merged["bids_sub"] = merged["SubjectID"].apply(normalize_subject_id)
-merged["bids_ses"] = merged["StudyDate"].apply(normalize_date)
+
+# BIDS session label: prefer VISCODE2 (de-identified, ADNI-standard);
+# fall back to ses-d<YYYYMMDD> for images without MRIQC match.
+# ses-d prefix marks date-based fallbacks so they are identifiable.
+def make_bids_ses(row) -> str:
+    viscode = row.get("adni_viscode")
+    if viscode and str(viscode).strip() and str(viscode).strip() != "nan":
+        return str(viscode).strip().lower()   # e.g. 'bl', 'm12', 'm24'
+    date = row.get("StudyDate")
+    norm = normalize_date(date)
+    return f"d{norm}" if norm else "unknown"   # 'd' prefix = date-derived fallback
+
+merged["bids_ses"] = merged.apply(make_bids_ses, axis=1)
 
 # ── 6. Build sourcedata NIfTI index ───────────────────────────────────────────
 print("Building sourcedata NIfTI index ...")
