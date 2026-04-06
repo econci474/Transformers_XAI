@@ -5,14 +5,21 @@ Copies selected clinical CSV tables into bids/phenotype/ in BIDS format
 and generates JSON sidecar descriptors for each.
 
 Selected tables (covering key clinical domains):
-  ADNIMERGE.csv     -> adnimerge.tsv          (core longitudinal clinical data)
-  CDR.csv           -> cdr.tsv                (Clinical Dementia Rating)
-  ADAS.csv          -> adas.tsv               (Alzheimer's Disease Assessment Scale)
-  MMSE.csv          -> mmse.tsv               (Mini-Mental State Examination)
-  BACKMEDS.csv      -> backmeds.tsv           (background medications — if exists)
-  BIOMARK.csv       -> biomarkers.tsv         (CSF / plasma biomarkers — if exists)
-  APOERES.csv       -> apoe.tsv               (APOE genotype)
-  ARM.csv           -> study_arm.tsv          (ADNI arm / protocol assignment)
+  ADNIMERGE.csv            -> adnimerge.tsv     (core longitudinal: cognitive, biomarkers, volumes, dx)
+  CDR.csv                  -> cdr.tsv           (Clinical Dementia Rating)
+  ADAS.csv                 -> adas.tsv          (Alzheimer's Disease Assessment Scale)
+  MMSE.csv                 -> mmse.tsv          (Mini-Mental State Examination)
+  NEUROBAT.csv             -> neurobat.tsv      (Clock Drawing, Trail Making, ANART, Category Fluency)
+  ECOGPT.csv               -> ecog_pt.tsv       (Everyday Cognition — self-rated)
+  ECOGSP.csv               -> ecog_sp.tsv       (Everyday Cognition — study-partner-rated)
+  GDSCALE.csv              -> gds.tsv           (Geriatric Depression Scale)
+  FAQ.csv                  -> faq.tsv           (Functional Activities Questionnaire)
+  AMNART.csv               -> amnart.tsv        (American National Adult Reading Test)
+  DXSUM_PDXCONV_ADNIALL.csv-> dxsum.tsv         (Longitudinal diagnosis + conversion status per visit)
+  APOERES.csv              -> apoe.tsv          (APOE genotype)
+  ARM.csv                  -> study_arm.tsv     (ADNI arm / protocol assignment)
+  BIOMARK.csv              -> biomarkers.tsv    (CSF / plasma biomarkers — if exists)
+  BACKMEDS.csv             -> backmeds.tsv      (background medications — if exists)
 
 BIDS phenotype format:
   • TSV: tab-separated, 'participant_id' column, 'session_id' if longitudinal
@@ -122,18 +129,104 @@ PHENOTYPE_JSONS = {
         "participant_id": {"Description": "BIDS participant identifier"},
         "VISCODE": {"Description": "ADNI visit code"},
     },
+    "neurobat": {
+        "_description": "Neuropsychological Battery: Clock Drawing Test, Trail Making Test (A&B), ANART, Category Fluency.",
+        "participant_id": {"Description": "BIDS participant identifier"},
+        "VISCODE": {"Description": "ADNI visit code"},
+        "CLOCKCIRC": {"Description": "Clock Drawing: approximately circular face (1=correct)"},
+        "CLOCKSYM":  {"Description": "Clock Drawing: symmetry of number placement (1=correct)"},
+        "CLOCKNUM":  {"Description": "Clock Drawing: correctness of numbers (1=correct)"},
+        "CLOCKHAND": {"Description": "Clock Drawing: presence of two hands (1=correct)"},
+        "CLOCKTIME": {"Description": "Clock Drawing: hands set to ten past eleven (1=correct)"},
+        "CLOCKSCOR": {"Description": "Clock Drawing: total score (0-5)"},
+        "TRAASCOR":  {"Description": "Trail Making Test Part A: time to complete (seconds)"},
+        "TRAAERRCOM":{"Description": "Trail Making Test Part A: errors of commission"},
+        "TRAAERROM": {"Description": "Trail Making Test Part A: errors of omission"},
+        "TRABSCOR":  {"Description": "Trail Making Test Part B: time to complete (seconds)"},
+        "TRABERRCOM":{"Description": "Trail Making Test Part B: errors of commission"},
+        "TRABERROM": {"Description": "Trail Making Test Part B: errors of omission"},
+        "ANARTERR":  {"Description": "American National Adult Reading Test: total errors"},
+        "CATANIMSC": {"Description": "Category Fluency Test (Animals): total correct in 60 seconds"},
+    },
+    "ecog_pt": {
+        "_description": "Everyday Cognition (ECog) — participant self-rated. Subscales: memory, language, visuospatial, planning, organisation, divided attention.",
+        "participant_id": {"Description": "BIDS participant identifier"},
+        "VISCODE": {"Description": "ADNI visit code"},
+        "EcogPtMem":   {"Description": "ECog Memory subscale (self-rated)"},
+        "EcogPtLang":  {"Description": "ECog Language subscale (self-rated)"},
+        "EcogPtVisspat":{"Description": "ECog Visuospatial subscale (self-rated)"},
+        "EcogPtPlan":  {"Description": "ECog Planning subscale (self-rated)"},
+        "EcogPtOrgan": {"Description": "ECog Organisation subscale (self-rated)"},
+        "EcogPtDivatt":{"Description": "ECog Divided Attention subscale (self-rated)"},
+        "EcogPtTotal": {"Description": "ECog Total score (self-rated)"},
+    },
+    "ecog_sp": {
+        "_description": "Everyday Cognition (ECog) — study-partner-rated. Same subscales as ecog_pt.",
+        "participant_id": {"Description": "BIDS participant identifier"},
+        "VISCODE": {"Description": "ADNI visit code"},
+        "EcogSpMem":   {"Description": "ECog Memory subscale (study-partner-rated)"},
+        "EcogSpLang":  {"Description": "ECog Language subscale (study-partner-rated)"},
+        "EcogSpVisspat":{"Description": "ECog Visuospatial subscale (study-partner-rated)"},
+        "EcogSpPlan":  {"Description": "ECog Planning subscale (study-partner-rated)"},
+        "EcogSpOrgan": {"Description": "ECog Organisation subscale (study-partner-rated)"},
+        "EcogSpDivatt":{"Description": "ECog Divided Attention subscale (study-partner-rated)"},
+        "EcogSpTotal": {"Description": "ECog Total score (study-partner-rated)"},
+    },
+    "gds": {
+        "_description": "Geriatric Depression Scale (GDS) — presence and severity of depressive symptoms.",
+        "participant_id": {"Description": "BIDS participant identifier"},
+        "VISCODE": {"Description": "ADNI visit code"},
+        "GDTOTAL": {"Description": "GDS total score (0-15; >=5 suggests depression)"},
+    },
+    "faq": {
+        "_description": "Functional Activities Questionnaire (FAQ) — instrumental activities of daily living.",
+        "participant_id": {"Description": "BIDS participant identifier"},
+        "VISCODE": {"Description": "ADNI visit code"},
+        "FAQTOTAL": {"Description": "FAQ total score (0-30; higher = more dependent)"},
+    },
+    "amnart": {
+        "_description": "American National Adult Reading Test (AMNART) — premorbid IQ estimate.",
+        "participant_id": {"Description": "BIDS participant identifier"},
+        "VISCODE": {"Description": "ADNI visit code"},
+        "AMNARTID": {"Description": "AMNART IQ estimate"},
+        "AMNARTERR": {"Description": "AMNART total errors"},
+    },
+    "dxsum": {
+        "_description": "Longitudinal diagnosis and conversion status per visit (DXSUM_PDXCONV_ADNIALL). Use DXCHANGE and DIAGNOSIS to track within-study changes.",
+        "participant_id": {"Description": "BIDS participant identifier"},
+        "VISCODE": {"Description": "ADNI visit code"},
+        "VISCODE2": {"Description": "ADNI visit code (VISCODE2 cumulative format)"},
+        "EXAMDATE": {"Description": "Date of clinical assessment"},
+        "ORIGPROT": {"Description": "Protocol the subject originally enrolled in (ADNI1/GO/2/3/4)"},
+        "COLPROT":  {"Description": "Protocol under which this visit was collected"},
+        "DIAGNOSIS": {"Description": "Consensus diagnosis at visit (1=CN, 2=MCI, 3=AD)",
+                      "Levels": {"1": "Cognitively Normal", "2": "MCI", "3": "Alzheimer's Disease"}},
+        "DXCHANGE": {"Description": "Diagnosis change code relative to previous visit",
+                     "Levels": {
+                         "1": "Stable: CN", "2": "Stable: MCI", "3": "Stable: AD",
+                         "4": "Conversion: CN->MCI", "5": "Conversion: MCI->AD", "6": "Conversion: CN->AD",
+                         "7": "Reversion: MCI->CN", "8": "Reversion: AD->MCI", "9": "Reversion: AD->CN"
+                     }},
+    },
 }
 
 # ── Table definitions: (source_csv, output_name, ptid_col, date_col) ──────────
 TABLE_DEFS = [
-    ("ADNIMERGE.csv",      "adnimerge",    "PTID",   "EXAMDATE"),
-    ("CDR.csv",            "cdr",          "PTID",   "EXAMDATE"),
-    ("ADAS.csv",           "adas",         "PTID",   "EXAMDATE"),
-    ("MMSE.csv",           "mmse",         "PTID",   "EXAMDATE"),
-    ("APOERES.csv",        "apoe",         "PTID",   None),
-    ("ARM.csv",            "study_arm",    "PTID",   None),
-    ("BIOMARK.csv",        "biomarkers",   "PTID",   "EXAMDATE"),    # may not exist
-    ("BACKMEDS.csv",       "backmeds",     "PTID",   "EXAMDATE"),    # may not exist
+    ("ADNIMERGE.csv",             "adnimerge",  "PTID", "EXAMDATE"),
+    ("CDR.csv",                   "cdr",        "PTID", "EXAMDATE"),
+    ("ADAS.csv",                  "adas",       "PTID", "EXAMDATE"),
+    ("MMSE.csv",                  "mmse",       "PTID", "EXAMDATE"),
+    ("NEUROBAT.csv",              "neurobat",   "PTID", "EXAMDATE"),
+    ("ECOGPT.csv",                "ecog_pt",    "PTID", "EXAMDATE"),
+    ("ECOGSP.csv",                "ecog_sp",    "PTID", "EXAMDATE"),
+    ("GDSCALE.csv",               "gds",        "PTID", "EXAMDATE"),
+    ("FAQ.csv",                   "faq",        "PTID", "EXAMDATE"),
+    ("AMNART.csv",                "amnart",     "PTID", "EXAMDATE"),
+    ("DXSUM_PDXCONV_ADNIALL.csv", "dxsum",      "PTID", "EXAMDATE"),
+    ("APOERES.csv",               "apoe",       "PTID", None),
+    ("ARM.csv",                   "study_arm",  "PTID", None),
+    ("BIOMARK.csv",               "biomarkers", "PTID", "EXAMDATE"),  # may not exist
+    ("BACKMEDS.csv",              "backmeds",   "PTID", "EXAMDATE"),  # may not exist
 ]
 
 def normalize_date(date_str: str) -> str:
