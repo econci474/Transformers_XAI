@@ -6,10 +6,10 @@ T1w NIfTI files and their acquisition dates.
 
 BIDS scans.tsv format:
     filename                              acq_time
-    anat/sub-002S0295_ses-20110602_T1w.nii.gz   2011-06-02T00:00:00
+    anat/sub-002S0295_ses-m60_T1w.nii.gz   2011-06-02T00:00:00
 
 The scans.tsv is placed at:
-    bids/sub-<label>/ses-<label>/sub-<label>_ses-<label>_scans.tsv
+    bids/sub-<label>/ses-<label>/scans.tsv   (plain filename, per BIDS spec)
 """
 
 import pandas as pd
@@ -65,7 +65,7 @@ for ses_dir in sorted(session_dirs):
         rows.append({"filename": rel_path, "acq_time": acq_time})
     
     scans_df = pd.DataFrame(rows)
-    out_tsv = os.path.join(ses_dir, f"sub-{sub_label}_ses-{ses_label}_scans.tsv")
+    out_tsv = os.path.join(ses_dir, "scans.tsv")
     scans_df.to_csv(out_tsv, sep="\t", index=False)
     created += 1
 
