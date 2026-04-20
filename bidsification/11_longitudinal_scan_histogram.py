@@ -84,7 +84,7 @@ diag_order  = ['CognitivelyNormal', 'EarlyMCI', 'LateMCI', 'AlzheimersDisease']
 diag_labels = {'CognitivelyNormal': 'CN',
                'EarlyMCI':          'Early MCI',
                'LateMCI':           'Late MCI',
-               'AlzheimersDisease': "Alzheimer's Disease"}
+               'AlzheimersDisease': 'AD'}
 palette     = {'CognitivelyNormal': '#4DAF4A',
                'EarlyMCI':          '#377EB8',
                'LateMCI':           '#FF7F00',
@@ -98,11 +98,13 @@ for (n, dx), grp in df.groupby(['n_scans', 'diagnosis_bl']):
 
 fig, ax = plt.subplots(figsize=(10, 6))
 bottoms = np.zeros(len(n_scans_range))
+diag_counts = df['diagnosis_bl'].value_counts()
 for dx in diag_order:
     vals = stacked[dx].values.astype(int)
+    n = int(diag_counts.get(dx, 0))
     ax.bar(n_scans_range, vals, bottom=bottoms,
            color=palette[dx], edgecolor='white', linewidth=0.6,
-           width=0.7, label=diag_labels[dx])
+           width=0.7, label=f"{diag_labels[dx]}  (n={n})")
     bottoms += vals
 
 totals = stacked.sum(axis=1).values.astype(int)
@@ -124,7 +126,7 @@ ax.legend(title='Baseline Diagnosis', title_fontsize=11, fontsize=10,
           loc='upper right', framealpha=0.9)
 
 plt.tight_layout()
-hist_path = os.path.join(OUT_DIR, 'mri_scan_count_histogram.png')
+hist_path = os.path.join(OUT_DIR, 'mri_scan_count_baseline_histogram.png')
 plt.savefig(hist_path, dpi=150, bbox_inches='tight')
 plt.close()
 print(f'Saved: {hist_path}')
