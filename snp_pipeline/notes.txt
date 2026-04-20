@@ -1,0 +1,575 @@
+cd D:\ADNI_SNP_Omni2.5M_20140220
+access PLINK: ./plink.exe --help
+
+save path to call plink
+export PATH="/d/ADNI_SNP_Omni2.5M_20140220:$PATH"
+~/.bashrc
+echo 'export PATH="/d/ADNI_SNP_Omni2.5M_20140220:$PATH"' >> ~/.bashrc
+source ~/.bashrc #to reload 
+
+############ FAM file ##################
+FAM file: Info on individuals
+1 067_S_0056 0 0 2 -9
+2 123_S_0108 0 0 1 -9
+3 067_S_0059 0 0 2 -9
+4 024_S_0985 0 0 1 -9
+5 109_S_2237 0 0 1 -9
+6 131_S_0123 0 0 1 -9
+7 098_S_0160 0 0 1 -9
+8 027_S_0256 0 0 1 -9
+9 116_S_1243 0 0 1 -9
+10 073_S_2264 0 0 1 -9
+
+Column 1 FID family ID
+Column 2 Individual ID IID
+Column 3 and 4 are the IDs of the parents
+Column 5 is the sex: 1 for males, 2 for females, 0 for unknown
+Column 6 is the phenotype: missing values are denoted as 0 or -9
+
+awk '$6 != -9 {count++} END{print count+0}' WGS_Omni25_BIN_wo_ConsentsIssues.fam
+is 0, which means all the phenotypes are missing
+I will have to provide a separate phenotpe file with --pheno flag
+
+awk '{print $6}' WGS_Omni25_BIN_wo_ConsentsIssues.fam | sort -n | uniq -c
+    812 -9
+sort -n to sort numerically
+uniq -c counts how many times each consecutive repeated line appears (so need to sort first)
+
+PLINK expects a plain text file for Phenotype information, tab-delimited or space-delimited:
+.txt
+.tsv
+.pheno
+
+At minimum, PLINK expects:
+FID IID PHENO
+1 067_S_0056 1
+2 123_S_0108 2
+3 067_S_0059 -9
+
+If you also have covariates, make a separate file such as:
+FID IID AGE SEX PC1 PC2
+1 067_S_0056 75 2 0.01 -0.02
+2 123_S_0108 72 1 -0.03 0.04
+
+used with --covar.
+
+
+Check if any subjects have no sex recorded 
+awk '$5==0 {count++} END{print count+0}' WGS_Omni25_BIN_wo_ConsentsIssues.fam
+0
+
+Print distribution of sex codes 
+awk '{print $5}' WGS_Omni25_BIN_wo_ConsentsIssues.fam | sort -n | uniq -c
+    448 1
+    364 2
+
+########## BIM FILE ##############
+BIM file is for SNP location information
+
+0       rs2698846       0       0       0       G
+0       rs2542903       0       0       0       T
+0       rs1059667       0       0       0       T
+0       rs35144699      0       0       T       A
+0       rs35425675      0       0       A       T
+0       rs3876241       0       0       0       T
+0       rs160179        0       0       C       G
+0       rs12065999      0       0       T       A
+0       rs2571902       0       0       A       T
+0       rs4354242       0       0       0       C
+
+First colum = chromosome number
+Second column = SNP name 
+Third column = Position in Morgans or centimorgans, with 0 value if you do not know
+Fourth column = base pair position (bp)
+Fifth/Sixth column = alleles for the SNP, if there is 0 for one column it means that all known genotypes are homozygous at this SNP for this sample
+
+$ awk 'BEGIN{min=1e99; max=-1e99} {if($3<min) min=$3; if($3>max) max=$3} END{print "col3 min =", min, "max =", max}' WGS_Omni25_BIN_wo_ConsentsIssues.bim
+col3 min = 0 max = 280.497
+
+$ awk 'BEGIN{min=1e99; max=-1e99} {if($4<min) min=$4; if($4>max) max=$4} END{print "col4 min =", min, "max =", max}' WGS_Omni25_BIN_wo_ConsentsIssues.bim
+col4 min = 0 max = 249213967
+
+
+$ awk '
+{
+  chr=$1
+  if(!(chr in min)) {min[chr]=$4; max[chr]=$4}
+  if($4<min[chr]) min[chr]=$4
+  if($4>max[chr]) max[chr]=$4
+}
+END{
+  for(chr in min) print chr, min[chr], max[chr]
+}' WGS_Omni25_BIN_wo_ConsentsIssues.bim | sort -n
+0 0 0
+1 82154 249213967
+2 14238 243068869
+3 60661 197891568
+4 18058 190986338
+5 14159 180700260
+6 149636 170919470
+7 41421 159126310
+8 46246 146301427
+9 46587 141095050
+10 94316 135499612
+11 194441 134943190
+12 163819 133779375
+13 19058717 115103529
+14 19000480 107287663
+15 20005287 102520751
+16 84130 90170495
+17 2220 81057996
+18 13697 78015180
+19 254506 59097752
+20 61651 62947458
+21 10699687 48095982
+22 16114244 51224208
+23 60425 155229100
+24 2655180 58883690
+25 169805 155234707
+26 72 16484
+
+
+In a .bim file, chromosome 0 is usually used for unplaced / unknown / unmapped variants rather than a real chromosome. 
+Other special chromosomes are also worth noting:
+23 = X
+24 = Y
+25 = XY / pseudoautosomal representation in some datasets
+26 = mitochondrial DNA
+
+
+
+awk '$1==0' WGS_Omni25_BIN_wo_ConsentsIssues.bim | wc -l
+7238
+7238 SNPs are unplaced/unmapped
+
+
+######### BED file ##########
+Binary format of individual genotypes. 
+Non-binary file format for the genotype is stored in ped and map files. 
+
+########## MAF #############
+Calculate Mean Allele Frequency 
+./plink.exe --bfile WGS_Omni25_BIN_wo_ConsentsIssues --freq --out maf
+
+head maf.frq
+ CHR              SNP   A1   A2          MAF  NCHROBS
+   0        rs2698846    0    G            0     1620
+   0        rs2542903    0    T            0     1600
+   0        rs1059667    0    T            0     1612
+   0       rs35144699    T    A        0.327     1624
+   0       rs35425675    A    T       0.2715     1584
+   0        rs3876241    0    T            0      894
+   0         rs160179    C    G       0.4732      858
+   0       rs12065999    T    A     0.004353     1608
+   0        rs2571902    A    T       0.2722     1598
+
+   NCHROBS means number of chromosomes observed for that SNP in the frequency calculation
+   Because humans are diploid, each person usually contributes:
+    - 2 chromosomes for autosomal SNPs
+   sometimes 1 on haploid chromosomes depending on sex/chromosome and coding
+
+   So for an autosomal SNP, if you had 800 people with non-missing genotypes, you would usually expect:
+   NCHROBS = 1600
+   If some genotypes are missing, NCHROBS will be lower.
+   NCHROBS = how much non-missing genotype data contributed to that SNP’s MAF estimate.
+
+   A MAF of 0 means PLINK found no copies of the minor allele in the observed genotypes for that SNP in your dataset.
+   In practice, that usually means the SNP is monomorphic in your sample: everyone has the same allele.
+   Example:
+
+   SNP alleles: A / G
+   every observed genotype is A/A
+   then allele G is never seen
+   so the minor allele frequency = 0
+
+   A MAF of 0.5 means both alleles are equally common
+
+   One subtle point: if NCHROBS is low because of lots of missing data, a SNP can look monomorphic simply because very few chromosomes were observed. So always interpret MAF together with missingness.
+   A quick rule:
+   MAF 0 + high NCHROBS = probably truly monomorphic
+   MAF 0 + low NCHROBS = be more cautious
+
+#### MISSINGNESS ####
+plink --bfile WGS_Omni25_BIN_wo_ConsentsIssues --missing --out results/missingness/missing
+
+# Heterozygous haploid genotype calls
+
+head missing.hh
+5       109_S_2237      kgp22761656
+11      094_S_2216      kgp22761656
+34      005_S_0572      kgp22761656
+58      131_S_0384      kgp22761656
+64      027_S_2219      kgp22761656
+78      029_S_2376      kgp22761656
+81      098_S_2052      kgp22761656
+84      100_S_1226      kgp22761656
+122     011_S_2274      kgp22761656
+137     027_S_0644      kgp22761656
+
+A normal heterozygote on an autosome is something like: A/G
+That is fine, because autosomes are diploid.
+
+But in a haploid context, PLINK expects effectively one allele copy, so something equivalent to A/G is flagged as inconsistent. 
+In humans, the common places this happens are:
+1. male X chromosome outside the pseudoautosomal regions
+2. Y chromosome
+3. sometimes sex-coding / chromosome-coding mistakes
+4. imported data where the X pseudoautosomal region (PAR) was not split correctly. 
+
+PLINK says the most common source of heterozygous haploid warnings is imported data that does not follow 
+PLINK’s convention for representing the X chromosome PAR, and recommends --split-x when that is the cause.
+
+So the biological meaning is usually not “this person truly has impossible biology.” 
+More often it means one of these:
+1. the SNP is in the PAR region and the chromosome coding needs fixing
+2. the sex in the .fam file may be wrong
+3. the chromosome set/species coding is wrong
+4. the call is genuinely problematic and should be treated as missing. 
+PLINK notes that most operations treat heterozygous haploid and nonmale Y genotypes as missing, while data-conversion operations may preserve them unless you override that with --set-hh-missing.
+
+
+## Missingness by Individual
+Miss pheno means the phenotype for that person is missing in the fam file 
+
+head missing.imiss
+ FID          IID MISS_PHENO   N_MISS   N_GENO   F_MISS
+   1   067_S_0056          Y     5211  2377294 0.002192
+   2   123_S_0108          Y     6962  2379855 0.002925
+   3   067_S_0059          Y     5694  2377294 0.002395
+   4   024_S_0985          Y     2700  2379855 0.001135
+   5   109_S_2237          Y     5552  2379855 0.002333
+   6   131_S_0123          Y     4620  2379855 0.001941
+   7   098_S_0160          Y    12453  2379855 0.005233
+   8   027_S_0256          Y     7445  2379855 0.003128
+   9   116_S_1243          Y     4201  2379855 0.001765
+
+## Missingness by SNP
+N_MISS is the number of samples missing that SNP
+N_GENO = number of individuals 
+F_miss = fraction of individuals misisng that SNP
+
+   head missing.lmiss
+ CHR              SNP   N_MISS   N_GENO   F_MISS
+   0        rs2698846        2      812 0.002463
+   0        rs2542903       12      812  0.01478
+   0        rs1059667        6      812 0.007389
+   0       rs35144699        0      812        0
+   0       rs35425675       20      812  0.02463
+   0        rs3876241      365      812   0.4495
+   0         rs160179      383      812   0.4717
+   0       rs12065999        8      812 0.009852
+   0        rs2571902       13      812  0.01601
+
+## Count 
+How many SNPs with missingness >2%
+awk 'NR>1 && $5>0.05' missing.lmiss | wc -l
+20859
+
+How many individuals with missingness >2%
+awk 'NR>1 && $6>0.02' missing.imiss | wc -l
+0
+
+NR>1 means only process lines after line 1 (NR = record number)
+
+## Filter 
+removes chromosome 0
+plink --bfile WGS_Omni25_BIN_wo_ConsentsIssues --chr 1-22 --make-bed --out autosomes_only
+
+removes individuals with >2% missingness.
+plink --bfile WGS_Omni25_BIN_wo_ConsentsIssues --mind 0.02 --make-bed --out data_mind02
+
+removes SNPs with >2% missingness.
+plink --bfile WGS_Omni25_BIN_wo_ConsentsIssues --geno 0.02 --make-bed --out data_geno02
+
+Altogether 
+plink --bfile WGS_Omni25_BIN_wo_ConsentsIssues --autosome --mind 0.02 --geno 0.02 --make-bed --out SNP_filtered
+
+
+#### HARDY WEINBERG EQUILIBRIUM ####
+plink --bfile WGS_Omni25_BIN_wo_ConsentsIssues --hardy --out results/hwe/hwe
+
+Warning: 417855 het. haploid genotypes present (see results/hwe.hh ); many
+commands treat these as missing.
+Warning: Nonmissing nonmale Y chromosome genotype(s) present; many commands
+treat these as missing.
+Total genotyping rate is 0.99744.
+
+head results/hwe/hwe.hwe
+ CHR              SNP     TEST   A1   A2                 GENO   O(HET)   E(HET)            P 
+   0        rs2698846  ALL(NP)    0    G              0/0/810        0        0            1
+   0        rs2542903  ALL(NP)    0    T              0/0/800        0        0            1
+   0        rs1059667  ALL(NP)    0    T              0/0/806        0        0            1
+   0       rs35144699  ALL(NP)    T    A           88/355/369   0.4372   0.4401       0.8733
+   0       rs35425675  ALL(NP)    A    T            0/430/362   0.5429   0.3955     4.33e-36
+   0        rs3876241  ALL(NP)    0    T              0/0/447        0        0            1
+   0         rs160179  ALL(NP)    C    G            202/2/225 0.004662   0.4986   1.734e-124
+   0       rs12065999  ALL(NP)    T    A              0/7/797 0.008706 0.008669            1
+   0        rs2571902  ALL(NP)    A    T            0/435/364   0.5444   0.3962    1.076e-36
+
+CHR = chromosome
+SNP = variant ID
+TEST = which sample subset was tested
+A1, A2 = alleles
+GENO = genotype counts
+O(HET) = observed heterozygosity
+E(HET) = expected heterozygosity under HWE
+P = p-value for HWE test
+
+
+
+
+sort -k9,9g results/hwe/hwe.hwe | head
+ CHR              SNP     TEST   A1   A2                 GENO   O(HET)   E(HET)            P 
+  22       kgp3432397  ALL(NP)    T    A           280/35/482  0.04391   0.4679   1.446e-168
+   6        rs9259192  ALL(NP)    C    T            197/7/468  0.01042   0.4187   1.215e-162
+   7      kgp13298227  ALL(NP)    T    C            167/6/566 0.008119   0.3542   8.973e-160
+   7        kgp945503  ALL(NP)    G    T           219/27/446  0.03902   0.4462   1.118e-144
+   0         rs160179  ALL(NP)    C    G            202/2/225 0.004662   0.4986   1.734e-124
+   6        rs9260097  ALL(NP)    A    G           247/61/413   0.0846   0.4735   1.626e-120
+   0         rs344179  ALL(NP)    C    T            193/0/200        0   0.4998   7.459e-119
+   4      kgp20852006  ALL(NP)    G    A             96/5/689 0.006329   0.2183   3.929e-118
+   6        rs3134998  ALL(NP)    G    A           296/81/366    0.109   0.4956     4.2e-113
+
+
+
+Provide a threshold to exclude unwanted SNPs is via a p-value threshold. If the expected and observed genotype frequencies are "equal" based on an equilibrium exact test with the significance (p-value) you provide, the SNP is kept during the quality control. 
+ If there are large differences between the expected and observed frequencies, the SNP is deleted.
+you delete much more SNPs (i.e. you do a stricter QC) with the H-W significance threshold of e.g. 0.001 than if you set this to e.g. 0.000000001.
+Hardy-Weinberg threshold: 0.0000001
+
+Count how many SNPs below threshold
+awk 'NR>1 && $9 < 1e-7 {count++} END{print count+0}' results/hwe/hwe.hwe
+5642
+
+0.24% of all SNP
+
+
+#### HARDY WEINBERG EQUILIBRIUM AFTER FILTERING ####
+plink --bfile SNP_filtered --hardy --out results/hwe/hwe_filtered
+
+wc -l hwe_filtered.hwe
+2255863
+
+head hwe_filtered.hwe
+ CHR         SNP     TEST   A1   A2                 GENO   O(HET)   E(HET)            P 
+   1   rs4477212  ALL(NP)    0    A              0/0/812        0        0            1
+   1 kgp15717912  ALL(NP)    T    C              0/1/811 0.001232 0.001231            1
+   1   rs9701779  ALL(NP)    G    A              6/0/806        0  0.01467    5.794e-16
+   1  kgp7727307  ALL(NP)    0    C              0/0/802        0        0            1
+   1 kgp15297216  ALL(NP)    A    G             0/10/802  0.01232  0.01224            1
+   1   rs3094315  ALL(NP)    C    T           25/247/540   0.3042   0.2989       0.7244
+   1   rs3131972  ALL(NP)    T    C           30/247/533   0.3049   0.3072       0.8193
+   1  kgp6703048  ALL(NP)    T    G             0/78/733  0.09618  0.09155       0.2506
+   1 kgp22792200  ALL(NP)    0    T              0/0/812        0        0            1
+
+awk 'NR>1 && $9 < 1e-7 {count++} END{print count+0}' results/hwe/hwe_filtered.hwe 
+3389 out of 2255863 = 0.15%
+
+Filter out below threshold 
+plink --bfile SNP_filtered --hwe 1e-7 --make-bed --out SNP_filtered_hwe
+
+### Make PHENO and COV files for subjects with MRI and SNP data (SNP_filtered_with_mri.fam) ###
+python "C:\Users\elena\iCloudDrive\Desktop\ACS_MPhil\Thesis\git\Transformers_XAI\snp_pipeline\prepare_plink_files.py"
+
+head phenotype.pheno 
+FID     IID     PHENO
+1       067_S_0056      1
+3       067_S_0059      1
+6       131_S_0123      1
+10      073_S_2264      -9
+11      094_S_2216      -9
+15      023_S_0331      2
+20      941_S_1195      1
+21      009_S_1030      2
+23      072_S_2164      -9
+
+head covariates.cov 
+FID     IID             AGE     SEX     APOE4
+1       067_S_0056      69.6    2       0.0
+3       067_S_0059      70.9    2       0.0
+6       131_S_0123      73.3    1       0.0
+10      073_S_2264      69.3    1       1.0
+11      094_S_2216      68.1    1       1.0
+15      023_S_0331      64.6    2       2.0
+20      941_S_1195      76.9    1       0.0
+21      009_S_1030      67.4    1       0.0
+23      072_S_2164      70.9    2       0.0
+
+### MAKE PED and MAP iles ###
+Cntl+y to copy the whole line
+plink --bfile SNP_filtered_with_mri --recode --pheno phenotype.pheno --out SNP_filtered_with_mri
+
+Not advised as too large format
+
+## LINKAGE DYSEQUILIBRIUM ##
+Prune SNPs taht are correlated with one another due to linkage dysequilibrium (LD), 
+to achieve a set of independent SNPs
+
+plink --bfile SNP_filtered_with_mri --indep-pairwise 200 50 0.2 --out SNP_filtered_with_mri_LD
+Pruning complete.  1,902,164 of 2,252,473 variants removed
+
+Keep only LD pruned SNPs
+plink --bfile SNP_filtered_with_mri --extract SNP_filtered_with_mri_LD.prune.in --make-bed --out SNP_filtered_with_mri_LD_pruned
+
+## PCA ##
+plink --bfile SNP_filtered_with_mri_LD_pruned --pca 20 header tabs --out SNP_filtered_with_mri_LD_pruned_pca
+
+.eigenvec file gives subject coordinates
+.eigenval file tells you how much variance each PC explains.
+
+head results/pca/SNP_filtered_with_mri_LD_pruned_pca.eigenvec
+FID     IID     PC1     PC2     PC3     PC4     PC5     PC6     PC7     PC8     PC9     PC10    PC11    PC12    PC13    PC14  PC15     PC16    PC17    PC18    PC19    PC20
+1       067_S_0056      -0.241595       0.650648        -0.0175585      0.0142353       0.0152171       0.0204696       -0.0253069     0.00989609      0.0206443       0.0139336       0.000445554     0.0117712       -0.031247       0.00173767      0.00497625     0.0154585       -0.00305592     0.0155186       0.0263595       0.0126285
+3       067_S_0059      -0.244512       0.666423        -0.0182044      0.0149613       0.0237995       0.0193708       -0.0204628     0.0158102       0.0131299       0.0119414       0.00637824      0.0140443       -0.0305627      -0.000706011    0.00454583     0.0194205       -0.00706433     0.00363348      0.0182886       0.0150842
+6       131_S_0123      0.00150595      5.63634e-05     0.00425199      0.00105643      -0.000388297    0.00053376      0.000727212    0.00107037      -0.00032336     -0.000442433    4.17497e-06     0.000531972     -0.00114054     0.000189021     0.000227221    0.000726676     -0.000831895    -0.000569322    0.00114962      -0.000366208
+10      073_S_2264      0.0103622       0.000430718     -0.00514682     -0.000313027    0.000327882     -5.09889e-05    -1.2322e-05    0.000266453     0.000244974     -0.000216385    -0.00052288     -0.000241555    -0.000830336    -0.000158842    0.000716697    0.000596555     -0.000203974    -0.000794022    0.000887593     0.000851925
+11      094_S_2216      0.00831146      0.000771748     -0.0039463      0.000303131     -6.73552e-05    -2.09152e-05    0.000418876    0.000305064     0.000886179     -0.00023393     -0.000171347    -2.47134e-05    -0.000135262    0.00037058      -0.000350331   0.000505138     -0.00010235     -0.000428648    0.00102339      0.000171748
+15      023_S_0331      0.00950986      -0.000160698    -0.00372007     -0.000266679    0.000151097     0.000887528     0.000306363    0.00030107      0.00028801      -0.000221283    8.02299e-06     4.98135e-06     -0.000610323    0.000318062     0.00043055     -0.000347571    -0.000321518    0.00026915      0.00119253      -7.68647e-05
+20      941_S_1195      0.00986297      -2.10898e-05    -0.00485216     -0.000234687    -0.000626292    0.000198215     -5.97319e-05   0.000590496     -4.0885e-05     0.00055668      0.000208931     -0.00017852     -0.000395325    -0.000259244    -0.000593286   -0.000597486    -0.00095747     2.20914e-05     0.000321147     0.000504405
+21      009_S_1030      0.00966979      1.05607e-06     -0.00559635     7.33542e-05     0.000561736     -0.000147885    -0.00042099    0.000532076     -0.000321098    0.000502698     0.000568014     0.000544768     0.000195539     -0.000293337    -0.000956429   -0.000635055    0.000537371     -0.000466216    0.000496601     -0.000456087
+23      072_S_2164      0.00285435      0.000679661     0.00533422      0.000357488     -0.000363393    0.000141654     -9.4231e-05    0.000764727     -0.000520403    -0.000535189    0.000540208     -5.28546e-05    -0.00173976     0.000415079     -0.000240891   -0.000204634    0.000373732     -1.4849e-05     -0.000258308    0.000941979
+
+head results/pca/SNP_filtered_with_mri_LD_pruned_pca.eigenval
+24.6557
+6.40893
+6.09749
+5.78432
+5.74497
+5.69026
+5.64107
+5.5784
+5.56725
+5.51402
+
+Plot by 
+- diagnosis
+- age 
+- sex 
+- apoe4 status
+- site? 
+- missingness? 
+
+
+## HAMMING DISTANCE ##
+Hamming distance is a simple count of how many positions differ between two vectors.
+For genotype-style data, it is essentially:
+how many SNP positions differ between subject A and subject B
+
+### CLUSTERING ###
+
+
+### GWAS ### 
+
+plink --bfile SNP_filtered_with_mri_LD_pruned --pheno phenotype.pheno --covar covariates.cov --covar-name AGE,SEX,APOE4 --logistic hide-covar --ci 0.95 --out results/gwas/gwas_CN_vs_AD
+
+CHR           SNP         BP   A1       TEST    NMISS         OR       SE      L95      U95         STAT            P 
+   1   kgp15717912     534247    T        ADD      394         NA       NA       NA       NA           NA           NA
+   1   kgp15297216     723918    A        ADD      394      1.772   0.8002   0.3693    8.505        0.715       0.4746
+   1    kgp6703048     754063    T        ADD      394     0.7666   0.3978   0.3515    1.672      -0.6682        0.504
+   1   kgp15557302     757691    C        ADD      392         NA       NA       NA       NA           NA           NA
+   1    kgp3393353     767677    A        ADD      394         NA       NA       NA       NA           NA           NA
+   1   kgp15275285     774047    A        ADD      394         NA       NA       NA       NA           NA           NA
+   1   kgp15469802     791715    G        ADD      393         NA       NA       NA       NA           NA           NA
+   1    rs11240777     798959    A        ADD      394     0.9776   0.1678   0.7036    1.358      -0.1353       0.8924
+   1     rs6681049     800007    T        ADD      394      2.198    1.233   0.1959    24.66       0.6384       0.5232
+
+Why are there SNPs without Odds Ratios?
+SNPs without odds ratios usually mean PLINK could not fit the logistic regression for that variant.
+Common reasons:
+the SNP is monomorphic or nearly monomorphic in the analyzed subset
+one genotype class has too few samples
+complete or quasi-complete separation
+the tested allele count is effectively zero after filtering/missingness
+unusual/problematic allele coding
+
+awk 'NR>1 && $7=="NA" {count++} END{print count+0}' results/gwas/gwas_CN_vs_AD.assoc.logistic
+65,945
+
+NMISS means the number of people INCLUDED for that SNP allele regression calculation 
+non-missing phenotype
+non-missing covariates
+non-missing genotype at that SNP
+
+Check with SNPs are statistically significant
+STAT is the test statistic (Wald), P is the p-value column
+Standard threshold p-value in GWAS logistic regression analysis is 5e-8 (due to Bonferroni correction for ~1M tests)
+
+awk 'NR==1 || ($12 != "NA" && $12 < 5e-8)' gwas_CN_vs_AD.assoc.logistic | head -20
+
+awk 'NR>1 && $12 != "NA" && $12 < 5e-8 {count++} END{print count+0}' gwas_CN_vs_AD.assoc.logistic
+0
+
+< 1e-5
+awk 'NR>1 && $12 != "NA" && $12 < 1e-5 {count++} END{print count+0}' gwas_CN_vs_AD.assoc.logistic
+1
+
+awk 'NR==1 || (NR>1 && $12 != "NA" && $12 < 1e-5)' gwas_CN_vs_AD.assoc.logistic
+ CHR           SNP         BP   A1       TEST    NMISS         OR       SE      L95      U95         STAT            P 
+   7    rs12698588   66865643    T        ADD      394      2.321   0.1775    1.639    3.286        4.743    2.103e-06
+
+
+
+Did we remove too many SNPs with LD pruning??
+I had r^2 threshold of 0.2
+Could try 0.5, or none  
+
+### GWAS without LD pruning ## 
+
+plink --bfile SNP_filtered_with_mri --pheno phenotype.pheno --covar covariates.cov --covar-name AGE,SEX,APOE4 --logistic hide-covar --ci 0.95 --out results/gwas_no_ld/gwas_CN_vs_AD_no_pruning
+
+head gwas_CN_vs_AD_no_pruning.assoc.logistic 
+ CHR         SNP         BP   A1       TEST    NMISS         OR       SE      L95      U95         STAT            P 
+   1   rs4477212      82154    0        ADD      394         NA       NA       NA       NA           NA           NA
+   1 kgp15717912     534247    T        ADD      394         NA       NA       NA       NA           NA           NA
+   1  kgp7727307     569624    0        ADD      392         NA       NA       NA       NA           NA           NA
+   1 kgp15297216     723918    A        ADD      394      1.772   0.8002   0.3693    8.505        0.715       0.4746
+   1   rs3094315     752566    C        ADD      394      1.079   0.1974   0.7325    1.588       0.3831       0.7016
+   1   rs3131972     752721    T        ADD      393      1.047   0.1943   0.7157    1.533       0.2379        0.812
+   1  kgp6703048     754063    T        ADD      394     0.7666   0.3978   0.3515    1.672      -0.6682        0.504
+   1 kgp22792200     756652    0        ADD      394         NA       NA       NA       NA           NA           NA
+   1 kgp15557302     757691    C        ADD      392         NA       NA       NA       NA           NA           NA
+
+awk 'NR>1 && $7=="NA" {count++} END{print count+0}' results/gwas_no_ld/gwas_CN_vs_AD_no_pruning.assoc.logistic
+566562
+
+awk 'NR>1 && $12 != "NA" && $12 < 5e-8 {count++} END{print count+0}' gwas_CN_vs_AD_no_pruning.assoc.logistic
+0
+
+awk 'NR>1 && $12 != "NA" && $12 < 1e-5 {count++} END{print count+0}' gwas_CN_vs_AD_no_pruning.assoc.logistic
+6
+
+awk 'NR==1 || (NR>1 && $12 != "NA" && $12 < 1e-5)' gwas_CN_vs_AD_no_pruning.assoc.logistic
+CHR         SNP         BP   A1       TEST    NMISS         OR       SE      L95      U95         STAT            P 
+   1   rs2227203  172879023    T        ADD      394      2.236   0.1633    1.624     3.08        4.927    8.341e-07
+   7  rs12698588   66865643    T        ADD      394      2.321   0.1775    1.639    3.286        4.743    2.103e-06
+   7   rs4507650   66883410    G        ADD      394      0.438   0.1727   0.3122   0.6145       -4.779    1.758e-06
+   9   rs7041800   95951769    A        ADD      394      2.131   0.1646    1.544    2.943        4.597    4.286e-06
+  13   rs9548655   39756211    G        ADD      393      2.274   0.1835    1.587    3.258        4.477    7.577e-06
+  20  kgp1488498    4830518    C        ADD      394     0.2422   0.3033   0.1337   0.4389       -4.675    2.935e-06
+
+  ## MANHATTAN PLOT ###
+Clean isolated peaks = real signal. Flat cloud with a couple of spikes = good. SNPs above the orange line (p<1×10⁻⁵) are labelled by rsID
+
+
+Top SNPs (p < 1×10⁻⁵):
+──────────────────────────────────────────────────────────────────────
+ CHR        SNP        BP A1     OR     SE            P
+   1  rs2227203 172879023  T 2.2360 0.1633 8.341000e-07
+   7  rs4507650  66883410  G 0.4380 0.1727 1.758000e-06
+   7 rs12698588  66865643  T 2.3210 0.1775 2.103000e-06
+  20 kgp1488498   4830518  C 0.2422 0.3033 2.935000e-06
+   9  rs7041800  95951769  A 2.1310 0.1646 4.286000e-06
+  13  rs9548655  39756211  G 2.2740 0.1835 7.577000e-06
+──────────────────────────────────────────────────────────────────────
+Genomic inflation factor λ = 1.0075
+  λ ≈ 1.00 → no inflation (good)
+  λ >> 1   → possible population stratification or confounding       
+
+  ## QQ PLOT ##
+  Points should follow the diagonal. Points curving above the diagonal = inflation (confounding/stratification). The λ (genomic inflation factor) is printed on the plot — λ≈1.00 is ideal, λ>1.05 is a warning sign
+
+
+## ANNOTATE VARIANTS ##
+Nearest gene, intronic/exonic/intergenic	MyVariant.info (CADD + SnpEff annotations)
+Prior Alzheimer's / trait associations	GWAS Catalog EBI API
+Allele frequency (gnomAD EUR)	MyVariant.info (gnomAD genome fields)

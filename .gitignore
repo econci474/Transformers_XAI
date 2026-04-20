@@ -1,0 +1,19 @@
+# ── ADNI patient-level data (do not commit to public repo) ──────────────────
+snp_pipeline/phenotype.pheno
+snp_pipeline/covariates.cov
+snp_pipeline/plink.txt
+
+# ── Python ───────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+.env
+.venv/
+env/
+
+# ── OS / Editor ──────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+*.swp
+.vscode/
+.idea/
