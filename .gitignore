@@ -2,6 +2,7 @@
 snp_pipeline/phenotype.pheno
 snp_pipeline/covariates.cov
 snp_pipeline/plink.txt
+snp_pipeline/notes.txt
 
 # ── Python ───────────────────────────────────────────────────────────────────
 __pycache__/
@@ -17,3 +18,6 @@ Thumbs.db
 *.swp
 .vscode/
 .idea/
+
+# Hugging face 
+hugging_face/brainiac
