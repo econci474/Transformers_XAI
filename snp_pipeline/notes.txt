@@ -65,6 +65,7 @@ awk '{print $5}' WGS_Omni25_BIN_wo_ConsentsIssues.fam | sort -n | uniq -c
 
 ########## BIM FILE ##############
 BIM file is for SNP location information
+CHR SNP CM BP A1 A2
 
 0       rs2698846       0       0       0       G
 0       rs2542903       0       0       0       T
@@ -507,7 +508,10 @@ awk 'NR==1 || (NR>1 && $12 != "NA" && $12 < 1e-5)' gwas_CN_vs_AD.assoc.logistic
  CHR           SNP         BP   A1       TEST    NMISS         OR       SE      L95      U95         STAT            P 
    7    rs12698588   66865643    T        ADD      394      2.321   0.1775    1.639    3.286        4.743    2.103e-06
 
-
+dbSNP database: https://www.ncbi.nlm.nih.gov/snp/?term=rs12698588
+shows flanks 100bp before and after SNP
+this SNP not being in a protein-coding part of a known gene, and with there being no obvious curated annotation in the tracks I turned on for that exact window
+GWAS catalogue categorises it as intergenic gene, with two mapped genes either side: https://www.ebi.ac.uk/gwas/variants/rs12698588 
 
 Did we remove too many SNPs with LD pruning??
 I had r^2 threshold of 0.2
@@ -547,6 +551,12 @@ CHR         SNP         BP   A1       TEST    NMISS         OR       SE      L95
   13   rs9548655   39756211    G        ADD      393      2.274   0.1835    1.587    3.258        4.477    7.577e-06
   20  kgp1488498    4830518    C        ADD      394     0.2422   0.3033   0.1337   0.4389       -4.675    2.935e-06
 
+awk 'NR==1 || (NR>1 && $2=="rs3094315") || ($2=="kgp1488498")' SNP_filtered_with_mri.
+bim
+1       rs4477212       0       82154   0       A
+1       rs3094315       0       752566  C       T
+20      kgp1488498      14.5289 4830518 C       T
+
   ## MANHATTAN PLOT ###
 Clean isolated peaks = real signal. Flat cloud with a couple of spikes = good. SNPs above the orange line (p<1×10⁻⁵) are labelled by rsID
 
@@ -570,6 +580,225 @@ Genomic inflation factor λ = 1.0075
 
 
 ## ANNOTATE VARIANTS ##
-Nearest gene, intronic/exonic/intergenic	MyVariant.info (CADD + SnpEff annotations)
+Nearest gene, intronic/exonic/intergenic	
+MyVariant.info (CADD + SnpEff annotations)
+http://myvariant.info/v1/query?q=dbsnp.vartype:snp
+http://myvariant.info/v1/variant/chr1:g.172879023G>T
+
 Prior Alzheimer's / trait associations	GWAS Catalog EBI API
 Allele frequency (gnomAD EUR)	MyVariant.info (gnomAD genome fields)
+
+## Convert KGP to RSID ##
+This method is both position and allele sensitive
+
+Illumina has kgp to rsid conversion files, with different dbSNP version matches: 
+D:\ADNI_SNP_Omni2.5M_20140220\liftover\Illumina
+Loading BIM: D:\ADNI_SNP_Omni2.5M_20140220\SNP_filtered_with_mri.bim
+  Total SNPs :  2,252,473
+  rs-ID SNPs :    671,669  (no change needed)
+  kgp SNPs   :  1,580,804  (to be converted)
+
+──────────────────────────────────────────────────
+Running kgp → rsID cascade  (1,580,804 probes)
+──────────────────────────────────────────────────
+[Step 1 – b138] HumanOmni2-5-8-v1-2-A-b138-rsIDs.txt
+  Resolved 1,533,381 / 1,580,804 kgp probes
+
+[Step 1 – b138] InfiniumOmni2-5-8v1-3_A1_b144_rsids.txt
+  Resolved 31,253 / 47,423 kgp probes
+
+[Step 1 – b138] InfiniumOmni2-5-8v1-4_A1_b150_rsids.txt
+  Resolved 5,836 / 16,170 kgp probes
+
+[Step 1 – b138] InfiniumOmni2-5-8v1-5_A1_b151_rsids.txt
+  Resolved 1,436 / 10,334 kgp probes
+
+[Step 3 – KGP pvar] all_phase3_noannot.pvar.zst  (loading …)
+  Streaming directly from .zst (no decompression needed)
+  Indexed 82,583,949 rsID-annotated variants from KGP pvar
+  Resolved 6,963 / 8,898 kgp probes (639 palindromic)
+
+──────────────────────────────────────────────────
+Writing outputs to D:\ADNI_SNP_Omni2.5M_20140220
+  Lookup table    → kgp_to_rs_lookup.tsv  (1,578,869 rows)
+  update_name.txt → update_name.txt  (1,578,869 SNPs renamed)
+  unmatched_kgp   → unmatched_kgp.tsv  (1,935 probes)
+
+── Summary ────────────────────────────────────────
+  kgp SNPs in BIM      :  1,580,804
+  Resolved to rsID     :  1,578,869  (99.9%)
+  Unresolved (kgp kept):      1,935  (0.1%)
+
+  Breakdown by method:
+    InfiniumOmni2-5-8v1-3_A1_b144_rsids:   31,253
+    InfiniumOmni2-5-8v1-4_A1_b150_rsids:    5,836
+    InfiniumOmni2-5-8v1-5_A1_b151_rsids:    1,436
+    b138                          : 1,533,381
+    kgp_pvar                      :    6,324
+    kgp_pvar_palindrome           :      639
+
+## Match the remaining KGP by position only?? (Skipped for now) ##
+Unresolved (kgp kept):      1,935  (0.1%)
+Could be matched by position only by using API look-ups 
+
+## Should the palindromic sequences be deleted??##
+Illumina uses both TOP and BOT probes for forward and reverse strands. 
+This creates a lot of duplicates. 
+Keep forward strand sequence, delete duplicate reverse strand sequence
+using resolve_preexisting_dups
+
+
+"C:/Users/elena/iCloudDrive/Desktop/ACS_MPhil/Thesis/git/Transformers_XAI/snp_pipeline/resolve_preexisting_dups.py"
+Loading BIM: SNP_filtered_with_mri_rsid.bim ...
+  2,252,473 total variants
+  3,029 rsIDs appear >1 times  (6,058 rows)
+
+Fetching REF for 3,029 positions from Ensembl GRCh37 ...
+
+  [DEBUG] First item keys: ['id', 'query', 'molecule', 'seq']
+  [DEBUG] First item sample: {'id': 'chromosome:GRCh37:1:948921:948921:1', 'query': '1:948921..948921', 'molecule': 'dna', 'seq': 'T'}
+  Done. REF retrieved for 3,029/3,029 positions.
+
+Classifying duplicate groups ...
+
+Report written: preexisting_dups_report.tsv  (6,058 rows)
+  PALINDROMIC rows   : 6,052
+  MULTI-ALLELIC rows : 6
+
+Exclude list written: exclude_palindromic_dups.txt  (3,026 IDs)
+No collapsed-identical duplicates found.
+Multi-allelic table:     multiallelic_snps_grch37.tsv  (6 kept variants)
+  Columns: old_rsid | chrom | bp_grch37 | ref_grch37 | alt | new_id_grch37
+  Use this table after liftover to rename CHR:POS(hg19) → CHR:POS(hg38).
+Deduped BIM written: SNP_filtered_with_mri_rsid_deduped.bim
+
+══════════════════════════════════════════════════════════
+  Pre-existing duplicate rsIDs  :  3,029
+  Rows affected                 :  6,058
+    PALINDROMIC rows            :  6,052
+    MULTI-ALLELIC rows          :      6
+  Rows renamed in BIM           :  3,032
+  Rows to exclude (palindromic) :  3,026
+  Rows collapsed (identical)    :      0
+══════════════════════════════════════════════════════════
+
+
+plink --bfile "D:/ADNI_SNP_Omni2.5M_20140220/SNP_filtered_with_mri_rsid_deduped" \
+      --exclude "D:/ADNI_SNP_Omni2.5M_20140220/exclude_palindromic_dups.txt" \
+      --make-bed \
+      --out "D:/ADNI_SNP_Omni2.5M_20140220/SNP_filtered_with_mri_rsid_clean"
+
+rsid_deduped >> rsid_clean 
+
+### Validate rsids against GRCh37 version of dbSNP ###
+Use the rsid_clean file to validate rsids against
+Obviously the ones we have renamed due to being multi-allelic will not be found (only 6)
+
+python -u "C:/Users/elena/iCloudDrive/Desktop/ACS_MPhil/Thesis/git/Transformers_XAI/snp_pipeline/validate_rsid.py"
+[1/4] Loading RsMergeArch merge table: RsMergeArch.bcp.gz ...
+     Loaded 11,963,907 merge records  (32.0s)
+
+[2/4] Loading BIM: SNP_filtered_with_mri_rsid_clean.bim ...
+     2,249,447 variant IDs in BIM
+     rs15842 in BIM: YES
+
+[3/4] Loading rsID lookup: kgp_to_rs_lookup.tsv ...
+     1,578,869 assigned rsIDs to validate
+
+[4/4] Checking against merge table ...
+     Done in 66.2s
+
+── Summary ────────────────────────────────────────
+  rsIDs checked          :  1,578,869
+  Deprecated (merged)    :      1,972  (0.12%)
+    Safe to rename       :      1,968  → patch_deprecated_safe.txt
+    Conflict (dup IDs)   :          4  → patch_deprecated_conflicts.txt
+  Still current          :  1,576,897  (99.88%)
+──────────────────────────────────────────────────
+
+  NOTE: 4 renames skipped because the target rsID already exists
+  in the BIM as a separate probe. These represent variants that dbSNP has
+  merged — both probes measure the same underlying SNP. You may want to
+  remove one copy with PLINK --exclude after the rename step.
+  See: patch_deprecated_conflicts.txt
+
+Outputs written to D:\ADNI_SNP_Omni2.5M_20140220
+  deprecated_rsids.tsv
+  patch_deprecated_safe.txt
+  patch_deprecated_conflicts.txt
+
+Next step — apply safe patch:
+  plink --bfile SNP_filtered_with_mri_rsid_clean \
+        --update-name D:\ADNI_SNP_Omni2.5M_20140220\patch_deprecated_safe.txt \     
+        --make-bed \
+        --out D:\ADNI_SNP_Omni2.5M_20140220\SNP_filtered_with_mri_rsid_clean_current  
+
+Number of depricated rsids >> merged into one rsid
+What happens to BIM file if there are duplicate rsids? 
+
+Inspect conflict file
+
+"Four deprecated rsIDs (rs58925262, rs55738533, rs63733862, rs66823560) were flagged as merged into rsIDs already present in the dataset at adjacent genomic positions (1 bp offset). As the position discrepancy precluded unambiguous resolution, these variants were retained under their original identifiers."
+
+## Convert Genome Assemply from GRCh37 to GRCh38 ##
+
+
+##Validate REF alleles in GRCh38##
+After liftover, the BIM positions are updated but the A1/A2 columns are unchanged. For most variants this is fine, but some may now have A2 ≠ the GRCh38 reference base, which matters when:
+In PLINK A2 could be major allele, rather than reference allele. 
+
+In PLINK 1.9, the usual convention is:
+
+A1 = usually the minor/effect allele
+A2 = usually the major allele
+
+PLINK 1.9 says this explicitly in its output format docs, where A1 is “usually minor,” and in its data-management docs, where it says that unless you preserve allele order, the major allele is set to A2 for backward compatibility.
+
+For GRCh38 REF, the allele you want to line up with the reference genome is conceptually the REF allele, and in PLINK 2 a .bim import is interpreted as:
+
+A2 → treated as REF
+A1 → treated as ALT
+
+But PLINK 2 also warns that this is only expected to be correct about 95–99% of the time, because many PLINK 1.x .bed/.bim/.fam files were written with A2 = major, not truly A2 = reference.
+
+So the practical answer is:
+In old PLINK 1.x-style binary files, A2 is often major, not necessarily REF.
+In PLINK 2’s interpretation of a .bim, A2 is provisionally treated as REF and A1 as ALT, but this is only provisional until you correct it from a trusted source such as a FASTA or VCF. PLINK 2 specifically recommends --ref-allele or --ref-from-fa to set REF alleles correctly
+
+Need for correct REF in A2: 
+Exporting to VCF for imputation
+Comparing to a GRCh38 reference panel (e.g. 1000 Genomes phase 3)
+Running tools that expect proper REF/ALT orientation
+
+GRCh38_refcorr.bed/bim/fam has correct REF/ALT 
+
+
+https://www.ensembl.org/Homo_sapiens/Tools/AssemblyConverter 
+
+###Prepare relaxed LD 0.7###
+for comparison window 100kb step 1 r2 0.7
+
+python -u "C:/Users/elena/iCloudDrive/Desktop/ACS_MPhil/Thesis/git/Transformers_XAI/snp_pipeline/ld_07_comparison_script.py"
+
+
+### FLANK by 500bp each side of SNP ###
+The docs say no minimum — BMFM-DNA-SNP is ModernBERT with max 8,192 tokens ≈ 8,192 bp. The script defaults to 500 bp each side = 1,001 bp windows and hard-caps at the model's limit. 
+
+# Basic (500bp flank, train/dev/test split):
+python -u "C:/Users/elena/iCloudDrive/Desktop/ACS_MPhil/Thesis/git/Transformers_XAI/snp_pipeline/prepare_bmfm_dna_snp_inputs.py"
+
+# Inference only (single all.csv), larger context:
+python -u prepare_bmfm_dna_snp_inputs.py --inference-only --flank 1000
+
+# Quick test on 5,000 SNPs first:
+python -u prepare_bmfm_dna_snp_inputs.py --max-snps 5000 --inference-only
+
+
+ADNI GWAS (logistic regression on AD/CN)
+        ↓
+Label SNPs:  p < 5e-8  → label=1 (AD-associated)
+             p ≥ 0.5   → label=0 (null / random)
+        ↓
+Format as train/dev/test CSV  (sequence + label)
+        ↓
+bmfm-targets-scbert  task=train  data_module=covid  →  AUC on test set

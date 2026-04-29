@@ -13,11 +13,11 @@
 set -euo pipefail
 
 PLINK="./plink.exe"
-BFILE="SNP_filtered_with_mri_ld_pruned"
+BFILE="SNP_filtered_with_mri_rsid_clean_current_GRCh38_refcorr"
 PHENO="phenotype.pheno"
 COVAR="covariates.cov"
 OUT_DIR="results/gwas"
-OUT="${OUT_DIR}/gwas_CN_vs_AD"
+OUT="${OUT_DIR}/gwas_CN_vs_AD_GRCh38"
 
 mkdir -p "$OUT_DIR"
 
@@ -42,5 +42,22 @@ echo "=== Done ==="
 echo "Results : ${OUT}.assoc.logistic"
 echo "Log     : ${OUT}.log"
 echo ""
-echo "Genome-wide significant hits (p < 5e-8):"
-echo "  awk 'NR==1 || \$9 < 5e-8' ${OUT}.assoc.logistic | head -20"
+
+# ── Post-processing: significance report + BMFM labels ───────────────────────
+# Requires: python parse_gwas_results.py  (same directory as this script)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PYTHON="${PYTHON:-python}"
+
+echo "=== Running significance analysis ==="
+"$PYTHON" -u "${SCRIPT_DIR}/parse_gwas_results.py" \
+    --assoc  "${OUT}.assoc.logistic" \
+    --out-dir "$OUT_DIR" \
+    --alpha 0.05 \
+    --fdr-threshold 0.05 \
+    --null-p-min 0.5
+
+echo ""
+echo "=== Output files ==="
+echo "  Significance report : ${OUT_DIR}/gwas_significance_report.txt"
+echo "  Significant SNPs    : ${OUT_DIR}/gwas_significant_snps.tsv"
+echo "  BMFM labels         : ${OUT_DIR}/gwas_bmfm_labels.tsv"
