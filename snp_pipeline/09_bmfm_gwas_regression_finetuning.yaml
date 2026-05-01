@@ -17,6 +17,10 @@
 #       output_directory=$OUTPUT_DIRECTORY \
 #       checkpoint=ibm-research/biomed.dna.snp.modernbert.113m.v1
 
+hydra:
+  searchpath:
+    - file:///rds/user/ec474/hpc-work/biomed-multi-omic/run
+
 defaults:
   - dna_finetune_train_and_test_config   # base DNA fine-tuning config from BMFM
   - _self_                               # allow this file to override defaults

@@ -92,7 +92,7 @@ bmfm-targets-run \
     --config-path "$SCRIPT_DIR" \
     -cn bmfm_gwas_regression_finetuning \
     input_directory="$INPUT_DIRECTORY" \
-    output_directory="$OUTPUT_DIRECTORY" \
+    working_dir="$OUTPUT_DIRECTORY" \
     "checkpoint='ibm-research/biomed.dna.snp.modernbert.113m.v1'"
 
 EXIT_CODE=$?
