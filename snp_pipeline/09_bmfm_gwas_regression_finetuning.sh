@@ -30,7 +30,7 @@
 #SBATCH --gres=gpu:1             # 1 GPU is sufficient
 #SBATCH --mem=32G                # host RAM (FASTA + model + dataloaders)
 #SBATCH --cpus-per-task=4        # DataLoader workers
-#SBATCH --partition=gpu          # adjust to your cluster's GPU partition name
+#SBATCH --partition=ampere          # Cambridge CSD3 GPU partition (A100s)
 
 # =============================================================================
 # ── User-configurable paths ───────────────────────────────────────────────────
