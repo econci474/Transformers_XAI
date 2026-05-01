@@ -26,6 +26,7 @@
 #SBATCH --output=logs/bmfm_gwas_regression_%j.out
 #SBATCH --error=logs/bmfm_gwas_regression_%j.err
 #SBATCH --time=02:00:00          # wall time (generous; likely < 30 min)
+#SBATCH --nodes=1                # Cambridge HPC policy: must be explicit for GPU jobs
 #SBATCH --gres=gpu:1             # 1 GPU is sufficient
 #SBATCH --mem=32G                # host RAM (FASTA + model + dataloaders)
 #SBATCH --cpus-per-task=4        # DataLoader workers
@@ -92,7 +93,7 @@ bmfm-targets-run \
     -cn bmfm_gwas_regression_finetuning \
     input_directory="$INPUT_DIRECTORY" \
     output_directory="$OUTPUT_DIRECTORY" \
-    checkpoint=ibm-research/biomed.dna.snp.modernbert.113m.v1
+    "checkpoint='ibm-research/biomed.dna.snp.modernbert.113m.v1'"
 
 EXIT_CODE=$?
 
