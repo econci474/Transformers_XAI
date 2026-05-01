@@ -22,6 +22,8 @@
 # Adjust CONDA_ENV, INPUT_DIRECTORY, OUTPUT_DIRECTORY and SCRIPT_DIR below.
 # =============================================================================
 
+
+#SBATCH -A COMPUTERLAB-SL2-GPU
 #SBATCH --job-name=bmfm_gwas_regression
 #SBATCH --output=logs/bmfm_gwas_regression_%j.out
 #SBATCH --error=logs/bmfm_gwas_regression_%j.err
