@@ -98,6 +98,7 @@ mkdir -p logs
 # =============================================================================
 
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export TORCHDYNAMO_DISABLE=1   # Triton/icx compiler crashes on CSD3 AMD nodes
 
 bmfm-targets-run \
     --config-path "$SCRIPT_DIR" \
