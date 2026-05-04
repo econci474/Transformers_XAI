@@ -1,0 +1,210 @@
+For all patients with MRI and SNP data: "D:\ADNI_BIDS_project\bids\genotype\subjects_with_snp_and_mri.tsv"
+Stringidy tabular input data including 
+
+Baseline: 
+- Demographic
+- APOE status
+
+Longitudinal: (these listed are the ones present across all phases of ADNI) 
+- Plasma biomarkers (Abeta42/40, p-tau181, p-tau217, NfL, GFAP) 
+from d:\ADNI_BIDS_project\sourcedata\clinical\UPENN_PLASMA_FUJIREBIO_QUANTERIX.csv
+    Columns: pT217_F	AB42_F	AB40_F	AB42_AB40_F	pT217_AB42_F	NfL_Q	GFAP_Q
+from UGOTPTAU181
+    Columns: PLASMAPTAU181
+- Dementia mimic tests:  Geriatric Depression Scale (GDS), Modified Hachinski Ischaemic Score, 
+- Dementia tests: 
+participant - ADAS-Cog13, CDR sum of boxes, MMSE, MoCA, Clock Drawing Test, Category Fluency (Animals), Logical Memory I and II, Rey Auditory Verbal Learning (AVLT), Trails A&B
+informant - FAQ
+
+Labels:
+- Binary classification: AD at baseline visit (0/1)
+- Multiclass classification: diagnosis (CN/eMCI/lMCI/AD) at baseline and each time point
+- Progonsis: Convertion to AD within 1 year (0/1)
+- Progonsis: Convertion to AD within 2 years (0/1)
+- Progonsis: Convertion to AD within 3 years (0/1)
+
+Columns: Patient_ID, VISCODE, Date, Generated_Text, Label_bl_binary, Label_bl_multi, Label_1y, Label_2y, Label_3y 
+
+Example Generated_Text:
+"The participant's sex is Male. 
+Their Year of Birth is 1933. 
+Their Handedness is Right. 
+Their Marital status at baseline is Married. 
+Their education in years is 18. 
+Participant Retired? Yes. 
+Type of Participant residence House (owned or rented). 
+Participant's Primary Language English. 
+The participant's Ethnicity is Race 5. 
+
+APOE4 allele status is heterozygous, allele epsilon 3/4, dosage 1 out of 2 for epsilon 4 risk allele.  
+Plasma Aβ42 is , Aβ40 is , Aβ42/40 ratio is . 
+Plasma p-tau217 is , p-tau181 is .
+Plasma NfL is  . 
+Plasma GFAP is .
+
+Depressive symptoms present (Geriatric Depression Scale)? No.
+On the Hachinski Ischaemic Score the participant scored as follows:  
+
+On the Alzheimer's Disease Assessment Scale-Cog13 the participant scored as follows:  
+
+On the Clinical Dementia Rating scale the participant scored as follows: 
+
+On the Mini Mental State Examination (MMSE) the participant scored as follows: 
+
+On the Montreal Cognitive Assessment (MoCA) the participant scored as follows: 
+
+On the Clock Drawing Test the participant answered the following questions in this way:  Approximately circular face Correct.
+Symmetry of number placement Incorrect. 
+Correctness of numbers Correct. 
+Presence of the two hands Correct. 
+Presence of the two hands, set to ten after eleven Correct. 
+Clock Drawing Test:  Total Score 4.0. 
+
+On the Category Fluency Test Animals the scores were: - 
+Total Correct 12.0. Perseverations 0.0. Intrusions 2.0. 
+
+On the Logical Memory Test the participant scored as follows:  
+
+
+On the Auditory Verbal Learning Test the participant scored as follows in each trial:  
+Trial 1 Total 4.0. Total Intrusions 0.0. 
+Trial 2 Total 5.0. Total Intrusions 0.0. 
+Trial 3 Total 5.0. Total Intrusions 0.0. 
+Trial 4 Total 5.0. Total Intrusions 0.0. 
+Trial 5 Total 5.0. Total Intrusions 1.0. 
+Trial 6 Total 0.0. Total Intrusions 0.0. 
+List B Total 5.0. Total Intrusions 1.0. 
+30 Minute Delay Total 0.0. Total Intrusions 1.0.
+Recognition Score 8.0. Total Intrusions 5.0.  
+
+Trail Making Test: 
+Part A - Time to Complete 32.0. Errors of Commission 0.0. Errors of Omission 0.0. 
+Part B - Time to complete 144.0. Errors of Commission 1.0. Errors of Omission 0.0. 
+
+For the Functional Activities Questionnaire the participant scored as follows for each question:  Writing checks, paying bills, or balancing checkbook. Never did, would have difficulty now (1). Assembling tax records, business affairs, or other papers. Never did, would have difficulty now (1). 
+Shopping alone for clothes, household necessities, or groceries. Never did, would have difficulty now (1). 
+Playing a game of skill such as bridge or chess, working on a hobby. Normal (0). 
+Heating water, making a cup of coffee, turing off the stove. Normal (0). 
+Preparing a balanced meal. Never did, would have difficulty now (1). 
+Keeping track of current events. Never did, would have difficulty now (1). 
+Paying attention to and understanding a TV program, book, or magazine. Has difficulty, but does by self (1). 
+Remembering appointments, family occasions, holidays, medications. Requires assistance (2). Trail Making Test for FAQ score:  
+Traveling out of the neighborhood, driving, or arranging to take public transportation. Dependent (3). 
+Total Score for FAQ is 11.0"
+
+Find demographic and cognitive scores in "D:\ADNI_BIDS_project\sourcedata\clinical"
+If test score is missing, write NaN in the Generated_Text. 
+
+Save outputs in this directory "D:\ADNI_BIDS_project\derivatives\clinical": 
+- master csv file including all patients at all study visits
+- a csv for each study visit type e.g. baseline, m12, m24, m36, m48, m60, m72, m84, m96
+- a baseline folder, inside of which random train/validation/test split of baseline csv for LLM training. 
+
+Missingness is currently checking
+Feature	Pct_Missing	Pct_Present	Total_Entries	Total_Cells	Patients_With_Entries	Total_Patients
+Plasma_UPENN	99	1	199	19712	157	616
+MOCA	86.2	13.8	3398	24640	612	616
+GDS	84.8	15.2	3746	24640	614	616
+CDR	84.1	15.9	3926	24640	614	616
+MMSE	84.1	15.9	3911	24640	614	616
+pTau181_UGot	84.1	15.9	2060	12936	605	616
+FAQ	83.5	16.5	4075	24640	615	616
+ADAS	83.5	16.5	4058	24640	615	616
+NEUROBAT	83.5	16.5	4059	24640	615	616
+Hachinski	29.4	70.6	435	616	435	616
+
+Other biomarkers check coverage
+These are baseline biomarker columns in ADNIMERGE.
+
+The suffix:
+
+_bl
+
+means baseline value for that participant. In some versions of ADNIMERGE these appear with dots, e.g. ABETA.bl, and in CSV/Python workflows they may appear as ABETA_bl.
+
+Column	Meaning	Type
+ABETA_bl	Baseline CSF amyloid-beta, usually Aβ42	CSF biomarker
+TAU_bl	Baseline CSF total tau	CSF biomarker
+PTAU_bl	Baseline CSF phosphorylated tau	CSF biomarker
+FDG_bl	Baseline FDG-PET metaROI measure	PET imaging biomarker
+PIB_bl	Baseline PiB amyloid PET SUVR summary	Amyloid PET
+AV45_bl	Baseline florbetapir / AV45 amyloid PET SUVR	Amyloid PET
+FBB_bl	Baseline florbetaben amyloid PET SUVR	Amyloid PET
+
+CDT total	CLOCKSCOR
+Category Fluency Animals	CATANIMSC
+Logical Memory I	LIMMTOTAL
+Logical Memory II	LDELTOTAL
+AVLT (first trial as presence indicator)	AVTOT1
+Trails A	TRAASCOR
+Trails B	TRABSCOR
+
+Generated Text 
+The participant's sex is Female. Their Year of Birth is 1929. Their Handedness is Right. Their Marital status at baseline is Married. Their education in years is 16. Participant Retired? No. Type of Participant residence House (owned or rented). Participant's Primary Language English. The participant's Ethnicity is White.
+
+APOE4 allele status is non-carrier, allele epsilon 3/3, dosage 0 out of 2 for epsilon 4 risk allele.
+
+CSF Abeta is , tau is and p-tau is  at baseline
+Plasma AÎ²42 is 35.9, AÎ²40 is 420.8, AÎ²42/40 ratio is 0.1. Plasma p-tau217 is 0.2, p-tau181 is 6.1. Plasma NfL is 24.8. Plasma GFAP is 156.6.
+
+
+Depressive symptoms present? No. Total Geriatric Depression Scale (GDS) score: 0.
+
+On the Hachinski Ischaemic Score the participant scored: 0.
+
+On the Alzheimer's Disease Assessment Scale-Cog13 the participant scored: 4.3.
+
+On the Clinical Dementia Rating scale the participant scored: CDR Global 0.0, CDR Sum of Boxes 0.0.
+
+On the Mini Mental State Examination (MMSE) the participant scored: 29.
+
+On the Montreal Cognitive Assessment (MoCA) the participant scored: 23.
+
+On the Clock Drawing Test the participant answered the following questions in this way: Approximately circular face Correct. Symmetry of number placement Correct. Correctness of numbers Correct. Presence of the two hands Correct. Presence of the two hands, set to ten after eleven Correct. Clock Drawing Test Total Score 5.0.
+
+On the Category Fluency Test Animals the scores were: Total Correct 33.0. Perseverations 0.0. Intrusions 0.0.
+
+On the Logical Memory Test the participant scored as follows: Immediate Recall Total NaN. Delayed Recall Total NaN. Delayed Recall Cued NaN.
+
+On the Auditory Verbal Learning Test the participant scored as follows in each trial: Trial 1 Total 6.0. Total Intrusions 0.0. Trial 2 Total 10.0. Total Intrusions 2.0. Trial 3 Total 10.0. Total Intrusions 2.0. Trial 4 Total 14.0. Total Intrusions 0.0. Trial 5 Total 12.0. Total Intrusions 1.0. Trial 6 Total 9.0. Total Intrusions 2.0. List B Total 6.0. Total Intrusions 2.0. 30 Minute Delay Total 7.0. Total Intrusions 2.0. Recognition Score 14.0. Total Intrusions 1.0.
+
+Trail Making Test: Part A - Time to Complete 31.0. Errors of Commission 0.0. Errors of Omission 0.0. Part B - Time to complete 55.0. Errors of Commission 0.0. Errors of Omission 0.0.
+
+For the Functional Activities Questionnaire the participant scored as follows for each question: Writing checks, paying bills, or balancing checkbook. Normal (0). Assembling tax records, business affairs, or other papers. Normal (0). Shopping alone for clothes, household necessities, or groceries. Normal (0). Playing a game of skill such as bridge or chess, working on a hobby. Normal (0). Heating water, making a cup of coffee, turning off the stove. Normal (0). Preparing a balanced meal. Normal (0). Keeping track of current events. Normal (0). Paying attention to and understanding a TV program, book, or magazine. Normal (0). Remembering appointments, family occasions, holidays, medications. Normal (0). Traveling out of the neighborhood, driving, or arranging to take public transportation. Normal (0). Total Score for FAQ is 0.0.
+
+
+Summarised_Text:  
+Demographics - Sex: Female; YOB: 1929; Handedness: Right; Marital status: Married; Education years: 16; Retired: No; Residence: House (owned or rented); Primary Language: English; Ethnicity: White.
+Genotype - APOE4 allele status: non-carrier; alleles: epsilon 3/3; dosage of epsilon 4: 0/2.
+Plasma biomarkers - AÎ²42: 35.9; AÎ²40: 420.8; AÎ²42/40: 0.1; p-tau217: 0.2, p-tau181: 6.1; NfL: 24.8; GFAP: 156.6.
+CSF biomarkers at baseline - Abeta: , tau: , p-tau: .
+Exclusions - Geriatric Depression Scale (GDS) score: 0;  Depression: 0; Hachinski Ischaemic Score: 0.
+Cognitive tests -
+Alzheimer's Disease Assessment Scale-Cog13 total: 4.3; 
+Clinical Dementia Rating (CDR) scale global: 0, CDR sum of boxes: 0.
+Mini Mental State Examination (MMSE) total: 29.
+Montreal Cognitive Assessment (MoCA) total: 23.
+Category Fluency Test Animals total: 33, Perseverations: 0, Intrusions: 0.
+Logical Memory Test Immediate Recall total: NaN; Delayed Recall total: NaN; Delayed Recall Cued: NaN.
+Auditory Verbal Learning Test (AVLT) Trial 1: Total 6, Intrusions 0; Trial 2: Total 10, Intrusions 2; Trial 3: Total 10, Intrusions 2; Trial 4: Total 14, Intrusions 0; Trial 5: Total 12, Intrusions 1; Trial 6: Total 9, Intrusions 2; List B Total 6, Intrusions 2; 30 Minute Delay Total 7, Intrusions 2; Recognition Score 14, Intrusions 1.
+Trail Making Test Part A: Time to Complete 31 seconds, Errors of Commission 0, Errors of Omission 0; Part B: Time to complete 55 seconds, Errors of Commission 0, Errors of Omission 0.
+Functional Activities Questionnaire (FAQ) - 
+Writing checks, paying bills, or balancing checkbook: Normal (0). 
+Assembling tax records, business affairs, or other papers: Normal (0). 
+Shopping alone for clothes, household necessities, or groceries: Normal (0). 
+Playing a game of skill such as bridge or chess, working on a hobby: Normal (0). 
+Heating water, making a cup of coffee, turning off the stove: Normal (0). 
+Preparing a balanced meal: Normal (0). 
+Keeping track of current events: Normal (0). 
+Paying attention to and understanding a TV program, book, or magazine: Normal (0). 
+Remembering appointments, family occasions, holidays, medications: Normal (0). 
+Traveling out of the neighborhood, driving, or arranging to take public transportation: Normal (0). 
+FAQ total: 0.
+
+
+
+Start with 80/10/10 split, across seeds 0,1,2
+Keep the test subjects consistent across modalities (MRI, SNP)
+
+Eventually move to k=10 fold cross-validation for single-modality models, depending on time available
+

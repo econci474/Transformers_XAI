@@ -1,0 +1,37 @@
+Task,Model,Seed,Accuracy,BalancedAcc,AUC-ROC,F1,AUC-ROC (OvR),MacroF1
+Binary: CN vs MCI+AD,LogReg,0,0.9841,0.9889,1.0,0.9888,,
+Binary: CN vs MCI+AD,SVM,0,1.0,1.0,1.0,1.0,,
+Binary: CN vs MCI+AD,XGBoost,0,1.0,1.0,1.0,1.0,,
+Multi-class: CN / MCI / AD,LogReg,0,0.9524,0.8583,,,0.9461,0.8953
+Multi-class: CN / MCI / AD,SVM,0,0.9683,0.8667,,,0.9921,0.9085
+Multi-class: CN / MCI / AD,XGBoost,0,0.9683,0.8667,,,0.9715,0.9085
+Conversion to AD within 3 years,LogReg,0,0.931,0.8878,0.9647,0.7143,,
+Conversion to AD within 3 years,SVM,0,0.931,0.8878,0.9551,0.7143,,
+Conversion to AD within 3 years,XGBoost,0,0.8966,0.6474,0.9647,0.4,,
+Conversion to AD within 5 years,LogReg,0,0.8793,0.9271,0.9563,0.7407,,
+Conversion to AD within 5 years,SVM,0,0.8966,0.8979,0.975,0.75,,
+Conversion to AD within 5 years,XGBoost,0,0.9138,0.8292,0.9479,0.7368,,
+Binary: CN vs MCI+AD,LogReg,1,0.9841,0.9792,1.0,0.9873,,
+Binary: CN vs MCI+AD,SVM,1,0.9841,0.9792,0.9979,0.9873,,
+Binary: CN vs MCI+AD,XGBoost,1,1.0,1.0,1.0,1.0,,
+Multi-class: CN / MCI / AD,LogReg,1,0.9365,0.964,,,0.989,0.8143
+Multi-class: CN / MCI / AD,SVM,1,0.9365,0.7965,,,0.9712,0.8013
+Multi-class: CN / MCI / AD,XGBoost,1,0.9206,0.7973,,,0.9877,0.7384
+Conversion to AD within 3 years,LogReg,1,0.9016,0.9412,0.9882,0.7692,,
+Conversion to AD within 3 years,SVM,1,0.8689,0.8814,0.9608,0.6923,,
+Conversion to AD within 3 years,XGBoost,1,0.8852,0.851,0.9765,0.6957,,
+Conversion to AD within 5 years,LogReg,1,0.9016,0.9388,0.9949,0.8,,
+Conversion to AD within 5 years,SVM,1,0.8525,0.9082,0.9762,0.7273,,
+Conversion to AD within 5 years,XGBoost,1,0.9344,0.9277,0.9796,0.8462,,
+Binary: CN vs MCI+AD,LogReg,2,1.0,1.0,1.0,1.0,,
+Binary: CN vs MCI+AD,SVM,2,0.9683,0.9583,1.0,0.975,,
+Binary: CN vs MCI+AD,XGBoost,2,1.0,1.0,1.0,1.0,,
+Multi-class: CN / MCI / AD,LogReg,2,0.9841,0.9444,,,0.9746,0.9647
+Multi-class: CN / MCI / AD,SVM,2,0.9206,0.8056,,,0.9938,0.8509
+Multi-class: CN / MCI / AD,XGBoost,2,0.9841,0.9444,,,1.0,0.9647
+Conversion to AD within 3 years,LogReg,2,0.9123,0.8039,0.8529,0.6154,,
+Conversion to AD within 3 years,SVM,2,0.8947,0.7206,0.9379,0.5,,
+Conversion to AD within 3 years,XGBoost,2,0.8947,0.6471,0.951,0.4,,
+Conversion to AD within 5 years,LogReg,2,0.8772,0.7717,0.852,0.5882,,
+Conversion to AD within 5 years,SVM,2,0.8421,0.7513,0.9056,0.5263,,
+Conversion to AD within 5 years,XGBoost,2,0.8947,0.7819,0.9005,0.625,,
