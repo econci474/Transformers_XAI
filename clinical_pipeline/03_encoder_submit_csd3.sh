@@ -1,12 +1,13 @@
 #!/bin/bash
+#SBATCH -A LIO-CHARM-SL2-GPU
 #SBATCH --job-name=encoder_llm
 #SBATCH --output=logs/encoder_%A_%a.log
 #SBATCH --error=logs/encoder_%A_%a.err
-#SBATCH --partition=ampere
+#SBATCH -p ampere
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --gres=gpu:a100:1
-#SBATCH --cpus-per-task=4
+#SBATCH --gres=gpu:1
+#SBATCH --cpus-per-task=3
 #SBATCH --mem=32G
 #SBATCH --time=01:30:00
 #SBATCH --array=0-95
@@ -46,11 +47,11 @@ conda activate clinical
 
 # HF cache on RDS (avoids home directory quota)
 # Adjust USERNAME to your CSD3 username
-export HF_HOME="/rds/user/${USER}/hpc-work/hf_cache"
+export HF_HOME="/home/ec474/rds/hpc-work/hf_cache"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DATA_DIR="/rds/user/${USER}/hpc-work/ADNI_BIDS_project/derivatives/clinical/verbose/baseline"
-OUT_DIR="${SCRIPT_DIR}/outputs"
+DATA_DIR="/home/ec474/rds/hpc-work/ADNI_CL/baseline"
+OUT_DIR="/home/ec474/rds/hpc-work/ADNI_CL/baseline_outputs"
 
 # ── Combination lookup ────────────────────────────────────────────────────────
 MODEL_IDS=(
