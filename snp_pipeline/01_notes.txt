@@ -802,3 +802,12 @@ Label SNPs:  p < 5e-8  → label=1 (AD-associated)
 Format as train/dev/test CSV  (sequence + label)
         ↓
 bmfm-targets-scbert  task=train  data_module=covid  →  AUC on test set
+
+
+### TOKENISATION OF BMFM-DNA-SNP ###
+
+ref2vec or snp2vec 
+ref2vec takes in sequence data
+
+snp2vec takes in snpified data with chinese characters to encode biallelic site in a sequence
+https://github.com/BiomedSciAI/biomed-multi-omic/blob/main/bmfm_targets/datasets/SNPdb/tabix_converter.py 

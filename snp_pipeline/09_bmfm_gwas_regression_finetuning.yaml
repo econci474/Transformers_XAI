@@ -19,7 +19,7 @@
 
 hydra:
   searchpath:
-    - file:///rds/user/ec474/hpc-work/biomed-multi-omic/run
+    - file:///home/ec474/.conda/envs/bmfm/lib/python3.10/site-packages/run
 
 defaults:
   - dna_finetune_train_and_test_config   # base DNA fine-tuning config from BMFM
@@ -29,7 +29,7 @@ defaults:
 dataset_name: gwas_regression
 
 data_module:
-  max_length: 1001           # 500 bp each side + SNP = 1001 bp window
+  max_length: 8192           # 8 kb chromosome-context windows (08e) — multiple of 16 ✓
   dataset_kwargs:
     processed_data_source: ${input_directory}
     dataset_name: ${dataset_name}
@@ -51,8 +51,8 @@ trainer:
 # ── Hyperparameters ───────────────────────────────────────────────────────────
 # Dataset is small (~860 rows); more epochs compensate for limited data.
 batch_size: 16
-max_epochs: 50
-learning_rate: 1.0e-5
-accumulate_grad_batches: 4    # effective batch = 16 * 4 = 64
-val_check_interval: 1.0       # validate once per epoch (small dataset)
+max_epochs: 2              # BMFM-recommended fine-tuning duration (2 epochs)
+learning_rate: 1.0e-6
+accumulate_grad_batches: 4   # effective batch = 1 * 64 = 64; batch_size=1 needed for 8kb OOM on L4
+val_check_interval: 0.5       # validate twice per epoch (BMFM recommendation)
 accelerator: gpu

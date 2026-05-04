@@ -1,4 +1,0 @@
-### take publicly available GWAS results for AD ##
-
-### Apply these as the classification signal instead of own GWAS ##
-
