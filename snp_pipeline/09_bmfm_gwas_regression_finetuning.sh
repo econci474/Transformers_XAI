@@ -44,16 +44,16 @@ CONDA_ENV="bmfm"       # conda env with bmfm_targets installed
 # Combinatorial EA/OA by-chrom dataset (08f, generated locally then scp'd to CSD3):
 # scp -r D:/ADNI_SNP_Omni2.5M_20140220/bmfm_inputs/bmfm_gwas_signed_regression_without_ukb_augmented_by_chrom_combos \
 #     ec474@login-cpu.hpc.cam.ac.uk:~/ADNI_SNP/
-INPUT_DIRECTORY="${HOME}/ADNI_SNP/bmfm_gwas_signed_regression_without_ukb_augmented_by_chrom_combos"
+INPUT_DIRECTORY="/home/ec474/rds/hpc-work/ADNI_SNP/bmfm_gwas_signed_regression_without_ukb_augmented_by_chrom_combos"
 
 # Where to write checkpoints, predictions, logs:
-OUTPUT_DIRECTORY="${HOME}/ADNI_SNP/bmfm_gwas_regression_output/bmfm_gwas_combos_lr1e6_2ep"
+OUTPUT_DIRECTORY="/home/ec474/rds/hpc-work/ADNI_SNP/bmfm_gwas_regression_output/bmfm_gwas_combos_lr1e6_2ep"
 
 # Directory containing 09_bmfm_gwas_regression_finetuning.yaml
 # NOTE: Cannot use BASH_SOURCE[0] here — SLURM copies the .sh to a spool
 # directory (/var/spool/slurm/...) so dirname resolves to the wrong path.
 # Hardcode to the actual git clone location on CSD3:
-SCRIPT_DIR="${HOME}/Transformers_XAI/snp_pipeline"
+SCRIPT_DIR="/home/ec474/rds/hpc-work/Transformers_XAI/snp_pipeline"
 
 # =============================================================================
 # ── Environment ───────────────────────────────────────────────────────────────
