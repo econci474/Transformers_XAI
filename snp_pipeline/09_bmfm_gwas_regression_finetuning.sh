@@ -31,7 +31,7 @@
 #SBATCH --nodes=1                # Cambridge HPC policy: must be explicit for GPU jobs
 #SBATCH --gres=gpu:1             # 1 A100 40 GB
 #SBATCH --mem=48G                # host RAM (FASTA + model + dataloaders)
-#SBATCH --cpus-per-task=8        # DataLoader workers
+#SBATCH --cpus-per-task=3        # CSD3 max: 3 CPUs per GPU
 #SBATCH -p ampere       # Cambridge CSD3 GPU partition (A100s)
 
 # =============================================================================
