@@ -43,14 +43,14 @@ if [ -z "${HF_TOKEN}" ]; then
 fi
 
 echo "Logging in to HuggingFace..."
-huggingface-cli login --token "${HF_TOKEN}" --add-to-git-credential 2>/dev/null || true
+hf auth login --token "${HF_TOKEN}" 2>/dev/null || true
 
 # --- Download -----------------------------------------------------------------
 for MODEL_ID in "${MODELS[@]}"; do
     echo "------------------------------------------------------------"
     echo "Downloading: ${MODEL_ID}"
     echo "------------------------------------------------------------"
-    huggingface-cli download "${MODEL_ID}" \
+    hf download "${MODEL_ID}" \
         --include "*.json" "*.safetensors" "tokenizer*" "config*" "vocab*" \
         --cache-dir "${HF_CACHE}"
     echo "  Done: ${MODEL_ID}"
