@@ -206,5 +206,98 @@ FAQ total: 0.
 Start with 80/10/10 split, across seeds 0,1,2
 Keep the test subjects consistent across modalities (MRI, SNP)
 
+Seed class distribution
+$ python check_class_distribution.py 
+
+#################################################################
+  SEED 0
+  Total — Train: 492  Val: 61  Test: 63
+#################################################################
+
+  [T1_binary (CN vs MCI+AD)]
+Split   N    CN (0) MCI+AD (1)
+train 492 178 (36%)  314 (64%)
+  val  61  16 (26%)   45 (74%)
+ test  63  18 (29%)   45 (71%)
+
+  [T2_multiclass (CN/MCI/AD)]
+Split   N  AD (2)    CN (0)   MCI (1)
+train 492 28 (6%) 178 (36%) 286 (58%)
+  val  61  3 (5%)  16 (26%)  42 (69%)
+ test  63  5 (8%)  18 (29%)  40 (63%)
+
+  [T3a_conv3y (non-AD baseline)]
+Split   N         0        1
+train 464 403 (87%) 61 (13%)
+  val  58  52 (90%)  6 (10%)
+ test  58  52 (90%)  6 (10%)
+
+  [T3b_conv5y (non-AD baseline)]
+Split   N         0        1
+train 464 383 (83%) 81 (17%)
+  val  58  49 (84%)  9 (16%)
+ test  58  48 (83%) 10 (17%)
+
+#################################################################
+  SEED 1
+  Total — Train: 492  Val: 61  Test: 63
+#################################################################
+
+  [T1_binary (CN vs MCI+AD)]
+Split   N    CN (0) MCI+AD (1)
+train 492 169 (34%)  323 (66%)
+  val  61  19 (31%)   42 (69%)
+ test  63  24 (38%)   39 (62%)
+
+  [T2_multiclass (CN/MCI/AD)]
+Split   N  AD (2)    CN (0)   MCI (1)
+train 492 32 (7%) 169 (34%) 291 (59%)
+  val  61  2 (3%)  19 (31%)  40 (66%)
+ test  63  2 (3%)  24 (38%)  37 (59%)
+
+  [T3a_conv3y (non-AD baseline)]
+Split   N         0        1
+train 460 411 (89%) 49 (11%)
+  val  59  45 (76%) 14 (24%)
+ test  61  51 (84%) 10 (16%)
+
+  [T3b_conv5y (non-AD baseline)]
+Split   N         0        1
+train 460 389 (85%) 71 (15%)
+  val  59  42 (71%) 17 (29%)
+ test  61  49 (80%) 12 (20%)
+
+#################################################################
+  SEED 2
+  Total — Train: 492  Val: 61  Test: 63
+#################################################################
+
+  [T1_binary (CN vs MCI+AD)]
+Split   N    CN (0) MCI+AD (1)
+train 492 166 (34%)  326 (66%)
+  val  61  22 (36%)   39 (64%)
+ test  63  24 (38%)   39 (62%)
+
+  [T2_multiclass (CN/MCI/AD)]
+Split   N  AD (2)    CN (0)   MCI (1)
+train 492 24 (5%) 166 (34%) 302 (61%)
+  val  61 6 (10%)  22 (36%)  33 (54%)
+ test  63 6 (10%)  24 (38%)  33 (52%)
+
+  [T3a_conv3y (non-AD baseline)]
+Split   N         0        1
+train 468 409 (87%) 59 (13%)
+  val  55  47 (85%)  8 (15%)
+ test  57  51 (89%)  6 (11%)
+
+  [T3b_conv5y (non-AD baseline)]
+Split   N         0        1
+train 468 385 (82%) 83 (18%)
+  val  55  46 (84%)  9 (16%)
+ test  57  49 (86%)  8 (14%)
+
+
 Eventually move to k=10 fold cross-validation for single-modality models, depending on time available
+
+
 

@@ -321,7 +321,7 @@ def main():
         eval_strategy="epoch",
         save_strategy="epoch",
         load_best_model_at_end=True,
-        metric_for_best_model="eval_loss",
+        metric_for_best_model="loss",
         greater_is_better=False,
         save_total_limit=2,           # keep only best + latest checkpoint
         # Mixed precision
@@ -405,6 +405,12 @@ def main():
 
     print(f"\n  Saved → {out_dir / 'metrics.json'}")
     print(f"  Saved → {out_dir / 'training_log.csv'}")
+
+    # Save best model checkpoint
+    best_ckpt_dir = out_dir / "best_checkpoint"
+    model.save_pretrained(best_ckpt_dir)
+    tokenizer.save_pretrained(best_ckpt_dir)
+    print(f"  Best model saved → {best_ckpt_dir}")
 
     # Clean up intermediate Trainer checkpoints to save disk space
     import shutil

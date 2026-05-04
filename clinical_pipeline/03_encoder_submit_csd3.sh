@@ -49,7 +49,7 @@ conda activate clinical
 # Adjust USERNAME to your CSD3 username
 export HF_HOME="/home/ec474/rds/hpc-work/hf_cache"
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="/home/ec474/rds/hpc-work/Transformers_XAI/clinical_pipeline"
 DATA_DIR="/home/ec474/rds/hpc-work/ADNI_CL/baseline"
 OUT_DIR="/home/ec474/rds/hpc-work/ADNI_CL/baseline_outputs"
 
