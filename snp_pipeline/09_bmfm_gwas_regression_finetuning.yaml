@@ -50,9 +50,9 @@ trainer:
 
 # ── Hyperparameters ───────────────────────────────────────────────────────────
 # Dataset is small (~860 rows); more epochs compensate for limited data.
-batch_size: 16              # eager mode uses ~10 GB/sample; 2 fits ~25 GB on A100
+batch_size: 2              # eager mode uses ~10 GB/sample; 2 fits ~25 GB on A100
 max_epochs: 2              # BMFM-recommended fine-tuning duration (2 epochs)
 learning_rate: 1.0e-6
-accumulate_grad_batches: 8  # effective batch = 16 * 8 = 64
+accumulate_grad_batches: 32  # effective batch = 16 * 8 = 64
 val_check_interval: 0.5       # validate twice per epoch (BMFM recommendation)
 accelerator: gpu
