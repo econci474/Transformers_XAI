@@ -1,0 +1,44 @@
+LLM model comparison: 
+
+Encoder-only:
+ModernBERT base (125M) and large (350M)
+BioClinicalBERT base (125M) and large (350M) 
+
+Decoder-only:
+BioGPT GPT-2 medium ~345M and large 1B
+PubMedGPT 2.7B
+Bio-Medical-Llama-3-2-1B-CoT-012025
+
+Meditron-7B 
+Llama-2 7B
+
+Biomistral 7B
+Mistral 7B
+
+Fine-tuning strategies: 
+Encoder-only
+- freeze backbone + train classifier head to output 0/1 on the different tasks
+- finetune with AutoModelForSequenceClassification 
+
+Decoder-only
+- LoRA finetuning 
+- Prompt-based classification
+
+Input sequence (train/val/test across 3 seed directories): 
+D:\ADNI_BIDS_project\derivatives\clinical\verbose\baseline 
+
+Tasks: 
+- Binary classification: CN vs MCI/AD at baseline visit (0/1)
+- Multiclass classification: diagnosis (CN/MCI/AD) at baseline visit (0/1/2)
+- Progonsis: Convertion to AD within 3 years (0/1)
+- Progonsis: Convertion to AD within 5 years (0/1)
+
+Outputs: 
+- Accuracy, Balanced Accuracy, Precision, Recall, AUC-PR, AUC-ROC, F1/macro-F1-score for each task and model (or whichever evaluation metrics you recommend). 
+
+Save outputs: 
+Create a separate directory for each model type
+C:\Users\elena\iCloudDrive\Desktop\ACS_MPhil\Thesis\git\Transformers_XAI\clinical_pipeline\outputs
+
+Scripts have to be able to run on department cluster (single L4 GPU, no SLURM) or CSD3 HPC (A100 GPU, SLURM)
+Please estimate completion time. 
