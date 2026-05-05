@@ -72,6 +72,9 @@ echo "============================================================"
 source "$(conda info --base)/etc/profile.d/conda.sh"
 conda activate "$CONDA_ENV"
 
+# Flash Attention 2 glibc compat shim (provides __libc_single_threaded for glibc <2.32)
+export LD_PRELOAD="/home/ec474/glibc_compat.so"
+
 # Verify bmfm is installed
 if ! command -v bmfm-targets-run &> /dev/null; then
     echo "[ERROR] bmfm-targets-run not found in env '$CONDA_ENV'."
@@ -92,12 +95,12 @@ mkdir -p logs
 #   - 8192 bp max_length (chromosome-level 8kb windows)
 #   - max_epochs=2, val_check_interval=0.5 (BMFM fine-tuning recommendation)
 #
-# A100 override: batch_size=4, accumulate=16 → effective batch=64 (same as L4
-#   run at batch_size=1, accumulate=64, but ~4× faster per epoch on A100).
+# A100 80GB + Flash Attention 2: batch_size=16, accumulate=4 → effective
+#   batch=64.  FA2 reduces attention memory from O(n²) to O(n).
 # =============================================================================
 
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-export TORCHDYNAMO_DISABLE=1   # Triton/icx compiler crashes on CSD3 AMD nodes
+export TORCHDYNAMO_DISABLE=1   # Triton/icx compiler crashes on CSD3 — keep even with FA2
 
 bmfm-targets-run \
     --config-path "$SCRIPT_DIR" \
