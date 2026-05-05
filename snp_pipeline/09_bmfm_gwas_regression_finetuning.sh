@@ -27,7 +27,7 @@
 #SBATCH --job-name=bmfm_gwas_combos
 #SBATCH --output=logs/bmfm_gwas_combos_%j.out
 #SBATCH --error=logs/bmfm_gwas_combos_%j.err
-#SBATCH --time=03:00:00          # 2 epochs on A100 with 08f (~11k train seqs) ≈ 1–2 h
+#SBATCH --time=06:00:00          # 2 epochs on A100 with 08f (~11k train seqs) ≈ 1–2 h
 #SBATCH --nodes=1                # Cambridge HPC policy: must be explicit for GPU jobs
 #SBATCH --gres=gpu:1             # 1 A100 40 GB
 #SBATCH --cpus-per-task=3        # CSD3 max: 3 CPUs per GPU
