@@ -2,16 +2,20 @@
 """
 Wrapper around bmfm-targets-run that forces flash_attention_2.
 
-Fixes two issues with the BMFM SCModernBert implementation:
+Fixes three issues with the BMFM SCModernBert + flash-attn interaction:
   1) Forces _attn_implementation = "flash_attention_2" on the model config.
   2) Patches SCModernBertAttention.__init__ to initialise rope_theta for
      *global* attention layers (the upstream code only sets rope_theta inside
      the `if self.local_attention != (-1, -1)` branch, causing an
      UnboundLocalError for global-attention layers when FA2 is enabled).
+  3) Patches SCModernBertUnpaddedRotaryEmbedding.__init__ to strip the
+     `pos_idx_in_fp32` kwarg that the BMFM code passes to the flash-attn
+     RotaryEmbedding parent class but which is not accepted by all versions.
 
 Usage: python force_fa2_wrapper.py [same args as bmfm-targets-run]
 """
 import importlib
+import inspect
 import sys
 
 # ── Import the BMFM module ───────────────────────────────────────────────────
@@ -93,7 +97,41 @@ _OrigAttnCls.__init__ = _safe_attn_init
 print("[force_fa2_wrapper] Patched SCModernBertAttention.__init__ "
       "(rope_theta fix for global-attention layers)")
 
-# ── Patch 2: force flash_attention_2 on the top-level model ──────────────────
+# ── Patch 2: fix pos_idx_in_fp32 API mismatch in RotaryEmbedding ─────────────
+# BMFM's SCModernBertUnpaddedRotaryEmbedding.__init__ calls
+#   super().__init__(pos_idx_in_fp32=True, ...)
+# but some flash-attn versions do not accept that kwarg.  We patch super() to
+# strip any kwargs the installed RotaryEmbedding doesn't recognise.
+_OrigUnpadRotary = mod.SCModernBertUnpaddedRotaryEmbedding
+_orig_unpad_init = _OrigUnpadRotary.__init__
+
+# Inspect what the grandparent RotaryEmbedding actually accepts
+from flash_attn.layers.rotary import RotaryEmbedding as _FA2RotaryEmbedding
+_fa2_sig = inspect.signature(_FA2RotaryEmbedding.__init__)
+_fa2_params = set(_fa2_sig.parameters.keys()) - {"self"}
+
+def _compat_unpad_rotary_init(self, dim, base=10000.0, max_seqlen=None,
+                               device=None, dtype=None):
+    """SCModernBertUnpaddedRotaryEmbedding.__init__ with FA2 kwarg compat."""
+    # Build the kwargs dict that the BMFM code originally passes to super()
+    super_kwargs = dict(
+        dim=dim, base=base, pos_idx_in_fp32=True,
+        device=device, interleaved=False,
+    )
+    # Strip any kwargs the installed flash-attn RotaryEmbedding doesn't accept
+    filtered_kwargs = {k: v for k, v in super_kwargs.items() if k in _fa2_params}
+    _FA2RotaryEmbedding.__init__(self, **filtered_kwargs)
+    self.max_seqlen = max_seqlen
+
+    import torch
+    if max_seqlen is not None and device is not None and dtype is not None:
+        self._update_cos_sin_cache(max_seqlen, device=device, dtype=dtype)
+
+_OrigUnpadRotary.__init__ = _compat_unpad_rotary_init
+print(f"[force_fa2_wrapper] Patched SCModernBertUnpaddedRotaryEmbedding.__init__ "
+      f"(FA2 RotaryEmbedding accepts: {_fa2_params})")
+
+# ── Patch 3: force flash_attention_2 on the top-level model ──────────────────
 _OrigCls = mod.SCModernBertForMultiTaskModeling
 _orig_init = _OrigCls.__init__
 
