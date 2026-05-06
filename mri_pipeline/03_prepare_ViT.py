@@ -341,7 +341,13 @@ def discover_pairs():
 
     n_sessions_skipped = 0
     for sub_dir in sorted(os.listdir(SMRIPREP_DIR)):
-        if not sub_dir.startswith("sub-"):
+        # Skip sMRIprep's per-subject and per-(subject, session) HTML reports
+        # (e.g. 'sub-002S0413.html', 'sub-002S0413_ses-m108.html') which also
+        # start with 'sub-' but are files, not directories.
+        if not sub_dir.startswith("sub-") or "_" in sub_dir:
+            continue
+        sub_root = os.path.join(SMRIPREP_DIR, sub_dir)
+        if not os.path.isdir(sub_root):
             continue
         sub = sub_dir[4:]
 
@@ -361,7 +367,6 @@ def discover_pairs():
             continue
 
         # ── Longitudinal mode: enumerate ses-* under each subject ────────────
-        sub_root = os.path.join(SMRIPREP_DIR, sub_dir)
         ses_dirs = sorted(d for d in os.listdir(sub_root)
                           if d.startswith("ses-")
                           and os.path.isdir(os.path.join(sub_root, d)))
