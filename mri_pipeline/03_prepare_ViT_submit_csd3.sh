@@ -13,7 +13,7 @@
 #   sbatch mri_pipeline/03_prepare_ViT_submit_csd3.sh
 # =============================================================================
 
-#SBATCH -A LIO-CHARM-SL2-CPU
+#SBATCH -A COMPUTERLAB-SL2-CPU
 #SBATCH --job-name=vit_prep
 #SBATCH --output=logs/vit_prep_%j.log
 #SBATCH --error=logs/vit_prep_%j.err
