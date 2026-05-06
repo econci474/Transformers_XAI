@@ -35,10 +35,14 @@ SCRIPT_DIR="/home/ec474/rds/hpc-work/Transformers_XAI/mri_pipeline"
 SMRIPREP_DIR="/home/ec474/rds/hpc-work/ADNI_SMRIPREP/derivatives/smriprep_sessionwise/smriprep"
 OUT_ROOT="/home/ec474/rds/hpc-work/ADNI_SMRIPREP/derivatives/vit_inputs"
 
-# Session selection: 'bl' = baseline only (current default).
-# For longitudinal preprocessing, swap the python invocation below to use
-# `--long 3` (up to m36), `--long 5` (up to m60), or `--long all` (every session).
-SESSION="bl"
+# Session selection — uncomment exactly ONE.
+# Existing outputs from prior runs are auto-skipped (resume logic), so this
+# can be re-run after extending the cutoff.
+#PY_SESSION_FLAGS="--session bl"   # ses-bl only (~28 scans for SNP+MRI cohort)
+PY_SESSION_FLAGS="--long 1"        # bl + m12  (~28 + ~530 = ~560 scans)
+#PY_SESSION_FLAGS="--long 3"       # bl through m36 (~830 scans)
+#PY_SESSION_FLAGS="--long 5"       # bl through m60 (~1,200 scans)
+#PY_SESSION_FLAGS="--long all"     # every available session (~1,595 scans)
 
 mkdir -p "${OUT_ROOT}"
 mkdir -p logs
@@ -50,14 +54,14 @@ echo "  Node      : $SLURMD_NODENAME"
 echo "  CPUs      : $SLURM_CPUS_PER_TASK"
 echo "  Smriprep  : ${SMRIPREP_DIR}"
 echo "  Output    : ${OUT_ROOT}"
-echo "  Session   : ${SESSION}"
+echo "  Sessions  : ${PY_SESSION_FLAGS}"
 echo "  Started   : $(date)"
 echo "============================================================"
 
 python "${SCRIPT_DIR}/03_prepare_ViT.py" \
     --smriprep-dir "${SMRIPREP_DIR}" \
     --out-root     "${OUT_ROOT}" \
-    --session      "${SESSION}" \
+    ${PY_SESSION_FLAGS} \
     --n-workers    "${SLURM_CPUS_PER_TASK}"
 
 EXIT_CODE=$?
