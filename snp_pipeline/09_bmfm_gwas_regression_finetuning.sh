@@ -100,9 +100,9 @@ mkdir -p logs
 # =============================================================================
 
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-export TORCHDYNAMO_DISABLE=1   # Triton/icx compiler crashes on CSD3 — keep even with FA2
+export TORCHDYNAMO_DISABLE=1   # Triton/icx compiler crashes on CSD3 — keep with SDPA too
 
-python "$SCRIPT_DIR/force_fa2_wrapper.py" \
+python "$SCRIPT_DIR/force_sdpa_wrapper.py" \
     --config-path "$SCRIPT_DIR" \
     -cn 09_bmfm_gwas_regression_finetuning \
     input_directory="$INPUT_DIRECTORY" \
