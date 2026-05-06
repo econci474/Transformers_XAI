@@ -95,14 +95,14 @@ mkdir -p logs
 #   - 8192 bp max_length (chromosome-level 8kb windows)
 #   - max_epochs=2, val_check_interval=0.5 (BMFM fine-tuning recommendation)
 #
-# A100 80GB + Flash Attention 2: batch_size=16, accumulate=4 → effective
-#   batch=64.  FA2 reduces attention memory from O(n²) to O(n).
+# A100 80GB + bf16-mixed precision: batch_size=2, accumulate=32 → effective
+#   batch=64.  Sequences may be very long with combos data.
 # =============================================================================
 
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 export TORCHDYNAMO_DISABLE=1   # Triton/icx compiler crashes on CSD3 — keep even with FA2
 
-bmfm-targets-run \
+python "$SCRIPT_DIR/force_fa2_wrapper.py" \
     --config-path "$SCRIPT_DIR" \
     -cn 09_bmfm_gwas_regression_finetuning \
     input_directory="$INPUT_DIRECTORY" \

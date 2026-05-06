@@ -50,9 +50,10 @@ trainer:
 
 # ── Hyperparameters ───────────────────────────────────────────────────────────
 # Dataset is small (~860 rows); more epochs compensate for limited data.
-batch_size: 16             # FA2 + A100 80GB; attention mem O(n)→O(n); ~40-50 GB estimated
+batch_size: 2              # reduced from 16 — combos dataset has very long sequences
 max_epochs: 2              # BMFM-recommended fine-tuning duration (2 epochs)
 learning_rate: 1.0e-6
-accumulate_grad_batches: 4   # effective batch = 16 * 4 = 64
+accumulate_grad_batches: 32  # effective batch = 2 * 32 = 64
 val_check_interval: 0.5       # validate twice per epoch (BMFM recommendation)
 accelerator: gpu
+precision: bf16-mixed         # halves activation memory; A100 has native bf16 support
