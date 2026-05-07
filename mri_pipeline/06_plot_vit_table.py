@@ -43,11 +43,15 @@ THIS_DIR = Path(__file__).resolve().parent
 # -- CLI ----------------------------------------------------------------------
 p = argparse.ArgumentParser()
 p.add_argument("--out_dir", type=str,
-               default=str(THIS_DIR / "outputs" / "ViT_B_mae75"))
-p.add_argument("--exclude", nargs="*", default=[],
-               help="Top-level subdirs to skip (default: include all). The "
-                    "smoke_test row helps document what bl-only T1 looked like "
-                    "before bl+m12, so it's included by default here.")
+               default=str(THIS_DIR / "outputs"),
+               help="Root scanned recursively for metrics.json. Default "
+                    "covers all three sweep dirs (ViT_B_mae75/, "
+                    "vit_outputs_bl/, vit_outputs_bl_m12/) and writes the "
+                    "PNG/PDF/LaTeX into the same root.")
+p.add_argument("--exclude", nargs="*", default=["smoke_test"],
+               help="Path components to skip (default: smoke_test, since the "
+                    "proper bl-only T1 sweep under vit_outputs_bl/ supersedes "
+                    "the early 2-epoch smoke run).")
 args = p.parse_args()
 
 OUT_DIR = Path(args.out_dir)
@@ -92,6 +96,50 @@ if raw_df.empty:
 # T1/T2 don't filter AD subjects, so they yield the cohort-wide scan count.
 cohort_N = {c: int(raw_df.loc[raw_df["cohort"] == c, "n_total"].max())
             for c in raw_df["cohort"].unique()}
+
+
+def cohort_class_breakdown():
+    """For each cohort, count CN/MCI/AD by reading a T2_multiclass manifest.
+    The bl+m12 T2 manifest contains both bl and m12 rows, so we can derive
+    both cohort breakdowns from a single manifest file. Returns
+    {cohort -> {0: n_CN, 1: n_MCI, 2: n_AD}} or {} if no manifest is found."""
+    out = {}
+    candidates = []
+    for jf in OUT_DIR.rglob("metrics.json"):
+        if "T2_multiclass" not in jf.parts:
+            continue
+        with open(jf) as f:
+            cfg = json.load(f)["config"]
+        candidates.append((cohort_from_cfg(cfg),
+                           jf.parent / "dataset_manifest.csv"))
+    if not candidates:
+        return out
+    # Prefer bl + m12 (superset cohort) so we can derive both bl and bl+m12
+    candidates.sort(key=lambda x: 0 if x[0] == "bl + m12" else 1)
+    _, manifest_path = candidates[0]
+    if not manifest_path.exists():
+        return out
+    m = pd.read_csv(manifest_path)
+    # Drop duplicates so the same scan isn't double-counted across splits
+    m = m.drop_duplicates(subset=["Patient_ID", "bids_ses"])
+    for cohort, mask in [("bl", m["bids_ses"] == "bl"),
+                         ("bl + m12", m["bids_ses"].isin(["bl", "m12"]))]:
+        sub = m[mask]
+        if sub.empty:
+            continue
+        counts = sub["label"].value_counts().to_dict()
+        out[cohort] = {int(k): int(v) for k, v in counts.items()}
+    return out
+
+
+class_breakdown = cohort_class_breakdown()
+
+
+def fmt_breakdown(cohort):
+    bd = class_breakdown.get(cohort)
+    if not bd:
+        return None
+    return f"CN={bd.get(0,0)}  MCI={bd.get(1,0)}  AD={bd.get(2,0)}"
 
 # Aggregate mean +/- std per (cohort, strategy, task)
 metric_cols = [c for c in raw_df.columns
@@ -292,14 +340,32 @@ for grp in GROUPS:
 prev_cohort = None
 for r_idx, (cohort, sid, slabel) in enumerate(ROW_ENTRIES):
     row_i = 3 + r_idx
-    # Show cohort label only on first row of its block; suffix with cohort N
-    # so the small-sample-size argument is visible on-page.
+    # Show cohort label only on first row of its block; vertically center
+    # over the whole block (frozen + full_ft) and stack a class-breakdown
+    # line beneath the N count so the underpowered-3-class case is obvious.
     if cohort != prev_cohort:
         n = cohort_N.get(cohort)
         n_str = f"  (N={n})" if n is not None else ""
-        ax.text(col_left[0] + 0.06, row_mid(row_i), f"{cohort}{n_str}",
-                ha="left", va="center", fontsize=7.5,
-                fontweight="bold", color="black")
+        bd_str = fmt_breakdown(cohort)
+        # Vertical center of this cohort block (count rows that share cohort)
+        block_size = sum(1 for c, _, _ in ROW_ENTRIES[r_idx:] if c == cohort)
+        block_top    = row_tops[row_i]
+        block_bottom = row_tops[row_i + block_size]
+        block_mid    = (block_top + block_bottom) / 2
+        if bd_str:
+            line_off = ROW_H * 0.25
+            ax.text(col_left[0] + 0.06, block_mid + line_off,
+                    f"{cohort}{n_str}",
+                    ha="left", va="center", fontsize=7.5,
+                    fontweight="bold", color="black")
+            ax.text(col_left[0] + 0.06, block_mid - line_off,
+                    bd_str,
+                    ha="left", va="center", fontsize=6.3, color="black")
+        else:
+            ax.text(col_left[0] + 0.06, block_mid,
+                    f"{cohort}{n_str}",
+                    ha="left", va="center", fontsize=7.5,
+                    fontweight="bold", color="black")
     ax.text(col_cx[1], row_mid(row_i), slabel,
             ha="center", va="center", fontsize=7, color="black")
 
@@ -371,7 +437,13 @@ for r_idx, (cohort, sid, slabel) in enumerate(ROW_ENTRIES):
     if cohort != prev_cohort:
         n = cohort_N.get(cohort)
         n_suffix = f" (N={n})" if n is not None else ""
-        cohort_cell = r"\textbf{" + cohort + n_suffix + r"}"
+        bd_str = fmt_breakdown(cohort)
+        if bd_str:
+            # Requires \usepackage{makecell} in the LaTeX preamble
+            cohort_cell = (r"\makecell[l]{\textbf{" + cohort + n_suffix
+                           + r"} \\ \footnotesize " + bd_str + r"}")
+        else:
+            cohort_cell = r"\textbf{" + cohort + n_suffix + r"}"
     else:
         cohort_cell = ""
     parts = [cohort_cell, slabel]

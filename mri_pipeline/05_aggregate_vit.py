@@ -39,8 +39,10 @@ THIS_DIR = Path(__file__).resolve().parent
 # -- CLI ----------------------------------------------------------------------
 p = argparse.ArgumentParser()
 p.add_argument("--out_dir", type=str,
-               default=str(THIS_DIR / "outputs" / "ViT_B_mae75"),
-               help="Root containing {task}/seed_{seed}/{strategy}/metrics.json")
+               default=str(THIS_DIR / "outputs"),
+               help="Root scanned recursively for metrics.json. Default "
+                    "covers all three sweep dirs: ViT_B_mae75/, "
+                    "vit_outputs_bl/, vit_outputs_bl_m12/.")
 p.add_argument("--exclude", nargs="*", default=["smoke_test"],
                help="Top-level subdirs to skip (default: smoke_test)")
 args = p.parse_args()

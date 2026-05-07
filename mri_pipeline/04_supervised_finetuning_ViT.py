@@ -566,10 +566,21 @@ def main():
     manifest_df[manifest_cols].to_csv(out_dir / "dataset_manifest.csv", index=False)
 
     # ── Class weights from train ─────────────────────────────────────────────
-    classes = np.unique(train_df["label"].values)
-    cw = compute_class_weight("balanced", classes=classes, y=train_df["label"].values)
+    # Pad missing classes with weight=1.0 so the weight tensor always matches
+    # the model's num_labels — small-N splits (e.g. T2 bl-only, N≈22 train)
+    # may not contain every class.
+    num_labels = task_cfg["num_labels"]
+    classes_present = np.unique(train_df["label"].values).astype(int)
+    cw_present = compute_class_weight("balanced", classes=classes_present,
+                                      y=train_df["label"].values)
+    cw = np.ones(num_labels, dtype=np.float32)
+    for c, w in zip(classes_present, cw_present):
+        cw[int(c)] = float(w)
     class_weights = torch.tensor(cw, dtype=torch.float, device=device)
-    print(f"  Class weights: {dict(zip(classes.tolist(), cw.round(3).tolist()))}")
+    missing = sorted(set(range(num_labels)) - set(classes_present.tolist()))
+    if missing:
+        print(f"  [WARN] Train split missing classes {missing}; padded with weight=1.0")
+    print(f"  Class weights: {dict(enumerate(cw.round(3).tolist()))}")
 
     # ── Datasets / dataloaders ───────────────────────────────────────────────
     train_loader = DataLoader(build_dataset(train_df, train=True),
@@ -678,7 +689,7 @@ def main():
         "n_train":          int(len(train_df)),
         "n_val":            int(len(val_df)),
         "n_test":           int(len(test_df)),
-        "class_weights":    {int(c): round(float(w), 4) for c, w in zip(classes, cw)},
+        "class_weights":    {i: round(float(w), 4) for i, w in enumerate(cw.tolist())},
         "timestamp":        datetime.now().isoformat(),
     }
     with open(out_dir / "metrics.json", "w") as f:
