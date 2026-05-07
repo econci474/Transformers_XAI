@@ -43,11 +43,10 @@ THIS_DIR = Path(__file__).resolve().parent
 # -- CLI ----------------------------------------------------------------------
 p = argparse.ArgumentParser()
 p.add_argument("--out_dir", type=str,
-               default=str(THIS_DIR / "outputs"),
-               help="Root scanned recursively for metrics.json. Default "
-                    "covers all three sweep dirs (ViT_B_mae75/, "
-                    "vit_outputs_bl/, vit_outputs_bl_m12/) and writes the "
-                    "PNG/PDF/LaTeX into the same root.")
+               default=str(THIS_DIR / "outputs" / "ViT_B_mae75"),
+               help="Root scanned recursively for metrics.json (consolidated "
+                    "layout: bl/, bl+m12/, smoke_test/) and where the "
+                    "PNG/PDF/LaTeX get written.")
 p.add_argument("--exclude", nargs="*", default=["smoke_test"],
                help="Path components to skip (default: smoke_test, since the "
                     "proper bl-only T1 sweep under vit_outputs_bl/ supersedes "
@@ -99,36 +98,33 @@ cohort_N = {c: int(raw_df.loc[raw_df["cohort"] == c, "n_total"].max())
 
 
 def cohort_class_breakdown():
-    """For each cohort, count CN/MCI/AD by reading a T2_multiclass manifest.
-    The bl+m12 T2 manifest contains both bl and m12 rows, so we can derive
-    both cohort breakdowns from a single manifest file. Returns
-    {cohort -> {0: n_CN, 1: n_MCI, 2: n_AD}} or {} if no manifest is found."""
+    """For each cohort, return test-set CN/MCI/AD counts from the diagnostic
+    coverage CSV (seed 0 as representative).  Returns
+    {cohort -> {0: n_CN, 1: n_MCI, 2: n_AD, 'total': N}} or {}."""
+    diag_csv = Path(r"C:\Users\elena\iCloudDrive\Desktop\ACS_MPhil\Thesis\git"
+                    r"\Transformers_XAI\clinical_pipeline\outputs"
+                    r"\diagnostic_coverage\diagnostic_coverage_table.csv")
+    if not diag_csv.exists():
+        return {}
+    dc = pd.read_csv(diag_csv)
+    dc = dc[dc["Seed"] == 0]
     out = {}
-    candidates = []
-    for jf in OUT_DIR.rglob("metrics.json"):
-        if "T2_multiclass" not in jf.parts:
-            continue
-        with open(jf) as f:
-            cfg = json.load(f)["config"]
-        candidates.append((cohort_from_cfg(cfg),
-                           jf.parent / "dataset_manifest.csv"))
-    if not candidates:
-        return out
-    # Prefer bl + m12 (superset cohort) so we can derive both bl and bl+m12
-    candidates.sort(key=lambda x: 0 if x[0] == "bl + m12" else 1)
-    _, manifest_path = candidates[0]
-    if not manifest_path.exists():
-        return out
-    m = pd.read_csv(manifest_path)
-    # Drop duplicates so the same scan isn't double-counted across splits
-    m = m.drop_duplicates(subset=["Patient_ID", "bids_ses"])
-    for cohort, mask in [("bl", m["bids_ses"] == "bl"),
-                         ("bl + m12", m["bids_ses"].isin(["bl", "m12"]))]:
-        sub = m[mask]
-        if sub.empty:
-            continue
-        counts = sub["label"].value_counts().to_dict()
-        out[cohort] = {int(k): int(v) for k, v in counts.items()}
+    # bl cohort: Session == "bl", MRI test columns
+    bl_row = dc[dc["Session"] == "bl"]
+    if not bl_row.empty:
+        r = bl_row.iloc[0]
+        out["bl"] = {0: int(r["MRI_test_CN"]),
+                     1: int(r["MRI_test_MCI"]),
+                     2: int(r["MRI_test_AD"]),
+                     "total": int(r["MRI_test_total"])}
+    # bl + m12 cohort: sum bl + m12 MRI test rows
+    blm12 = dc[dc["Session"].isin(["bl", "m12"])]
+    if not blm12.empty:
+        cn  = int(blm12["MRI_test_CN"].sum())
+        mci = int(blm12["MRI_test_MCI"].sum())
+        ad  = int(blm12["MRI_test_AD"].sum())
+        out["bl + m12"] = {0: cn, 1: mci, 2: ad,
+                           "total": cn + mci + ad}
     return out
 
 
@@ -139,7 +135,8 @@ def fmt_breakdown(cohort):
     bd = class_breakdown.get(cohort)
     if not bd:
         return None
-    return f"CN={bd.get(0,0)}  MCI={bd.get(1,0)}  AD={bd.get(2,0)}"
+    n_test = bd.get("total", sum(v for k, v in bd.items() if k != "total"))
+    return f"N(test)={n_test}, CN={bd.get(0,0)}, MCI={bd.get(1,0)}, AD={bd.get(2,0)}"
 
 # Aggregate mean +/- std per (cohort, strategy, task)
 metric_cols = [c for c in raw_df.columns
@@ -360,7 +357,8 @@ for r_idx, (cohort, sid, slabel) in enumerate(ROW_ENTRIES):
                     fontweight="bold", color="black")
             ax.text(col_left[0] + 0.06, block_mid - line_off,
                     bd_str,
-                    ha="left", va="center", fontsize=6.3, color="black")
+                    ha="left", va="center", fontsize=5.8,
+                    fontstyle="italic", color="#555555")
         else:
             ax.text(col_left[0] + 0.06, block_mid,
                     f"{cohort}{n_str}",
