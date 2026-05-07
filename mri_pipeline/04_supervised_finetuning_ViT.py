@@ -92,11 +92,14 @@ warnings.filterwarnings("ignore")
 # ── Task definitions (mirrors clinical_pipeline/03_encoder_finetune.py + session policy) ──
 # session_policy controls how labels are resolved when fine-tuning on multiple
 # (Patient_ID, VISCODE_long) rows under --long mode:
-#   "current"        -> all sessions valid; label_col = Label_bl_multi for ses-bl rows,
-#                       Label_visit_diag for non-bl rows. label_map applied.
-#   "baseline_only"  -> only ses-bl rows kept (Label_Ny is baseline-anchored, so pairing
-#                       it with longitudinal scans would leak — at m12 we already know
-#                       part of the 1-3y answer).
+#   "current"           -> all sessions valid; label_col = Label_bl_multi for ses-bl rows,
+#                          Label_visit_diag for non-bl rows. label_map applied.
+#   "baseline_anchored" -> Label_Ny is constant per subject (broadcast on every visit
+#                          row by 01b_build_clinical_csv.py via the prog dict). Sessions
+#                          are capped to <= label_anchor_max_months to prevent leakage:
+#                          at m12 within a 3y window, the 24 months of headroom keep
+#                          the prediction non-trivial. With --long unset the session_filter
+#                          collapses to ses-bl (matching the legacy 'baseline_only' case).
 TASK_CONFIG = {
     "T1_binary": {
         "label_col":      "Label_bl_multi",
@@ -117,22 +120,24 @@ TASK_CONFIG = {
         "description":    "Multiclass: CN / MCI / AD",
     },
     "T3a_conv3y": {
-        "label_col":      "Label_3y",
-        "num_labels":     2,
-        "task_type":      "binary",
-        "label_map":      None,
-        "filter_non_ad":  True,
-        "session_policy": "baseline_only",
-        "description":    "Prognosis: conversion to AD within 3 years",
+        "label_col":              "Label_3y",
+        "num_labels":             2,
+        "task_type":              "binary",
+        "label_map":              None,
+        "filter_non_ad":          True,
+        "session_policy":         "baseline_anchored",
+        "label_anchor_max_months": 12,
+        "description":            "Prognosis: conversion to AD within 3 years",
     },
     "T3b_conv5y": {
-        "label_col":      "Label_5y",
-        "num_labels":     2,
-        "task_type":      "binary",
-        "label_map":      None,
-        "filter_non_ad":  True,
-        "session_policy": "baseline_only",
-        "description":    "Prognosis: conversion to AD within 5 years",
+        "label_col":              "Label_5y",
+        "num_labels":             2,
+        "task_type":              "binary",
+        "label_map":              None,
+        "filter_non_ad":          True,
+        "session_policy":         "baseline_anchored",
+        "label_anchor_max_months": 12,
+        "description":            "Prognosis: conversion to AD within 5 years",
     },
 }
 
@@ -217,7 +222,34 @@ def parse_args():
                 p.error(f"--long must be 'all' or a positive integer (got {args.long!r})")
             args.long_mode = "cutoff"
             args.max_months = n * 12
+        args.session = None  # cleared while in --long mode (cohort_label() handles display)
     return args
+
+
+def cohort_label(args, task_cfg) -> str:
+    """Human-readable cohort string for metrics.json + tables.
+
+    Examples: 'bl', 'bl + m12', 'bl..m36', 'bl..mAll'.
+    Legacy session_policy='baseline_only' always collapses to 'bl' regardless
+    of any --long flag (non-bl scans were dropped by the loader).
+    """
+    sp = task_cfg.get("session_policy", "current")
+    if sp == "baseline_only":
+        return "bl"
+    if args.long_mode is None:
+        return args.session or "bl"
+    if args.long_mode == "all":
+        return "bl..mAll"
+    eff = args.max_months
+    if sp == "baseline_anchored":
+        cap = task_cfg.get("label_anchor_max_months")
+        if cap is not None:
+            eff = min(eff, int(cap)) if eff is not None else int(cap)
+    if eff is None:
+        return "bl..mAll"
+    if eff == 12:
+        return "bl + m12"
+    return f"bl..m{int(eff)}"
 
 
 MATCHED_STATUSES = ("viscode_exact", "nearest_within_14d")
@@ -298,8 +330,19 @@ def load_split_from_matched(baseline_csv: Path, matched_df: pd.DataFrame,
         df = df.dropna(subset=["_months"])
         df = df[df["_months"] <= max_months].drop(columns=["_months"])
 
-    # Per-task session policy (baseline_only restricts to bl rows even under --long)
-    if task_cfg["session_policy"] == "baseline_only":
+    # Per-task session policy.
+    #   baseline_anchored: Label_Ny is constant per subject. With --session bl
+    #     (the default) session_filter has already collapsed to ses-bl above, so
+    #     this block is a no-op. Under --long, the cap protects against leakage
+    #     by clipping any session beyond label_anchor_max_months (e.g. m12 for
+    #     T3a/T3b — far enough inside the 3y/5y window).
+    if task_cfg["session_policy"] == "baseline_anchored":
+        cap = int(task_cfg.get("label_anchor_max_months", 0))
+        df["_months"] = df["bids_ses"].map(session_to_months)
+        df = df.dropna(subset=["_months"])
+        df = df[df["_months"] <= cap].drop(columns=["_months"]).copy()
+    elif task_cfg["session_policy"] == "baseline_only":
+        # Legacy alias preserved for any older configs still referencing this name.
         df = df[df["bids_ses"] == "bl"].copy()
 
     # filter_non_ad: drop baseline-AD subjects (T3a/T3b cohort definition)
@@ -482,9 +525,14 @@ def main():
             cohort_note = f"longitudinal up to ses-m{args.max_months} ({args.long}y)"
         else:
             cohort_note = "longitudinal: all sessions"
-        if task_cfg["session_policy"] == "baseline_only":
+        if task_cfg["session_policy"] == "baseline_anchored":
+            cap = task_cfg.get("label_anchor_max_months", 0)
+            print(f"  [info] task {args.task} has session_policy='baseline_anchored' "
+                  f"(Label_{task_cfg['label_col'].split('_')[-1]} is constant per subject; "
+                  f"sessions capped to <= m{cap}).")
+        elif task_cfg["session_policy"] == "baseline_only":
             print(f"  [info] task {args.task} has session_policy='baseline_only' "
-                  "(Label_Ny is baseline-anchored — non-bl scans dropped to avoid leakage).")
+                  "(non-bl scans dropped — legacy behavior).")
         train_df, n_miss_tr = load_split_from_matched(
             seed_dir / "train.csv", matched_df, task_cfg, vit_dir, max_months=args.max_months)
         val_df,   n_miss_va = load_split_from_matched(
@@ -614,7 +662,10 @@ def main():
         "pretrained_ckpt":  args.pretrained_ckpt,
         "task":             args.task,
         "task_description": task_cfg["description"],
-        "session":          args.session,
+        "session":          cohort_label(args, task_cfg),
+        "long_mode":        args.long_mode,
+        "max_months":       args.max_months,
+        "session_policy":   task_cfg["session_policy"],
         "seed":             args.seed,
         "strategy":         args.strategy,
         "epochs":           args.epochs,
