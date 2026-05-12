@@ -252,7 +252,7 @@ def cohort_label(args, task_cfg) -> str:
     return f"bl..m{int(eff)}"
 
 
-MATCHED_STATUSES = ("viscode_exact", "nearest_within_14d")
+MATCHED_STATUSES = ("viscode_exact", "viscode2_exact", "nearest_within_14d")
 
 
 def load_matched_labels(path: str) -> pd.DataFrame:

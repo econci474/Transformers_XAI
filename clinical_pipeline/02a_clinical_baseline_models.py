@@ -185,6 +185,13 @@ TASKS = {
         "description": "Conversion to AD within 5 years",
         "filter":      "non_ad",
     },
+    "T3c_Conv10y": {
+        "label_col":   "Label_10y",
+        "task_type":   "binary",
+        "label_map":   None,
+        "description": "Conversion to AD within 10 years",
+        "filter":      "non_ad",
+    },
 }
 
 MODELS = ["LogReg", "SVM", "XGBoost"]

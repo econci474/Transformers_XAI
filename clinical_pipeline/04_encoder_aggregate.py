@@ -23,7 +23,7 @@ from pathlib import Path
 # ── CLI ───────────────────────────────────────────────────────────────────────
 p = argparse.ArgumentParser()
 p.add_argument("--out_dir", type=str,
-               default=r"C:\Users\elena\iCloudDrive\Desktop\ACS_MPhil\Thesis\git\Transformers_XAI\clinical_pipeline\outputs")
+               default=r"C:\Users\elena\iCloudDrive\Desktop\ACS_MPhil\Thesis\git\Transformers_XAI\clinical_pipeline\outputs\encoder-only")
 p.add_argument("--include_baseline", action="store_true",
                help="Also merge tabular baseline results from baseline/baseline_model_comparison.csv")
 args = p.parse_args()
@@ -106,7 +106,7 @@ summary_df = pd.DataFrame(summary_rows)
 
 # ── Optionally merge tabular baselines ────────────────────────────────────────
 if args.include_baseline:
-    baseline_path = OUT_DIR / "baseline" / "baseline_model_comparison.csv"
+    baseline_path = OUT_DIR.parent / "baseline" / "baseline_model_comparison.csv"
     if baseline_path.exists():
         bl_df = pd.read_csv(baseline_path)
         # Standardise columns to match
@@ -130,5 +130,5 @@ for task_desc in summary_df["Task"].unique():
     print(f"\n  [{task_desc}]")
     sub = summary_df[summary_df["Task"] == task_desc]
     # Pick key metric columns that exist
-    key_metrics = [c for c in ["BalancedAcc", "AUC_ROC", "AUC_ROC_OvR", "F1", "MacroF1", "AUC_PR"] if c in sub.columns]
+    key_metrics = [c for c in ["balanced_acc", "auc_roc", "auc_roc_ovr", "f1", "macro_f1", "auc_pr"] if c in sub.columns]
     print(sub[["Model", "Strategy"] + key_metrics].to_string(index=False))

@@ -297,7 +297,7 @@ train 468 385 (82%) 83 (18%)
  test  57  49 (86%)  8 (14%)
 
 
-Eventually move to k=10 fold cross-validation for single-modality models, depending on time available
+
 
 
 

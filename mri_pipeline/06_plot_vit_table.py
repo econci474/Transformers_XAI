@@ -68,6 +68,44 @@ def cohort_from_cfg(cfg: dict) -> str:
     return "bl"
 
 
+def cohort_class_breakdown():
+    """For each cohort, return image-level CN/MCI/AD counts (summed across
+    train + val + test) from the diagnostic-coverage CSV (seed 0 as
+    representative). Image-level counts (multiple scans per patient) reveal
+    the class imbalance the model actually trains against. Returns
+    {cohort -> {0: n_CN, 1: n_MCI, 2: n_AD, 'total': N}} or {}."""
+    diag_csv = Path(r"C:\Users\elena\iCloudDrive\Desktop\ACS_MPhil\Thesis\git"
+                    r"\Transformers_XAI\clinical_pipeline\outputs"
+                    r"\diagnostic_coverage\diagnostic_coverage_table.csv")
+    if not diag_csv.exists():
+        return {}
+    dc = pd.read_csv(diag_csv)
+    dc = dc[dc["Seed"] == 0]
+
+    def sums(sub):
+        cn  = int(sub["MRI_train_CN"].sum()
+                  + sub["MRI_val_CN"].sum()
+                  + sub["MRI_test_CN"].sum())
+        mci = int(sub["MRI_train_MCI"].sum()
+                  + sub["MRI_val_MCI"].sum()
+                  + sub["MRI_test_MCI"].sum())
+        ad  = int(sub["MRI_train_AD"].sum()
+                  + sub["MRI_val_AD"].sum()
+                  + sub["MRI_test_AD"].sum())
+        return {0: cn, 1: mci, 2: ad, "total": cn + mci + ad}
+
+    out = {}
+    bl = dc[dc["Session"] == "bl"]
+    if not bl.empty:
+        out["bl"] = sums(bl)
+    blm12 = dc[dc["Session"].isin(["bl", "m12"])]
+    if not blm12.empty:
+        out["bl + m12"] = sums(blm12)
+    if not dc.empty:
+        out["bl..mAll"] = sums(dc)
+    return out
+
+
 # -- Collect runs -------------------------------------------------------------
 rows = []
 for jf in OUT_DIR.rglob("metrics.json"):
@@ -91,52 +129,26 @@ raw_df = pd.DataFrame(rows)
 if raw_df.empty:
     raise SystemExit(f"No runs found under {OUT_DIR}")
 
-# Per-cohort representative N (largest n_train+n_val+n_test seen across runs).
-# T1/T2 don't filter AD subjects, so they yield the cohort-wide scan count.
-cohort_N = {c: int(raw_df.loc[raw_df["cohort"] == c, "n_total"].max())
-            for c in raw_df["cohort"].unique()}
-
-
-def cohort_class_breakdown():
-    """For each cohort, return test-set CN/MCI/AD counts from the diagnostic
-    coverage CSV (seed 0 as representative).  Returns
-    {cohort -> {0: n_CN, 1: n_MCI, 2: n_AD, 'total': N}} or {}."""
-    diag_csv = Path(r"C:\Users\elena\iCloudDrive\Desktop\ACS_MPhil\Thesis\git"
-                    r"\Transformers_XAI\clinical_pipeline\outputs"
-                    r"\diagnostic_coverage\diagnostic_coverage_table.csv")
-    if not diag_csv.exists():
-        return {}
-    dc = pd.read_csv(diag_csv)
-    dc = dc[dc["Seed"] == 0]
-    out = {}
-    # bl cohort: Session == "bl", MRI test columns
-    bl_row = dc[dc["Session"] == "bl"]
-    if not bl_row.empty:
-        r = bl_row.iloc[0]
-        out["bl"] = {0: int(r["MRI_test_CN"]),
-                     1: int(r["MRI_test_MCI"]),
-                     2: int(r["MRI_test_AD"]),
-                     "total": int(r["MRI_test_total"])}
-    # bl + m12 cohort: sum bl + m12 MRI test rows
-    blm12 = dc[dc["Session"].isin(["bl", "m12"])]
-    if not blm12.empty:
-        cn  = int(blm12["MRI_test_CN"].sum())
-        mci = int(blm12["MRI_test_MCI"].sum())
-        ad  = int(blm12["MRI_test_AD"].sum())
-        out["bl + m12"] = {0: cn, 1: mci, 2: ad,
-                           "total": cn + mci + ad}
-    return out
-
-
+# Per-cohort representative N (image count, not patient count). Prefer the
+# diagnostic-coverage CSV total (the cohort definition: every preprocessed
+# scan whose label is known) over metrics.json (which can undercount if the
+# fine-tune run silently dropped some sessions, e.g. the long_all run that
+# only saw ~526 of 1476 images).
 class_breakdown = cohort_class_breakdown()
+cohort_N = {}
+for c in raw_df["cohort"].unique():
+    bd = class_breakdown.get(c)
+    if bd:
+        cohort_N[c] = int(bd["total"])
+    else:
+        cohort_N[c] = int(raw_df.loc[raw_df["cohort"] == c, "n_total"].max())
 
 
 def fmt_breakdown(cohort):
     bd = class_breakdown.get(cohort)
     if not bd:
         return None
-    n_test = bd.get("total", sum(v for k, v in bd.items() if k != "total"))
-    return f"N(test)={n_test}, CN={bd.get(0,0)}, MCI={bd.get(1,0)}, AD={bd.get(2,0)}"
+    return f"CN={bd.get(0,0)}, MCI={bd.get(1,0)}, AD={bd.get(2,0)}"
 
 # Aggregate mean +/- std per (cohort, strategy, task)
 metric_cols = [c for c in raw_df.columns
@@ -184,7 +196,7 @@ GROUPS = [
 ]
 
 # Row order: cohort sections in fixed order; strategies in fixed order within each cohort.
-COHORT_ORDER = ["bl", "bl + m12"]
+COHORT_ORDER = ["bl", "bl + m12", "bl..mAll"]
 STRATEGY_ORDER = [("frozen", "frozen"), ("full_ft", "full fine-tune")]
 
 ROW_ENTRIES = []   # list of (cohort, strategy_id, strategy_label)
