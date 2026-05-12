@@ -21,3 +21,10 @@ Thumbs.db
 
 # Hugging face 
 hugging_face/brainiac
+
+#Outputs
+outputs/
+clinical_pipeline/outputs
+
+# tool Code local config
+.tool/

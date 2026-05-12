@@ -99,6 +99,14 @@ TASK_CONFIG = {
         "filter_non_ad": True,
         "description":   "Prognosis: conversion to AD within 5 years",
     },
+    "T3c_conv10y": {
+        "label_col":     "Label_10y",
+        "num_labels":    2,
+        "task_type":     "binary",
+        "label_map":     None,
+        "filter_non_ad": True,
+        "description":   "Prognosis: conversion to AD within 10 years",
+    },
 }
 
 

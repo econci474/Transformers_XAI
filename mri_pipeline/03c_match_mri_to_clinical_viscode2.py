@@ -5,20 +5,22 @@ Match MRI scans to clinical visits using ADNI's native VISCODE2 codes.
 
 Unlike 03b (which matches on the date-derived VISCODE_long), this script
 uses the raw ADNI VISCODE2 label from both sides:
-  - MRI side:      bids_ses / adni_viscode from ses_to_visit_code.csv
+  - MRI side:      bids_ses from mri_visit_dates_snp_subjects.csv (same curated
+                   spine as 03b — one row per (subject, visit), deduplicated)
   - Clinical side: VISCODE_2 from master_clinical_tabular.csv
 
 Since both are assigned by the same ADNI scheduling system, the join is
 direct and unambiguous — no date-based fallback is needed for the
 primary match.
 
-Strategy A: direct VISCODE2 join  (bids_sub, adni_viscode) ↔ (Patient_ID, VISCODE_2)
+Strategy A: direct VISCODE2 join  (bids_sub, bids_ses) ↔ (Patient_ID, VISCODE_2)
 Strategy B: nearest-by-date ±14d  (fallback for unmatched)
 
 Inputs
 ------
-- D:\\ADNI_BIDS_project\\metadata\\ses_to_visit_code.csv
-    MRI session inventory: (bids_sub, bids_ses, adni_viscode, StudyDate)
+- D:\\ADNI_BIDS_project\\bids\\imaging\\mri_visit_dates_snp_subjects.csv
+    SPINE: wide MRI dates per subject — one row per subject, one column per
+    ADNI VISCODE (bl/m12/m24/...). Same curated spine as 03b.
 - D:\\ADNI_BIDS_project\\derivatives\\clinical\\no_cdr_stratified\\tabular\\longitudinal\\master_clinical_tabular.csv
     Clinical master with VISCODE_2 column
 - D:\\ADNI_BIDS_project\\bids\\genotype\\subjects_with_snp_and_mri.tsv
@@ -46,7 +48,7 @@ matplotlib.rcParams["font.family"] = "DejaVu Serif"
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 PROJECT_ROOT  = Path(r"D:\ADNI_BIDS_project")
-SES_MAP_CSV   = PROJECT_ROOT / "metadata" / "ses_to_visit_code.csv"
+MRI_DATES_CSV = PROJECT_ROOT / "bids" / "imaging" / "mri_visit_dates_snp_subjects.csv"  # SPINE
 MASTER_CLIN   = PROJECT_ROOT / "derivatives" / "clinical" / "no_cdr_stratified" \
                 / "tabular" / "longitudinal" / "master_clinical_tabular.csv"
 SNP_TSV       = PROJECT_ROOT / "bids" / "genotype" / "subjects_with_snp_and_mri.tsv"
@@ -97,13 +99,26 @@ print("=" * 70)
 
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-# MRI session inventory
-print(f"\nLoading MRI session map: {SES_MAP_CSV}")
-ses_map = pd.read_csv(SES_MAP_CSV)
-ses_map["bids_sub"] = ses_map["bids_sub"].astype(str)
-ses_map["mri_date"] = pd.to_datetime(ses_map["StudyDate"], errors="coerce")
+# ---- Load: SPINE = mri_visit_dates_snp_subjects.csv (wide -> long) ----------
+# Same curated spine as 03b: one cell per (subject, visit), deduplicated.
+print(f"\nLoading MRI spine: {MRI_DATES_CSV}")
+md = pd.read_csv(MRI_DATES_CSV)
+visit_cols = [c for c in md.columns if c != "participant_id"]
+md_long = md.melt(id_vars="participant_id", value_vars=visit_cols,
+                  var_name="bids_ses", value_name="mri_date_str")
+# Drop empty cells ("n/a" or NaN)
+md_long = md_long[md_long["mri_date_str"].notna()
+                  & (md_long["mri_date_str"].astype(str).str.lower() != "n/a")]
+md_long["mri_date"] = pd.to_datetime(md_long["mri_date_str"], errors="coerce")
+md_long = md_long.dropna(subset=["mri_date"])
+md_long["bids_sub"] = md_long["participant_id"].apply(normalise_subject)
+# adni_viscode == bids_ses for this spine (both are ADNI visit codes)
+md_long["adni_viscode"] = md_long["bids_ses"]
+ses_map = md_long[["bids_sub", "bids_ses", "adni_viscode", "mri_date"]].drop_duplicates(
+    ["bids_sub", "bids_ses"]).reset_index(drop=True)
 ses_map["Patient_ID"] = ses_map["bids_sub"].apply(pid_from_bids)
-print(f"  {len(ses_map)} scan rows, {ses_map['bids_sub'].nunique()} subjects")
+print(f"  Spine: {md['participant_id'].nunique()} subjects, "
+      f"{len(ses_map):,} (subject, visit) scans")
 
 # Clinical master
 print(f"Loading clinical master: {MASTER_CLIN}")
@@ -123,7 +138,7 @@ snp_df = pd.read_csv(SNP_TSV, sep="\t")
 snp_pids = set(snp_df["participant_id"].apply(normalise_subject))
 ses_map = ses_map[ses_map["bids_sub"].isin(snp_pids)].reset_index(drop=True)
 clin = clin[clin["bids_sub"].isin(snp_pids)]
-print(f"  Cohort: {len(snp_pids)} subjects, {len(ses_map)} MRI scans, {len(clin)} clinical rows")
+print(f"  Cohort: {len(snp_pids)} subjects, {len(ses_map):,} MRI scans, {len(clin)} clinical rows")
 print()
 
 
