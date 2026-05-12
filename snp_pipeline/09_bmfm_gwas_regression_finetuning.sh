@@ -27,7 +27,7 @@
 #SBATCH --job-name=bmfm_gwas_combos
 #SBATCH --output=logs/bmfm_gwas_combos_%j.out
 #SBATCH --error=logs/bmfm_gwas_combos_%j.err
-#SBATCH --time=06:00:00          # 2 epochs on A100 with 08f (~11k train seqs) ≈ 1–2 h
+#SBATCH --time=12:00:00          # SDPA (padded) is slower than FA2; 2 epochs ≈ 8–10 h
 #SBATCH --nodes=1                # Cambridge HPC policy: must be explicit for GPU jobs
 #SBATCH --gres=gpu:1             # 1 A100 40 GB
 #SBATCH --cpus-per-task=3        # CSD3 max: 3 CPUs per GPU
@@ -46,7 +46,7 @@ CONDA_ENV="bmfm"       # conda env with bmfm_targets installed
 INPUT_DIRECTORY="/home/ec474/rds/hpc-work/ADNI_SNP/bmfm_gwas_signed_regression_without_ukb_augmented_by_chrom_combos"
 
 # Where to write checkpoints, predictions, logs:
-OUTPUT_DIRECTORY="/home/ec474/rds/hpc-work/ADNI_SNP/bmfm_gwas_regression_output/bmfm_gwas_combos_lr1e6_2ep"
+OUTPUT_DIRECTORY="/home/ec474/rds/hpc-work/ADNI_SNP/bmfm_gwas_regression_output/bmfm_gwas_combos_ref_lr1e6_2ep"
 
 # Directory containing 09_bmfm_gwas_regression_finetuning.yaml
 # NOTE: Cannot use BASH_SOURCE[0] here — SLURM copies the .sh to a spool
@@ -107,7 +107,7 @@ python "$SCRIPT_DIR/force_sdpa_wrapper.py" \
     -cn 09_bmfm_gwas_regression_finetuning \
     input_directory="$INPUT_DIRECTORY" \
     working_dir="$OUTPUT_DIRECTORY" \
-    "checkpoint='ibm-research/biomed.dna.snp.modernbert.113m.v1'"
+    "checkpoint='ibm-research/biomed.dna.ref.modernbert.113m.v1'"
 
 EXIT_CODE=$?
 
