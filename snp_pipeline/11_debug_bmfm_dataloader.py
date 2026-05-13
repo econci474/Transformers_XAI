@@ -47,7 +47,55 @@ def _sdpa_init(self, config, *args, **kwargs):
 _OrigCls.__init__ = _sdpa_init
 
 
-# ── 2) Intercept Trainer.fit to dump one batch and exit ──────────────────────
+# ── 1b) Wrap model.forward to dump output structure on first call ────────────
+_orig_forward = _OrigCls.forward
+_forward_call_count = {"n": 0}
+
+
+def _instrumented_forward(self, *args, **kwargs):
+    out = _orig_forward(self, *args, **kwargs)
+    if _forward_call_count["n"] == 0:
+        _forward_call_count["n"] = 1
+        print("\n  >> [forward intercept] first forward pass — output structure:")
+        if hasattr(out, "_fields"):
+            keys = out._fields
+            for k in keys:
+                v = getattr(out, k)
+                _print_any(f"    out.{k}", v)
+        elif isinstance(out, dict):
+            for k, v in out.items():
+                _print_any(f"    out[{k!r}]", v)
+        else:
+            _print_any("    out", out)
+    return out
+
+
+def _print_any(label, v):
+    import torch
+
+    if isinstance(v, torch.Tensor):
+        flat = v.detach().cpu().float().reshape(-1)
+        head = flat[: min(8, flat.numel())].tolist()
+        print(f"{label}: Tensor shape={tuple(v.shape)} dtype={v.dtype}  "
+              f"mean={flat.mean().item():.4g} std={flat.std().item():.4g} "
+              f"min={flat.min().item():.4g} max={flat.max().item():.4g}")
+        print(f"{label}    head[:8]={head}")
+    elif isinstance(v, dict):
+        for k, sub in v.items():
+            _print_any(f"{label}[{k!r}]", sub)
+    elif isinstance(v, (list, tuple)):
+        for i, sub in enumerate(v):
+            _print_any(f"{label}[{i}]", sub)
+    elif v is None:
+        print(f"{label}: None")
+    else:
+        print(f"{label}: {type(v).__name__} = {v!r}")
+
+
+_OrigCls.forward = _instrumented_forward
+
+
+# ── 2) Intercept Trainer.fit to dump one batch and run one training step ────
 import pytorch_lightning as pl  # noqa: E402
 
 _orig_fit = pl.Trainer.fit
@@ -131,8 +179,51 @@ def _probe_fit(self, model=None, train_dataloaders=None, val_dataloaders=None, d
     else:
         print(f"  unknown batch shape: {batch!r}")
 
+    # ── Run ONE training_step manually to see what loss the framework reports ──
+    print("\n" + "-" * 72)
+    print("  Running one training_step on the LightningModule …")
+    print("-" * 72)
+    import torch  # noqa: E402
+
+    module = model  # In Lightning, .fit(model, …) — `model` is the LightningModule
+    if module is None:
+        print("  [err] LightningModule not available; can't run training_step.")
+        sys.exit(3)
+
+    # Move batch to whatever device the module is on (CPU in our probe).
+    dev = next(module.parameters()).device
+    print(f"  Module device: {dev}; dtype of first param: {next(module.parameters()).dtype}")
+
+    def _to_dev(x):
+        if isinstance(x, torch.Tensor):
+            return x.to(dev)
+        if isinstance(x, dict):
+            return {k: _to_dev(v) for k, v in x.items()}
+        if isinstance(x, list):
+            return [_to_dev(v) for v in x]
+        return x
+
+    batch_dev = _to_dev(batch)
+    module.train()
+    try:
+        out = module.training_step(batch_dev, 0)
+    except Exception as e:
+        print(f"  [err] training_step raised: {type(e).__name__}: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(4)
+
+    print("\n  training_step return:")
+    _print_any("    return", out)
+
+    # If the return is a dict, look for explicit MSE / per-task losses too.
+    if isinstance(out, dict):
+        for k, v in out.items():
+            if "loss" in str(k).lower():
+                _print_any(f"    out[{k!r}]", v)
+
     print("\n" + "=" * 72)
-    print("  Probe done — exiting before training starts.")
+    print("  Probe done — exiting before Trainer continues.")
     print("=" * 72)
     sys.exit(0)
 
