@@ -179,20 +179,20 @@ def _probe_fit(self, model=None, train_dataloaders=None, val_dataloaders=None, d
     else:
         print(f"  unknown batch shape: {batch!r}")
 
-    # ── Run ONE training_step manually to see what loss the framework reports ──
+    # ── Run forward+loss TWICE: fp32 then bf16-autocast, compare ──
     print("\n" + "-" * 72)
-    print("  Running one training_step on the LightningModule …")
+    print("  fp32 vs bf16-autocast forward+loss comparison")
     print("-" * 72)
     import torch  # noqa: E402
+    from contextlib import nullcontext  # noqa: E402
 
     module = model  # In Lightning, .fit(model, …) — `model` is the LightningModule
     if module is None:
         print("  [err] LightningModule not available; can't run training_step.")
         sys.exit(3)
 
-    # Move batch to whatever device the module is on (CPU in our probe).
     dev = next(module.parameters()).device
-    print(f"  Module device: {dev}; dtype of first param: {next(module.parameters()).dtype}")
+    print(f"  Module device: {dev}; first param dtype: {next(module.parameters()).dtype}")
 
     def _to_dev(x):
         if isinstance(x, torch.Tensor):
@@ -204,26 +204,44 @@ def _probe_fit(self, model=None, train_dataloaders=None, val_dataloaders=None, d
         return x
 
     batch_dev = _to_dev(batch)
-    module.train()
+
+    def _check(name, ctx):
+        print(f"\n>>> {name} <<<")
+        _forward_call_count["n"] = 0  # let the forward intercept dump again
+        module.train()
+        try:
+            with ctx:
+                # Call training_step end-to-end so we exercise the exact code path
+                # that runs in production (forward → calculate_losses → guard).
+                ret = module.training_step(batch_dev, 0)
+        except Exception as e:
+            print(f"  [err] training_step raised: {type(e).__name__}: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+        # Inspect the returned loss
+        if ret is None:
+            print(f"  training_step return: None  (BMFM swallowed NaN/0)")
+        else:
+            v = ret
+            has_nan = bool(torch.isnan(v).any().item()) if torch.is_tensor(v) else False
+            has_inf = bool(torch.isinf(v).any().item()) if torch.is_tensor(v) else False
+            print(f"  training_step return: loss={v.item() if torch.is_tensor(v) else v}  has_nan={has_nan}  has_inf={has_inf}")
+        return ret
+
+    print("\n[1/2] fp32 (no autocast)")
+    fp32_loss = _check("FP32", nullcontext())
+
+    print("\n[2/2] bf16 autocast on cpu")
     try:
-        out = module.training_step(batch_dev, 0)
+        bf16_ctx = torch.autocast(device_type="cpu", dtype=torch.bfloat16)
     except Exception as e:
-        print(f"  [err] training_step raised: {type(e).__name__}: {e}")
-        import traceback
-        traceback.print_exc()
-        sys.exit(4)
-
-    print("\n  training_step return:")
-    _print_any("    return", out)
-
-    # If the return is a dict, look for explicit MSE / per-task losses too.
-    if isinstance(out, dict):
-        for k, v in out.items():
-            if "loss" in str(k).lower():
-                _print_any(f"    out[{k!r}]", v)
+        print(f"  [warn] torch.autocast(cpu, bfloat16) failed: {e}; falling back to no-op")
+        bf16_ctx = nullcontext()
+    bf16_loss = _check("BF16 autocast", bf16_ctx)
 
     print("\n" + "=" * 72)
-    print("  Probe done — exiting before Trainer continues.")
+    print(f"  SUMMARY:  fp32_loss = {fp32_loss}   bf16_loss = {bf16_loss}")
     print("=" * 72)
     sys.exit(0)
 
