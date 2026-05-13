@@ -203,19 +203,56 @@ def build_chrom_map(windows_tsv: Path) -> tuple[dict[str, int], list[str]]:
     return {row["window_id"]: chrom_idx_map[row["chrom"]] for _, row in df.iterrows()}, chroms
 
 
-def load_embeddings(npz_path: Path):
+def load_embeddings(npz_path: Path, pool: str = "cls"):
+    """Load patient embeddings from npz.
+
+    Two layouts are supported:
+
+    (a) Dual-pool (new format, written by the Colab extraction): keys are
+        ``window_ids``, optional ``upstream``, and per-patient
+        ``cls__<PTID>`` + ``mean__<PTID>``. ``pool`` selects which set.
+    (b) Single-pool legacy (one array per PTID without prefix): the
+        ``pool`` argument is ignored and all non-meta keys are treated as
+        patient embeddings.
+    """
     npz = np.load(npz_path, allow_pickle=True)
     window_ids = list(npz["window_ids"])
-    embeddings = {k: npz[k] for k in npz.files if k != "window_ids"}
+    meta_keys = {"window_ids", "upstream"}
+    prefix = f"{pool}__"
+    prefixed = {k for k in npz.files if k.startswith(prefix)}
+    if prefixed:
+        embeddings = {k.removeprefix(prefix): npz[k] for k in prefixed}
+    else:
+        embeddings = {k: npz[k] for k in npz.files if k not in meta_keys}
     return embeddings, window_ids
 
 
-def load_labels(splits_root: Path, seed: int) -> dict[str, pd.DataFrame]:
+def load_labels(splits_root: Path, seed: int, label_mode: str = "bl_multi") -> dict[str, pd.DataFrame]:
+    """Read the per-seed train/val/test splits and derive a binary label y.
+
+    label_mode:
+      - "bl_multi"      → y = (Label_bl_multi != "CN")  (baseline diagnosis,
+                          default, original T1_binary task)
+      - "ever_convert"  → y = Label_ever_convert (0/1; 1 if patient ever has a
+                          non-CN diagnosis across the entire follow-up).
+                          Splits under no_cdr_stratified_ever_convert/ carry
+                          this column; see snp_pipeline/17_build_ever_convert_splits.py.
+    """
     out = {}
     for split in ("train", "val", "test"):
         df = pd.read_csv(splits_root / f"seed_{seed}" / f"{split}.csv")
         df["Patient_ID"] = df["Patient_ID"].astype(str)
-        df["y"] = (df["Label_bl_multi"] != "CN").astype(int)
+        if label_mode == "bl_multi":
+            df["y"] = (df["Label_bl_multi"] != "CN").astype(int)
+        elif label_mode == "ever_convert":
+            if "Label_ever_convert" not in df.columns:
+                raise ValueError(
+                    f"Split CSV {split} for seed {seed} lacks 'Label_ever_convert'. "
+                    f"Build it first with snp_pipeline/17_build_ever_convert_splits.py."
+                )
+            df["y"] = df["Label_ever_convert"].astype(int)
+        else:
+            raise ValueError(f"unknown label_mode: {label_mode}")
         out[split] = df[["Patient_ID", "y"]]
     return out
 
@@ -320,6 +357,15 @@ def main() -> None:
     ap.add_argument("--splits-root", type=Path, required=True,
                     help="…/no_cdr_stratified/tabular/baseline")
     ap.add_argument("--upstream-tag", type=str, required=True)
+    ap.add_argument("--pool", choices=["cls", "mean"], default="cls",
+                    help="Per-window pooling stored in the embeddings .npz: "
+                         "'cls' = last_hidden_state[:,0,:]; "
+                         "'mean' = mean over real DNA tokens (no [CLS]/[SEP]/[PAD]).")
+    ap.add_argument("--label-mode", choices=["bl_multi", "ever_convert"], default="bl_multi",
+                    help="bl_multi: y = baseline-diagnosis != CN (default). "
+                         "ever_convert: y = Label_ever_convert (1 if patient is "
+                         "non-CN at any follow-up; needs splits built by "
+                         "snp_pipeline/17_build_ever_convert_splits.py).")
     ap.add_argument("--aggregation", choices=AGGREGATIONS, required=True)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--output-root", type=Path, required=True)
@@ -339,10 +385,11 @@ def main() -> None:
     n_chroms = len(chroms)
     print(f"Chromosomes present: {chroms} ({n_chroms} groups)")
 
-    embeddings, window_ids = load_embeddings(args.embeddings)
-    print(f"Embeddings: {len(embeddings)} patients, {len(window_ids)} windows")
+    embeddings, window_ids = load_embeddings(args.embeddings, pool=args.pool)
+    print(f"Embeddings ({args.pool} pool): {len(embeddings)} patients, "
+          f"{len(window_ids)} windows")
 
-    labels = load_labels(args.splits_root, args.seed)
+    labels = load_labels(args.splits_root, args.seed, label_mode=args.label_mode)
     for split, df in labels.items():
         n_with_emb = df["Patient_ID"].isin(embeddings).sum()
         print(f"  {split}: {len(df)} patients, {n_with_emb} with embeddings  "
@@ -377,11 +424,14 @@ def main() -> None:
     print(f"\nVAL  : {val_metrics}")
     print(f"TEST : {test_metrics}")
 
-    out_dir = args.output_root / args.upstream_tag / args.aggregation / f"seed_{args.seed}"
+    out_dir = (args.output_root / args.label_mode / args.upstream_tag /
+               args.pool / args.aggregation / f"seed_{args.seed}")
     out_dir.mkdir(parents=True, exist_ok=True)
     with open(out_dir / "metrics.json", "w") as f:
         json.dump({
+            "label_mode": args.label_mode,
             "upstream_tag": args.upstream_tag,
+            "pool": args.pool,
             "aggregation": args.aggregation,
             "seed": args.seed,
             "fit_info": fit_info,

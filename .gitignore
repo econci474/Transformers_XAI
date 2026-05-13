@@ -25,6 +25,7 @@ hugging_face/brainiac
 #Outputs
 outputs/
 clinical_pipeline/outputs
+classification_results/
 
 # tool Code local config
 .tool/

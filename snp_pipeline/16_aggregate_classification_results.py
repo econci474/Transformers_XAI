@@ -34,7 +34,9 @@ def collect(root: Path) -> pd.DataFrame:
         with open(mfile) as f:
             m = json.load(f)
         row = {
+            "label_mode": m.get("label_mode", "bl_multi"),
             "upstream_tag": m["upstream_tag"],
+            "pool": m.get("pool", "cls"),  # legacy runs default to cls
             "aggregation": m["aggregation"],
             "seed": m["seed"],
         }
@@ -50,10 +52,11 @@ def collect(root: Path) -> pd.DataFrame:
 
 
 def summarise(df: pd.DataFrame) -> pd.DataFrame:
-    g = df.groupby(["upstream_tag", "aggregation"])
+    g = df.groupby(["label_mode", "upstream_tag", "pool", "aggregation"])
     out_rows = []
-    for (upstream, agg), grp in g:
-        row = {"upstream_tag": upstream, "aggregation": agg, "n_seeds": len(grp)}
+    for (label_mode, upstream, pool, agg), grp in g:
+        row = {"label_mode": label_mode, "upstream_tag": upstream,
+               "pool": pool, "aggregation": agg, "n_seeds": len(grp)}
         for k in METRICS:
             col = f"test_{k}"
             vals = grp[col].dropna().to_numpy()
@@ -66,7 +69,9 @@ def summarise(df: pd.DataFrame) -> pd.DataFrame:
             row[f"{col}_mean"] = mean
             row[f"{col}_std"] = std
         out_rows.append(row)
-    return pd.DataFrame(out_rows).sort_values(["upstream_tag", "aggregation"])
+    return pd.DataFrame(out_rows).sort_values(
+        ["label_mode", "upstream_tag", "pool", "aggregation"]
+    )
 
 
 def main() -> None:
@@ -88,7 +93,7 @@ def main() -> None:
     print(f"Wrote {args.summary_csv}  ({len(df_sum)} rows)")
 
     # Pretty-print the headline table.
-    cols = ["upstream_tag", "aggregation", "n_seeds",
+    cols = ["label_mode", "upstream_tag", "pool", "aggregation", "n_seeds",
             "test_auc", "test_balanced_accuracy", "test_f1",
             "test_sensitivity", "test_specificity"]
     with pd.option_context("display.max_columns", None,
