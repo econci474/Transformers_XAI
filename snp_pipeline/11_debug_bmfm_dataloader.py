@@ -194,16 +194,16 @@ def _probe_fit(self, model=None, train_dataloaders=None, val_dataloaders=None, d
     dev = next(module.parameters()).device
     print(f"  Module device: {dev}; first param dtype: {next(module.parameters()).dtype}")
 
-    def _to_dev(x):
+    def _to_dev(x, d):
         if isinstance(x, torch.Tensor):
-            return x.to(dev)
+            return x.to(d)
         if isinstance(x, dict):
-            return {k: _to_dev(v) for k, v in x.items()}
+            return {k: _to_dev(v, d) for k, v in x.items()}
         if isinstance(x, list):
-            return [_to_dev(v) for v in x]
+            return [_to_dev(v, d) for v in x]
         return x
 
-    batch_dev = _to_dev(batch)
+    batch_dev = _to_dev(batch, dev)
 
     # Replicate BMFM's calculate_losses without retaining autograd.
     from bmfm_targets.training.losses.utils import calculate_losses as _calc  # noqa: E402
@@ -223,12 +223,17 @@ def _probe_fit(self, model=None, train_dataloaders=None, val_dataloaders=None, d
         print(f"\n>>> {name} <<<")
         _forward_call_count["n"] = 0
         module.eval()  # disable dropout to avoid extra allocations
+        # Always re-derive the device from the module so caller can do
+        # module.to(...) between checks without breaking the batch.
+        cur_dev = next(module.parameters()).device
+        b = _to_dev(batch, cur_dev)
+        print(f"  (device for this check: {cur_dev})")
         with torch.no_grad(), ctx:
             # Forward pass only — no backward graph retained.
             try:
                 out = module.model(
-                    input_ids=batch_dev["input_ids"],
-                    attention_mask=batch_dev["attention_mask"],
+                    input_ids=b["input_ids"],
+                    attention_mask=b["attention_mask"],
                 )
             except Exception as e:
                 print(f"  [err] model.forward raised: {type(e).__name__}: {e}")
@@ -244,7 +249,7 @@ def _probe_fit(self, model=None, train_dataloaders=None, val_dataloaders=None, d
                 print(f"    {_summary(f'logits[{k!r}]', v)}")
             # Now compute MSE via BMFM's own pipeline
             try:
-                all_losses = _calc(module.loss_tasks, logits, batch_dev["labels"])
+                all_losses = _calc(module.loss_tasks, logits, b["labels"])
             except Exception as e:
                 print(f"  [err] calculate_losses raised: {type(e).__name__}: {e}")
                 import traceback
@@ -257,19 +262,13 @@ def _probe_fit(self, model=None, train_dataloaders=None, val_dataloaders=None, d
     # If CUDA is available, also try GPU + cuda-autocast(bfloat16) — that's
     # what bf16-mixed actually runs on CSD3.
     if torch.cuda.is_available():
-        print(f"  CUDA available: {torch.cuda.get_device_name(0)} — moving module to GPU.")
-        module.to("cuda")
-        batch_dev = _to_dev(batch)  # re-do with cuda as the new module device
-
+        print(f"  CUDA available: {torch.cuda.get_device_name(0)}")
         print("\n[1/4] CPU fp32 (sanity)")
         module.to("cpu")
-        batch_dev_cpu = _to_dev(batch)
         fp32_cpu = _check("CPU FP32", nullcontext())
-        # rebind dev for later prints
-        module.to("cuda")
-        batch_dev = _to_dev(batch)
 
-        print("\n[2/4] CUDA fp32")
+        print("\n[2/4] CUDA fp32 — moving module to GPU")
+        module.to("cuda")
         cuda_fp32 = _check("CUDA FP32", nullcontext())
 
         print("\n[3/4] CUDA bf16 autocast")
