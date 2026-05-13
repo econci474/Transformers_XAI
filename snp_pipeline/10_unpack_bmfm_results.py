@@ -52,6 +52,15 @@ DATASET_TO_INPUT_TRAIN = {
         Path("bmfm_gwas_signed_regression_without_ukb_augmented_by_chrom")
         / "forward" / "train.csv",
     ),
+    # CSD3 combos runs (chromosome-context 8 kb windows, n≈13.8k rows, σ≈31.87)
+    "bmfm_gwas_combos_lr1e6_2ep": (
+        Path("bmfm_gwas_signed_regression_without_ukb_augmented_by_chrom_combos")
+        / "forward_and_reverse" / "train.csv",
+    ),
+    "bmfm_gwas_combos_ref_lr1e6_2ep": (
+        Path("bmfm_gwas_signed_regression_without_ukb_augmented_by_chrom_combos")
+        / "forward_and_reverse" / "train.csv",
+    ),
 }
 
 # Metric tags surfaced in the comparison table.
