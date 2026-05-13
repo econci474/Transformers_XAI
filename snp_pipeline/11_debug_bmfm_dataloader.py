@@ -205,29 +205,54 @@ def _probe_fit(self, model=None, train_dataloaders=None, val_dataloaders=None, d
 
     batch_dev = _to_dev(batch)
 
+    # Replicate BMFM's calculate_losses without retaining autograd.
+    from bmfm_targets.training.losses.utils import calculate_losses as _calc  # noqa: E402
+
+    def _summary(label, t):
+        if not torch.is_tensor(t):
+            return f"{label}={t!r}"
+        f = t.detach().float().reshape(-1)
+        has_nan = bool(torch.isnan(t).any().item())
+        has_inf = bool(torch.isinf(t).any().item())
+        return (f"{label}: shape={tuple(t.shape)} dtype={t.dtype} "
+                f"mean={f.mean().item():.4g} std={f.std().item() if f.numel() > 1 else float('nan'):.4g} "
+                f"min={f.min().item():.4g} max={f.max().item():.4g} "
+                f"has_nan={has_nan} has_inf={has_inf}")
+
     def _check(name, ctx):
         print(f"\n>>> {name} <<<")
-        _forward_call_count["n"] = 0  # let the forward intercept dump again
-        module.train()
-        try:
-            with ctx:
-                # Call training_step end-to-end so we exercise the exact code path
-                # that runs in production (forward → calculate_losses → guard).
-                ret = module.training_step(batch_dev, 0)
-        except Exception as e:
-            print(f"  [err] training_step raised: {type(e).__name__}: {e}")
-            import traceback
-            traceback.print_exc()
-            return None
-        # Inspect the returned loss
-        if ret is None:
-            print(f"  training_step return: None  (BMFM swallowed NaN/0)")
-        else:
-            v = ret
-            has_nan = bool(torch.isnan(v).any().item()) if torch.is_tensor(v) else False
-            has_inf = bool(torch.isinf(v).any().item()) if torch.is_tensor(v) else False
-            print(f"  training_step return: loss={v.item() if torch.is_tensor(v) else v}  has_nan={has_nan}  has_inf={has_inf}")
-        return ret
+        _forward_call_count["n"] = 0
+        module.eval()  # disable dropout to avoid extra allocations
+        with torch.no_grad(), ctx:
+            # Forward pass only — no backward graph retained.
+            try:
+                out = module.model(
+                    input_ids=batch_dev["input_ids"],
+                    attention_mask=batch_dev["attention_mask"],
+                )
+            except Exception as e:
+                print(f"  [err] model.forward raised: {type(e).__name__}: {e}")
+                import traceback
+                traceback.print_exc()
+                return None
+            # Inspect logits
+            logits = out["logits"] if isinstance(out, dict) else getattr(out, "logits", None)
+            if logits is None:
+                print(f"  [err] no .logits on model output: keys={list(out.keys()) if hasattr(out, 'keys') else type(out)}")
+                return None
+            for k, v in logits.items():
+                print(f"    {_summary(f'logits[{k!r}]', v)}")
+            # Now compute MSE via BMFM's own pipeline
+            try:
+                all_losses = _calc(module.loss_tasks, logits, batch_dev["labels"])
+            except Exception as e:
+                print(f"  [err] calculate_losses raised: {type(e).__name__}: {e}")
+                import traceback
+                traceback.print_exc()
+                return None
+            for k, v in all_losses.items():
+                print(f"    {_summary(f'all_losses[{k!r}]', v) if torch.is_tensor(v) else f'all_losses[{k!r}]={v!r}'}")
+        return all_losses.get("loss")
 
     print("\n[1/2] fp32 (no autocast)")
     fp32_loss = _check("FP32", nullcontext())
