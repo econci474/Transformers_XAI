@@ -8,12 +8,14 @@ Layout
 ------
   Title row
   Group-header row    (4 task groups: T1 binary, T2 multiclass, T3a, T3b)
-  Sub-header row      (Acc, Bal.Acc, AUC, F1/MacroF1)
+  Sub-header row      (Acc, Bal.Acc, Prec, Recall, AUC, F1/MacroF1)
   Data rows grouped by Cohort, then Strategy:
-      bl         | frozen
-      bl         | full fine-tune
-      bl + m12   | frozen
-      bl + m12   | full fine-tune
+      bl                    | frozen
+      bl                    | full fine-tune
+      bl + m12              | frozen
+      bl + m12              | full fine-tune
+      bl..mAll              | frozen / full fine-tune
+      bl..mAll (v2 strat.)  | frozen / full fine-tune
 
 Cells with no completed runs show '---'. Within each metric column the best
 mean is bolded.
@@ -117,10 +119,14 @@ for jf in OUT_DIR.rglob("metrics.json"):
     met = data["test_metrics"]
     n_total = (cfg.get("n_train", 0) + cfg.get("n_val", 0)
                + cfg.get("n_test", 0))
+    cohort = cohort_from_cfg(cfg)
+    # Distinguish viscode2-stratified long runs from the original
+    if "long_all_viscode2_stratified" in jf.parts:
+        cohort = "bl..mAll (v2 strat.)"
     rows.append({
         "task":     cfg["task"],
         "strategy": cfg["strategy"],
-        "cohort":   cohort_from_cfg(cfg),
+        "cohort":   cohort,
         "seed":     cfg["seed"],
         "n_total":  n_total,
         **met,
@@ -172,31 +178,31 @@ GROUPS = [
     {
         "title":   "CN vs MCI+AD (binary)",
         "task":    "T1_binary",
-        "metrics": ["accuracy", "balanced_acc", "auc_roc", "f1"],
-        "headers": ["Acc", "Bal.Acc", "AUC", "F1"],
+        "metrics": ["accuracy", "balanced_acc", "precision", "recall", "auc_roc", "f1"],
+        "headers": ["Acc", "Bal.Acc", "Prec", "Recall", "AUC", "F1"],
     },
     {
         "title":   "CN / MCI / AD (3-class)",
         "task":    "T2_multiclass",
-        "metrics": ["accuracy", "balanced_acc", "auc_roc_ovr", "macro_f1"],
-        "headers": ["Acc", "Bal.Acc", "AUC", "MacroF1"],
+        "metrics": ["accuracy", "balanced_acc", "precision_macro", "recall_macro", "auc_roc_ovr", "macro_f1"],
+        "headers": ["Acc", "Bal.Acc", "Prec", "Recall", "AUC", "MacroF1"],
     },
     {
         "title":   "AD conversion ≤ 3 yrs",
         "task":    "T3a_conv3y",
-        "metrics": ["accuracy", "balanced_acc", "auc_roc", "f1"],
-        "headers": ["Acc", "Bal.Acc", "AUC", "F1"],
+        "metrics": ["accuracy", "balanced_acc", "precision", "recall", "auc_roc", "f1"],
+        "headers": ["Acc", "Bal.Acc", "Prec", "Recall", "AUC", "F1"],
     },
     {
         "title":   "AD conversion ≤ 5 yrs",
         "task":    "T3b_conv5y",
-        "metrics": ["accuracy", "balanced_acc", "auc_roc", "f1"],
-        "headers": ["Acc", "Bal.Acc", "AUC", "F1"],
+        "metrics": ["accuracy", "balanced_acc", "precision", "recall", "auc_roc", "f1"],
+        "headers": ["Acc", "Bal.Acc", "Prec", "Recall", "AUC", "F1"],
     },
 ]
 
 # Row order: cohort sections in fixed order; strategies in fixed order within each cohort.
-COHORT_ORDER = ["bl", "bl + m12", "bl..mAll"]
+COHORT_ORDER = ["bl", "bl + m12", "bl..mAll", "bl..mAll (v2 strat.)"]
 STRATEGY_ORDER = [("frozen", "frozen"), ("full_ft", "full fine-tune")]
 
 ROW_ENTRIES = []   # list of (cohort, strategy_id, strategy_label)

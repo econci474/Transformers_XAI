@@ -39,7 +39,7 @@ OUT_ROOT="/home/ec474/rds/hpc-work/ADNI_SMRIPREP/derivatives/vit_inputs"
 # Existing outputs from prior runs are auto-skipped (resume logic), so this
 # can be re-run after extending the cutoff.
 #PY_SESSION_FLAGS="--session bl"   # ses-bl only (~28 scans for SNP+MRI cohort)
-PY_SESSION_FLAGS="--long 1"        # bl + m12  (~28 + ~530 = ~560 scans)
+PY_SESSION_FLAGS="--long all"      # every available session (~1,595 scans)
 #PY_SESSION_FLAGS="--long 3"       # bl through m36 (~830 scans)
 #PY_SESSION_FLAGS="--long 5"       # bl through m60 (~1,200 scans)
 #PY_SESSION_FLAGS="--long all"     # every available session (~1,595 scans)
