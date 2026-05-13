@@ -254,20 +254,51 @@ def _probe_fit(self, model=None, train_dataloaders=None, val_dataloaders=None, d
                 print(f"    {_summary(f'all_losses[{k!r}]', v) if torch.is_tensor(v) else f'all_losses[{k!r}]={v!r}'}")
         return all_losses.get("loss")
 
-    print("\n[1/2] fp32 (no autocast)")
-    fp32_loss = _check("FP32", nullcontext())
+    # If CUDA is available, also try GPU + cuda-autocast(bfloat16) — that's
+    # what bf16-mixed actually runs on CSD3.
+    if torch.cuda.is_available():
+        print(f"  CUDA available: {torch.cuda.get_device_name(0)} — moving module to GPU.")
+        module.to("cuda")
+        batch_dev = _to_dev(batch)  # re-do with cuda as the new module device
 
-    print("\n[2/2] bf16 autocast on cpu")
-    try:
-        bf16_ctx = torch.autocast(device_type="cpu", dtype=torch.bfloat16)
-    except Exception as e:
-        print(f"  [warn] torch.autocast(cpu, bfloat16) failed: {e}; falling back to no-op")
-        bf16_ctx = nullcontext()
-    bf16_loss = _check("BF16 autocast", bf16_ctx)
+        print("\n[1/4] CPU fp32 (sanity)")
+        module.to("cpu")
+        batch_dev_cpu = _to_dev(batch)
+        fp32_cpu = _check("CPU FP32", nullcontext())
+        # rebind dev for later prints
+        module.to("cuda")
+        batch_dev = _to_dev(batch)
 
-    print("\n" + "=" * 72)
-    print(f"  SUMMARY:  fp32_loss = {fp32_loss}   bf16_loss = {bf16_loss}")
-    print("=" * 72)
+        print("\n[2/4] CUDA fp32")
+        cuda_fp32 = _check("CUDA FP32", nullcontext())
+
+        print("\n[3/4] CUDA bf16 autocast")
+        cuda_bf16 = _check("CUDA BF16", torch.autocast(device_type="cuda", dtype=torch.bfloat16))
+
+        print("\n[4/4] CUDA fp16 autocast (for comparison)")
+        cuda_fp16 = _check("CUDA FP16", torch.autocast(device_type="cuda", dtype=torch.float16))
+
+        print("\n" + "=" * 72)
+        print(f"  CPU fp32     = {fp32_cpu}")
+        print(f"  CUDA fp32    = {cuda_fp32}")
+        print(f"  CUDA bf16    = {cuda_bf16}   <-- this should be 0 / NaN if the CSD3 bug reproduces")
+        print(f"  CUDA fp16    = {cuda_fp16}")
+        print("=" * 72)
+    else:
+        print("\n[1/2] fp32 (no autocast)")
+        fp32_loss = _check("FP32", nullcontext())
+
+        print("\n[2/2] bf16 autocast on cpu")
+        try:
+            bf16_ctx = torch.autocast(device_type="cpu", dtype=torch.bfloat16)
+        except Exception as e:
+            print(f"  [warn] torch.autocast(cpu, bfloat16) failed: {e}; falling back to no-op")
+            bf16_ctx = nullcontext()
+        bf16_loss = _check("BF16 autocast", bf16_ctx)
+
+        print("\n" + "=" * 72)
+        print(f"  SUMMARY:  fp32_loss = {fp32_loss}   bf16_loss = {bf16_loss}")
+        print("=" * 72)
     sys.exit(0)
 
 
