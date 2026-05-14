@@ -25,7 +25,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-METRICS = ["auc", "balanced_accuracy", "f1", "sensitivity", "specificity"]
+METRICS = ["auc", "balanced_accuracy", "f1", "precision", "recall",
+           "sensitivity", "specificity"]
 
 
 def collect(root: Path) -> pd.DataFrame:
@@ -95,6 +96,7 @@ def main() -> None:
     # Pretty-print the headline table.
     cols = ["label_mode", "upstream_tag", "pool", "aggregation", "n_seeds",
             "test_auc", "test_balanced_accuracy", "test_f1",
+            "test_precision", "test_recall",
             "test_sensitivity", "test_specificity"]
     with pd.option_context("display.max_columns", None,
                            "display.width", 220,

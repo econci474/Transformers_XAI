@@ -55,6 +55,7 @@ from sklearn.metrics import (
     f1_score,
     roc_auc_score,
     recall_score,
+    precision_score,
     confusion_matrix,
 )
 from torch.utils.data import DataLoader, TensorDataset
@@ -339,6 +340,8 @@ def evaluate(model: FullModel, x, m, c, y, device: torch.device) -> dict:
         "auc": float(roc_auc_score(y_np, logits)) if len(np.unique(y_np)) > 1 else float("nan"),
         "balanced_accuracy": float(balanced_accuracy_score(y_np, pred)),
         "f1": float(f1_score(y_np, pred, zero_division=0)),
+        "precision": float(precision_score(y_np, pred, pos_label=1, zero_division=0)),
+        "recall": float(recall_score(y_np, pred, pos_label=1, zero_division=0)),  # = sensitivity for the positive class
         "sensitivity": float(recall_score(y_np, pred, pos_label=1, zero_division=0)),
         "specificity": float(recall_score(y_np, pred, pos_label=0, zero_division=0)),
     }
