@@ -374,7 +374,16 @@ def run_inference(model: PatientClassifier, loader: DataLoader, device: torch.de
 def train_one(model: PatientClassifier, train_loader: DataLoader,
               val_loader: DataLoader, *, epochs: int, lr: float,
               weight_decay: float, focal_gamma: float, pos_weight: float,
-              patience: int, device: torch.device):
+              patience: int, device: torch.device,
+              out_dir: Path | None = None):
+    """Train end-to-end with per-epoch partial-progress checkpointing.
+
+    If ``out_dir`` is given, after every epoch we write a fresh ``val_curve.csv``
+    and ``metrics_partial.json`` capturing the best val AUC so far. Lets us
+    survive a Colab disconnect mid-training; the next run sees the partial
+    artefacts (though it currently still re-trains from scratch — true
+    optimizer-state resume is overkill at 5 epochs).
+    """
     opt = torch.optim.AdamW([p for p in model.parameters() if p.requires_grad],
                             lr=lr, weight_decay=weight_decay)
     loss_fn = FocalLoss(gamma=focal_gamma, pos_weight=pos_weight)
@@ -414,6 +423,20 @@ def train_one(model: PatientClassifier, train_loader: DataLoader,
             since = 0
         else:
             since += 1
+
+        # Per-epoch partial-progress checkpoint (for disconnect recovery)
+        if out_dir is not None:
+            try:
+                pd.DataFrame(curve).to_csv(out_dir / "val_curve.csv", index=False)
+                with open(out_dir / "metrics_partial.json", "w") as f:
+                    json.dump({
+                        "epoch_completed": ep,
+                        "best_val_auc_so_far": best_auc,
+                        "last_val": val_m,
+                    }, f, indent=2)
+            except Exception as e:
+                print(f"  [warn] partial-save failed: {e}")
+
         if since >= patience:
             print(f"  early stop at epoch {ep} (no val_auc improvement in {patience} epochs)")
             break
@@ -463,6 +486,8 @@ def main() -> None:
     ap.add_argument("--no-grad-checkpoint", action="store_false", dest="grad_checkpoint")
     # Output
     ap.add_argument("--output-root", type=Path, required=True)
+    ap.add_argument("--force", action="store_true",
+                    help="Re-run even if metrics.json already exists in output_dir.")
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     args = ap.parse_args()
 
@@ -479,6 +504,13 @@ def main() -> None:
     print(f"\n[run] label={args.label_mode}  upstream={upstream}  mode={mode}  "
           f"agg={args.aggregation}  pool={args.per_window_pool}  seed={args.seed}")
     print(f"[run] output_dir: {out_dir}")
+
+    # ── Skip-if-exists: respect prior completed runs ────────────────────────
+    final_metrics = out_dir / "metrics.json"
+    if final_metrics.exists() and not args.force:
+        print(f"[run] SKIP — final metrics already exist at {final_metrics}")
+        print(f"      (pass --force to overwrite)")
+        return
 
     # ── Chrom map + window order ────────────────────────────────────────────
     chrom_of_window, chroms = build_chrom_map(args.windows)
@@ -551,7 +583,7 @@ def main() -> None:
         model, train_loader, val_loader,
         epochs=args.epochs, lr=args.lr, weight_decay=args.weight_decay,
         focal_gamma=args.focal_gamma, pos_weight=args.pos_weight,
-        patience=args.patience, device=device,
+        patience=args.patience, device=device, out_dir=out_dir,
     )
     train_min = (time.time() - t_train) / 60
     print(f"[train] done in {train_min:.1f} min  best_val_auc={fit_info['best_val_auc']:.3f}")
