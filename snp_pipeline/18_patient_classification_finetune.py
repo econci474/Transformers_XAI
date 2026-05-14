@@ -179,7 +179,7 @@ class PatientClassifier(nn.Module):
     and returns one logit per patient.
     """
     def __init__(self, bmfm: nn.Module, aggregator: Aggregator, head: MLPHead,
-                 per_window_pool: str = "cls"):
+                 per_window_pool: str = "cls", micro_batch: int = 16):
         super().__init__()
         self.bmfm = bmfm
         self.aggregator = aggregator
@@ -187,6 +187,12 @@ class PatientClassifier(nn.Module):
         if per_window_pool not in ("cls", "mean"):
             raise ValueError(f"per_window_pool must be cls|mean, got {per_window_pool!r}")
         self.per_window_pool = per_window_pool
+        # Micro-batch size for chunking windows within a patient's forward.
+        # 183 windows × 2048 tokens × 768 H × 22 L is too much to fit a single
+        # forward+backward on A100 40 GB even with gradient checkpointing;
+        # chunk into micro_batch-sized groups so only ~micro_batch/183 of the
+        # per-window activations are live at any moment.
+        self.micro_batch = micro_batch
         # Special tokens for BMFM-DNA-REF tokenizer
         self.CLS_ID, self.SEP_ID, self.PAD_ID = 3, 1, 2
 
@@ -217,8 +223,16 @@ class PatientClassifier(nn.Module):
         B, N, S = input_ids.shape
         ids_flat  = input_ids.reshape(B * N, S)
         mask_flat = attention_mask.reshape(B * N, S)
-        # Forward all (B * N) windows through BMFM in one pass
-        per_window = self._bmfm_forward(ids_flat, mask_flat)        # (B*N, H)
+        # Chunk windows in micro-batches so the live activation set is
+        # ~ micro_batch worth of windows, not the whole (B*N) batch. Gradients
+        # still flow through every micro_batch via the cat below.
+        chunks = []
+        total = B * N
+        mb = max(1, self.micro_batch)
+        for start in range(0, total, mb):
+            end = min(start + mb, total)
+            chunks.append(self._bmfm_forward(ids_flat[start:end], mask_flat[start:end]))
+        per_window = torch.cat(chunks, dim=0)                        # (B*N, H)
         per_window = per_window.view(B, N, -1)                       # (B, N, H)
         pooled = self.aggregator(per_window, window_mask, chrom_idx) # (B, output_dim)
         return self.head(pooled)                                     # (B,)
@@ -490,6 +504,9 @@ def main() -> None:
     ap.add_argument("--epochs", type=int, default=5)
     ap.add_argument("--batch-patients", type=int, default=1,
                     help="Patients per gradient step (memory-limited; 1 on A100 40 GB).")
+    ap.add_argument("--micro-batch", type=int, default=16,
+                    help="Micro-batch size for chunking a patient's 183 windows "
+                         "inside BMFM forward. Smaller = less memory but slower.")
     ap.add_argument("--lr", type=float, default=1e-4)
     ap.add_argument("--weight-decay", type=float, default=1e-3)
     ap.add_argument("--focal-gamma", type=float, default=2.0)
@@ -568,7 +585,8 @@ def main() -> None:
     aggregator = Aggregator(args.aggregation, hidden_dim, n_chroms)
     head = MLPHead(aggregator.output_dim, hidden=256, dropout=0.3)
     model = PatientClassifier(bmfm, aggregator, head,
-                              per_window_pool=args.per_window_pool).to(device)
+                              per_window_pool=args.per_window_pool,
+                              micro_batch=args.micro_batch).to(device)
     # All aggregator+head params are trainable; LoRA params already marked trainable.
 
     # ── DataLoaders ─────────────────────────────────────────────────────────
