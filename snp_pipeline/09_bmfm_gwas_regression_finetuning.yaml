@@ -29,7 +29,7 @@ defaults:
 dataset_name: gwas_regression
 
 data_module:
-  max_length: 8192           # 8 kb chromosome-context windows (08e) — multiple of 16 ✓
+  max_length: 2048           # model pre-trained with 2048 tokens (paper §3.4); 8 kb bp ≈ 1600–2000 BPE tokens
   dataset_kwargs:
     processed_data_source: ${input_directory}
     dataset_name: ${dataset_name}
@@ -56,4 +56,4 @@ learning_rate: 1.0e-6
 accumulate_grad_batches: 32  # effective batch = 2 * 32 = 64
 val_check_interval: 0.5       # validate twice per epoch (BMFM recommendation)
 accelerator: gpu
-precision: bf16-mixed         # halves activation memory; A100 has native bf16 support
+precision: 32-true            # bf16-mixed silently triggered NaN swallowing in calculate_losses on A100 + 8 kb seq (project_bmfm_bf16_mse_collapse); fp32 is the safe default. Override to bf16-mixed only after a successful fp32 run confirms the data path is healthy.
