@@ -286,6 +286,26 @@ def load_bmfm_ref_with_lora(*, lora_r: int = 16, lora_alpha: int = 32,
     if r.missing_keys:
         print(f"[bmfm] warn missing keys: {len(r.missing_keys)} (first 3: {r.missing_keys[:3]})")
 
+    # BMFM's get_input_embeddings() is hardcoded for the scRNA case
+    # (returns self.embeddings.genes_embeddings, which doesn't exist on DNA
+    # models — they have dna_chunks_embeddings instead). Patch it so peft's
+    # prepare_model_for_gradient_checkpointing doesn't blow up.
+    def _patched_get_input_embeddings(self):
+        emb = self.embeddings
+        for attr_name in ("dna_chunks_embeddings", "genes_embeddings"):
+            attr = getattr(emb, attr_name, None)
+            if attr is not None:
+                return attr
+        # Last-resort: find any nn.Embedding child on the embeddings layer
+        for name, child in emb.named_children():
+            if isinstance(child, nn.Embedding):
+                return child
+        raise AttributeError(
+            f"No input embedding layer found on {type(emb).__name__}; "
+            "expected dna_chunks_embeddings or genes_embeddings."
+        )
+    type(model).get_input_embeddings = _patched_get_input_embeddings
+
     # Gradient checkpointing — required to fit 183 windows × 2048 tokens × LoRA bp
     if grad_checkpoint and hasattr(model, "gradient_checkpointing_enable"):
         model.gradient_checkpointing_enable()
