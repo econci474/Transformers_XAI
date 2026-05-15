@@ -53,6 +53,10 @@ p.add_argument("--exclude", nargs="*", default=["smoke_test"],
                help="Path components to skip (default: smoke_test, since the "
                     "proper bl-only T1 sweep under vit_outputs_bl/ supersedes "
                     "the early 2-epoch smoke run).")
+p.add_argument("--extra_dirs", nargs="*", default=[],
+               help="Additional root directories to scan recursively for "
+                    "metrics.json (e.g. D:/ADNI_BIDS_project/derivatives/"
+                    "vit_outputs_viscode2_stratified/ViT_B_mae75).")
 args = p.parse_args()
 
 OUT_DIR = Path(args.out_dir)
@@ -110,27 +114,47 @@ def cohort_class_breakdown():
 
 # -- Collect runs -------------------------------------------------------------
 rows = []
-for jf in OUT_DIR.rglob("metrics.json"):
-    if any(ex in jf.parts for ex in args.exclude):
-        continue
-    with open(jf) as f:
-        data = json.load(f)
-    cfg = data["config"]
-    met = data["test_metrics"]
-    n_total = (cfg.get("n_train", 0) + cfg.get("n_val", 0)
-               + cfg.get("n_test", 0))
-    cohort = cohort_from_cfg(cfg)
-    # Distinguish viscode2-stratified long runs from the original
-    if "long_all_viscode2_stratified" in jf.parts:
-        cohort = "bl..mAll (v2 strat.)"
-    rows.append({
-        "task":     cfg["task"],
-        "strategy": cfg["strategy"],
-        "cohort":   cohort,
-        "seed":     cfg["seed"],
-        "n_total":  n_total,
-        **met,
-    })
+
+# Directories to scan: main OUT_DIR plus any --extra_dirs
+all_scan_dirs = [(OUT_DIR, None)]  # (path, cohort_override)
+for ed in args.extra_dirs:
+    all_scan_dirs.append((Path(ed), "bl..mAll (v2 strat, preproc)"))
+
+for scan_dir, cohort_override in all_scan_dirs:
+    for jf in scan_dir.rglob("metrics.json"):
+        if any(ex in jf.parts for ex in args.exclude):
+            continue
+        with open(jf) as f:
+            data = json.load(f)
+        cfg = data["config"]
+        met = data["test_metrics"]
+        n_total = (cfg.get("n_train", 0) + cfg.get("n_val", 0)
+                   + cfg.get("n_test", 0))
+        if cohort_override:
+            cohort = cohort_override
+        else:
+            cohort = cohort_from_cfg(cfg)
+            # Distinguish viscode2-stratified long runs from the original
+            if "long_all_viscode2_stratified" in jf.parts:
+                cohort = "bl..mAll (v2 strat.)"
+        # Extract test-split class breakdown from dataset_manifest.csv
+        manifest = jf.parent / "dataset_manifest.csv"
+        n_test_breakdown = None
+        if manifest.exists():
+            mdf = pd.read_csv(manifest)
+            test_sub = mdf[mdf["split"] == "test"]
+            if not test_sub.empty:
+                counts = test_sub["label"].value_counts().sort_index()
+                n_test_breakdown = dict(counts)
+        rows.append({
+            "task":     cfg["task"],
+            "strategy": cfg["strategy"],
+            "cohort":   cohort,
+            "seed":     cfg["seed"],
+            "n_total":  n_total,
+            "n_test_breakdown": n_test_breakdown,
+            **met,
+        })
 raw_df = pd.DataFrame(rows)
 if raw_df.empty:
     raise SystemExit(f"No runs found under {OUT_DIR}")
@@ -152,13 +176,33 @@ for c in raw_df["cohort"].unique():
 
 def fmt_breakdown(cohort):
     bd = class_breakdown.get(cohort)
-    if not bd:
+    if bd:
+        return f"CN={bd.get(0,0)}, MCI={bd.get(1,0)}, AD={bd.get(2,0)}"
+    return None
+
+
+def fmt_test_breakdown(cohort):
+    """Build Ntest=CN/MCI/AD string from dataset_manifest.csv test splits."""
+    sub = raw_df[raw_df["cohort"] == cohort]
+    # Use seed 0 as representative
+    rep = sub[sub["seed"] == 0]
+    if rep.empty:
+        rep = sub
+    bd = rep.iloc[0].get("n_test_breakdown")
+    if bd is None:
         return None
-    return f"CN={bd.get(0,0)}, MCI={bd.get(1,0)}, AD={bd.get(2,0)}"
+    # Binary: labels 0,1; multiclass: labels 0,1,2
+    labels = sorted(int(k) for k in bd.keys())
+    if len(labels) == 2:
+        return f"Ntest: CN={bd.get(0,0)}, MCI+AD={bd.get(1,0)}"
+    elif len(labels) == 3:
+        return f"Ntest: CN={bd.get(0,0)}, MCI={bd.get(1,0)}, AD={bd.get(2,0)}"
+    return None
 
 # Aggregate mean +/- std per (cohort, strategy, task)
 metric_cols = [c for c in raw_df.columns
-               if c not in {"task", "strategy", "cohort", "seed"}]
+               if c not in {"task", "strategy", "cohort", "seed",
+                            "n_test_breakdown"}]
 summary = {}
 for (cohort, strategy, task), grp in raw_df.groupby(["cohort", "strategy", "task"]):
     entry = {}
@@ -202,7 +246,8 @@ GROUPS = [
 ]
 
 # Row order: cohort sections in fixed order; strategies in fixed order within each cohort.
-COHORT_ORDER = ["bl", "bl + m12", "bl..mAll", "bl..mAll (v2 strat.)"]
+COHORT_ORDER = ["bl", "bl + m12", "bl..mAll",
+                "bl..mAll (v2 strat, preproc)"]
 STRATEGY_ORDER = [("frozen", "frozen"), ("full_ft", "full fine-tune")]
 
 ROW_ENTRIES = []   # list of (cohort, strategy_id, strategy_label)
@@ -362,19 +407,21 @@ for r_idx, (cohort, sid, slabel) in enumerate(ROW_ENTRIES):
         n = cohort_N.get(cohort)
         n_str = f"  (N={n})" if n is not None else ""
         bd_str = fmt_breakdown(cohort)
+        test_bd_str = fmt_test_breakdown(cohort)
         # Vertical center of this cohort block (count rows that share cohort)
         block_size = sum(1 for c, _, _ in ROW_ENTRIES[r_idx:] if c == cohort)
         block_top    = row_tops[row_i]
         block_bottom = row_tops[row_i + block_size]
         block_mid    = (block_top + block_bottom) / 2
-        if bd_str:
+        detail_str = bd_str or test_bd_str
+        if detail_str:
             line_off = ROW_H * 0.25
             ax.text(col_left[0] + 0.06, block_mid + line_off,
                     f"{cohort}{n_str}",
                     ha="left", va="center", fontsize=7.5,
                     fontweight="bold", color="black")
             ax.text(col_left[0] + 0.06, block_mid - line_off,
-                    bd_str,
+                    detail_str,
                     ha="left", va="center", fontsize=5.8,
                     fontstyle="italic", color="#555555")
         else:

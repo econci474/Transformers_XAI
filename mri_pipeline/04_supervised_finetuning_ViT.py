@@ -8,6 +8,7 @@ Supervised fine-tuning of the MAE-pretrained ViT-B/3D
 Tasks (mirroring clinical_pipeline/03_encoder_finetune.py)
 ----------------------------------------------------------
   T1_binary     : CN vs MCI+AD          (binary)
+  T1b_binary    : CN+MCI vs AD          (binary)
   T2_multiclass : CN / MCI / AD         (3-class)
   T3a_conv3y    : Conversion to AD <=3y (binary, non-AD at baseline)
   T3b_conv5y    : Conversion to AD <=5y (binary, non-AD at baseline)
@@ -109,6 +110,15 @@ TASK_CONFIG = {
         "filter_non_ad":  False,
         "session_policy": "current",
         "description":    "Binary: CN vs MCI+AD",
+    },
+    "T1b_binary": {
+        "label_col":      "Label_bl_multi",
+        "num_labels":     2,
+        "task_type":      "binary",
+        "label_map":      {"CN": 0, "MCI": 0, "AD": 1},
+        "filter_non_ad":  False,
+        "session_policy": "current",
+        "description":    "Binary: CN+MCI vs AD",
     },
     "T2_multiclass": {
         "label_col":      "Label_bl_multi",
