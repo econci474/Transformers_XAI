@@ -441,7 +441,7 @@ def train_one(model: PatientClassifier, train_loader: DataLoader,
               val_loader: DataLoader, *, epochs: int, lr: float,
               weight_decay: float, focal_gamma: float, pos_weight: float,
               patience: int, device: torch.device,
-              out_dir: Path | None = None):
+              out_dir: Path | None = None, log_every: int = 10):
     """Train end-to-end with per-epoch partial-progress checkpointing.
 
     If ``out_dir`` is given, after every epoch we write a fresh ``val_curve.csv``
@@ -457,11 +457,13 @@ def train_one(model: PatientClassifier, train_loader: DataLoader,
     best_auc, since = -1.0, 0
     best_state = None
     curve = []
+    n_train_batches = len(train_loader)
     for ep in range(epochs):
         t0 = time.time()
         model.train()
         running, n_batches = 0.0, 0
         for batch in train_loader:
+            bt0 = time.time()
             ids  = batch["input_ids"].to(device, non_blocking=True)
             mask = batch["attention_mask"].to(device, non_blocking=True)
             cidx = batch["chrom_idx"].to(device, non_blocking=True)
@@ -477,6 +479,15 @@ def train_one(model: PatientClassifier, train_loader: DataLoader,
             opt.step()
             running += float(loss.item())
             n_batches += 1
+            # Heartbeat so an epoch is not silent for hours; also measures
+            # real per-patient cost for projecting full-run feasibility.
+            if log_every and (n_batches % log_every == 0 or n_batches == 1):
+                bt = time.time() - bt0
+                el = time.time() - t0
+                print(f"  ep {ep} [{n_batches}/{n_train_batches}] "
+                      f"loss={running/n_batches:.4f}  "
+                      f"{bt:.2f}s/patient  epoch_elapsed={el/60:.1f}min",
+                      flush=True)
         # eval
         val_logits, val_y, _ = run_inference(model, val_loader, device)
         val_m = patient_metrics(val_logits, val_y)
@@ -557,6 +568,11 @@ def main() -> None:
     ap.add_argument("--grad-checkpoint", action="store_true", default=True,
                     help="Enable gradient checkpointing in BMFM (memory saver).")
     ap.add_argument("--no-grad-checkpoint", action="store_false", dest="grad_checkpoint")
+    ap.add_argument("--limit-patients", type=int, default=None,
+                    help="Smoke test: cap each split to N class-stratified "
+                         "patients to validate the pipeline + measure per-patient cost.")
+    ap.add_argument("--log-every", type=int, default=10,
+                    help="Print a training heartbeat every N patients (0 = epoch-only).")
     # Output
     ap.add_argument("--output-root", type=Path, required=True)
     ap.add_argument("--force", action="store_true",
@@ -631,6 +647,14 @@ def main() -> None:
         df = df[df["Patient_ID"].astype(str).isin(seq_df["PTID"].astype(str).unique())]
         pids = df["Patient_ID"].astype(str).tolist()
         lbl  = dict(zip(pids, df["y"].astype(int).tolist()))
+        # Smoke-test cap: keep a class-stratified subset so the pipeline can be
+        # validated end-to-end in minutes and real per-patient cost measured.
+        if args.limit_patients and len(pids) > args.limit_patients:
+            order = sorted(pids, key=lambda p: (lbl[p], p))  # interleave classes
+            keep = set(order[::max(1, len(order)//args.limit_patients)][:args.limit_patients])
+            pids = [p for p in pids if p in keep]
+            print(f"[smoke] {split}: capped to {len(pids)} patients "
+                  f"(y_mean={sum(lbl[p] for p in pids)/len(pids):.3f})")
         ds = PatientWindowsDataset(
             sequences_df=seq_df, patient_ids=pids, labels=lbl,
             window_order=window_order, chrom_of_window=chrom_of_window,
@@ -658,6 +682,7 @@ def main() -> None:
         epochs=args.epochs, lr=args.lr, weight_decay=args.weight_decay,
         focal_gamma=args.focal_gamma, pos_weight=args.pos_weight,
         patience=args.patience, device=device, out_dir=out_dir,
+        log_every=args.log_every,
     )
     train_min = (time.time() - t_train) / 60
     print(f"[train] done in {train_min:.1f} min  best_val_auc={fit_info['best_val_auc']:.3f}")
