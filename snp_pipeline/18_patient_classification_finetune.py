@@ -320,16 +320,45 @@ def load_bmfm_ref_with_lora(*, lora_r: int = 16, lora_alpha: int = 32,
         )
     type(model).get_input_embeddings = _patched_get_input_embeddings
 
-    # Gradient checkpointing — required to fit 183 windows × 2048 tokens × LoRA bp
+    # Gradient checkpointing — required to fit 183 windows × 2048 tokens × LoRA bp.
+    # CRITICAL: with a frozen base (LoRA), default *reentrant* checkpointing has
+    # no grad-requiring input, so torch silently keeps full activations instead
+    # of recomputing them → OOM. Two things are mandatory:
+    #   (a) non-reentrant checkpointing, and
+    #   (b) enable_input_require_grads() so the (frozen) embedding output
+    #       requires grad and checkpoint segments actually recompute + free.
     if grad_checkpoint and hasattr(model, "gradient_checkpointing_enable"):
-        model.gradient_checkpointing_enable()
-        print("[bmfm] gradient checkpointing: enabled")
+        try:
+            model.gradient_checkpointing_enable(
+                gradient_checkpointing_kwargs={"use_reentrant": False})
+            print("[bmfm] gradient checkpointing: enabled (non-reentrant)")
+        except TypeError:
+            # Older HF signature without kwargs support
+            model.gradient_checkpointing_enable()
+            print("[bmfm] gradient checkpointing: enabled (reentrant fallback)")
 
     if not enable_lora:
-        # Freeze BMFM entirely — used by --no-lora ("frozen_live") mode
+        # Freeze BMFM entirely — used by --no-lora ("frozen_live") mode.
+        # No backprop into BMFM here, so input_require_grads is unnecessary.
         for p in model.parameters():
             p.requires_grad_(False)
         return model
+
+    # With LoRA the base is frozen; make the input-embedding output require
+    # grad so checkpointed transformer blocks have a grad path and free their
+    # activations during recompute. Without this, checkpointing is a no-op
+    # and the 183-window graph OOMs the A100 on the first backward.
+    if grad_checkpoint:
+        if hasattr(model, "enable_input_require_grads"):
+            model.enable_input_require_grads()
+            print("[bmfm] input_require_grads: enabled (HF builtin)")
+        else:
+            def _make_inputs_require_grad(_module, _inp, out):
+                if isinstance(out, torch.Tensor):
+                    out.requires_grad_(True)
+            model.get_input_embeddings().register_forward_hook(
+                _make_inputs_require_grad)
+            print("[bmfm] input_require_grads: enabled (manual hook)")
 
     # LoRA via peft
     from peft import LoraConfig, get_peft_model
@@ -392,13 +421,16 @@ def run_inference(model: PatientClassifier, loader: DataLoader, device: torch.de
     """Return (logits, y, ptids) on the given loader."""
     model.eval()
     all_logits, all_y, all_ptids = [], [], []
+    use_amp = device.type == "cuda"
     with torch.no_grad():
         for batch in loader:
             ids  = batch["input_ids"].to(device)
             mask = batch["attention_mask"].to(device)
             cidx = batch["chrom_idx"].to(device)
             wmsk = batch["window_mask"].to(device)
-            logits = model(ids, mask, cidx, wmsk)
+            with torch.autocast(device_type=device.type, dtype=torch.bfloat16,
+                                 enabled=use_amp):
+                logits = model(ids, mask, cidx, wmsk)
             all_logits.append(logits.float().cpu().numpy())
             all_y.append(batch["y"].cpu().numpy())
             all_ptids.extend(batch["ptid"])
@@ -421,6 +453,7 @@ def train_one(model: PatientClassifier, train_loader: DataLoader,
     opt = torch.optim.AdamW([p for p in model.parameters() if p.requires_grad],
                             lr=lr, weight_decay=weight_decay)
     loss_fn = FocalLoss(gamma=focal_gamma, pos_weight=pos_weight)
+    use_amp = device.type == "cuda"
     best_auc, since = -1.0, 0
     best_state = None
     curve = []
@@ -434,8 +467,11 @@ def train_one(model: PatientClassifier, train_loader: DataLoader,
             cidx = batch["chrom_idx"].to(device, non_blocking=True)
             wmsk = batch["window_mask"].to(device, non_blocking=True)
             y    = batch["y"].to(device, non_blocking=True)
-            logits = model(ids, mask, cidx, wmsk)
-            loss = loss_fn(logits, y)
+            with torch.autocast(device_type=device.type, dtype=torch.bfloat16,
+                                 enabled=use_amp):
+                logits = model(ids, mask, cidx, wmsk)
+            # Loss in fp32 for numerical stability (logits upcast out of autocast)
+            loss = loss_fn(logits.float(), y)
             opt.zero_grad()
             loss.backward()
             opt.step()
@@ -649,10 +685,8 @@ def main() -> None:
             "test": test_m,
         }, f, indent=2)
     pd.DataFrame(curve).to_csv(out_dir / "val_curve.csv", index=False)
-    # Save only the trainable head + aggregator + LoRA params, not the frozen base
-    trainable_sd = {k: v.detach().cpu() for k, v in model.state_dict().items()
-                    if model.get_parameter(k).requires_grad if k in dict(model.named_parameters())}
-    # Simpler: save head + aggregator state separately
+    # Save the trainable head + aggregator (frozen base is not re-saved;
+    # LoRA adapter saved separately below via save_pretrained).
     torch.save({
         "head": model.head.state_dict(),
         "aggregator": model.aggregator.state_dict(),

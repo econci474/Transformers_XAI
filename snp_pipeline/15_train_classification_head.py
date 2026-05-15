@@ -288,10 +288,25 @@ def stack_patient_arrays(
 def train_one(
     model: FullModel, train_data, val_data,
     epochs: int, batch_size: int, lr: float, weight_decay: float, device: torch.device,
-    patience: int,
+    patience: int, loss_name: str = "bce",
 ) -> tuple[FullModel, dict, list]:
     opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
-    loss_fn = nn.BCEWithLogitsLoss()
+
+    if loss_name == "weighted_bce":
+        # pos_weight = n_neg / n_pos computed from the TRAIN labels only.
+        y_tr_all = train_data[-1]
+        n_pos = float((y_tr_all == 1).sum().item())
+        n_neg = float((y_tr_all == 0).sum().item())
+        pw = max(n_neg / max(n_pos, 1.0), 1e-6)
+        pos_weight = torch.tensor([pw], device=device)
+        loss_fn = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+        print(f"[loss] weighted_bce  pos_weight={pw:.4f}  "
+              f"(n_pos_train={int(n_pos)}, n_neg_train={int(n_neg)})")
+    elif loss_name == "bce":
+        loss_fn = nn.BCEWithLogitsLoss()
+        print("[loss] bce  (unweighted)")
+    else:
+        raise ValueError(f"Unknown --loss: {loss_name!r}")
 
     x_tr, m_tr, c_tr, y_tr = (t.to(device) for t in train_data)
     x_va, m_va, c_va, y_va = (t.to(device) for t in val_data)
@@ -312,9 +327,11 @@ def train_one(
         # eval
         model.eval()
         with torch.no_grad():
-            val_logits = model(x_va, m_va, c_va).cpu().numpy()
+            val_logits_t = model(x_va, m_va, c_va)
+            # loss_fn may carry a device-bound pos_weight → keep tensors on device
+            val_loss = float(loss_fn(val_logits_t, y_va.float()).item())
+            val_logits = val_logits_t.cpu().numpy()
         val_auc = roc_auc_score(y_va.cpu().numpy(), val_logits) if y_va.unique().numel() > 1 else float("nan")
-        val_loss = float(loss_fn(torch.from_numpy(val_logits), y_va.cpu().float()).item())
         curve.append({"epoch": ep, "val_auc": val_auc, "val_loss": val_loss})
         if val_auc > best_auc:
             best_auc = val_auc
@@ -377,6 +394,10 @@ def main() -> None:
     ap.add_argument("--lr", type=float, default=1e-3)
     ap.add_argument("--weight-decay", type=float, default=1e-4)
     ap.add_argument("--patience", type=int, default=20)
+    ap.add_argument("--loss", choices=["bce", "weighted_bce"], default="bce",
+                    help="bce: unweighted BCEWithLogitsLoss (default, legacy). "
+                         "weighted_bce: BCEWithLogitsLoss with "
+                         "pos_weight = n_neg/n_pos computed from train labels.")
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     args = ap.parse_args()
 
@@ -418,7 +439,7 @@ def main() -> None:
         model, splits["train"], splits["val"],
         epochs=args.epochs, batch_size=args.batch_size,
         lr=args.lr, weight_decay=args.weight_decay,
-        device=device, patience=args.patience,
+        device=device, patience=args.patience, loss_name=args.loss,
     )
     print(f"\nFit:  {fit_info}")
 
@@ -437,6 +458,7 @@ def main() -> None:
             "pool": args.pool,
             "aggregation": args.aggregation,
             "seed": args.seed,
+            "loss": args.loss,
             "fit_info": fit_info,
             "val": val_metrics,
             "test": test_metrics,

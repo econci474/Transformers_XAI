@@ -102,7 +102,7 @@ def main() -> None:
                            "display.width", 220,
                            "display.expand_frame_repr", False):
         print("\n" + "=" * 100)
-        print(f"  Cross-run summary  →  {args.summary_csv}")
+        print(f"  Cross-run summary  ->  {args.summary_csv}")
         print("=" * 100)
         print(df_sum[cols].to_string(index=False))
 
