@@ -57,6 +57,9 @@ p.add_argument("--extra_dirs", nargs="*", default=[],
                help="Additional root directories to scan recursively for "
                     "metrics.json (e.g. D:/ADNI_BIDS_project/derivatives/"
                     "vit_outputs_viscode2_stratified/ViT_B_mae75).")
+p.add_argument("--aug_dirs", nargs="*", default=[],
+               help="Augmented-training dirs as label::path pairs, e.g. "
+                    "'STOCHASTIC::D:/path/to/aug_random/ViT_B_mae75'.")
 args = p.parse_args()
 
 OUT_DIR = Path(args.out_dir)
@@ -119,6 +122,12 @@ rows = []
 all_scan_dirs = [(OUT_DIR, None)]  # (path, cohort_override)
 for ed in args.extra_dirs:
     all_scan_dirs.append((Path(ed), "bl..mAll (v2 strat, preproc)"))
+for ad_spec in args.aug_dirs:
+    if "::" in ad_spec:
+        label, path = ad_spec.split("::", 1)
+    else:
+        label, path = "aug", ad_spec
+    all_scan_dirs.append((Path(path), f"bl..mAll (v2 strat, {label})"))
 
 for scan_dir, cohort_override in all_scan_dirs:
     for jf in scan_dir.rglob("metrics.json"):
@@ -152,6 +161,7 @@ for scan_dir, cohort_override in all_scan_dirs:
             "cohort":   cohort,
             "seed":     cfg["seed"],
             "n_total":  n_total,
+            "n_test":   cfg.get("n_test", 0),
             "n_test_breakdown": n_test_breakdown,
             **met,
         })
@@ -159,19 +169,27 @@ raw_df = pd.DataFrame(rows)
 if raw_df.empty:
     raise SystemExit(f"No runs found under {OUT_DIR}")
 
-# Per-cohort representative N (image count, not patient count). Prefer the
-# diagnostic-coverage CSV total (the cohort definition: every preprocessed
-# scan whose label is known) over metrics.json (which can undercount if the
-# fine-tune run silently dropped some sessions, e.g. the long_all run that
-# only saw ~526 of 1476 images).
+# Derive sensitivity and specificity from existing metrics.
+# Binary: sensitivity = recall, specificity = 2*balanced_acc - recall
+# Multiclass: sensitivity_macro = recall_macro, specificity_macro = 2*balanced_acc - recall_macro
+if "recall" in raw_df.columns:
+    raw_df["sensitivity"] = raw_df["recall"]
+    raw_df["specificity"] = (2 * raw_df["balanced_acc"] - raw_df["recall"]).clip(0, 1)
+if "recall_macro" in raw_df.columns:
+    raw_df["sensitivity_macro"] = raw_df["recall_macro"]
+    raw_df["specificity_macro"] = (2 * raw_df["balanced_acc"] - raw_df["recall_macro"]).clip(0, 1)
+
+# Per-cohort representative N_test (test-set image count).
 class_breakdown = cohort_class_breakdown()
 cohort_N = {}
 for c in raw_df["cohort"].unique():
-    bd = class_breakdown.get(c)
-    if bd:
-        cohort_N[c] = int(bd["total"])
+    # Use n_test from metrics.json config as the representative count
+    sub = raw_df[raw_df["cohort"] == c]
+    n_test_vals = sub["n_test"].dropna()
+    if len(n_test_vals) > 0:
+        cohort_N[c] = int(n_test_vals.max())
     else:
-        cohort_N[c] = int(raw_df.loc[raw_df["cohort"] == c, "n_total"].max())
+        cohort_N[c] = None
 
 
 def fmt_breakdown(cohort):
@@ -182,21 +200,33 @@ def fmt_breakdown(cohort):
 
 
 def fmt_test_breakdown(cohort):
-    """Build Ntest=CN/MCI/AD string from dataset_manifest.csv test splits."""
+    """Build Ntest: CN=X, MCI=Y, AD=Z string from dataset_manifest.csv test splits.
+    Prefer the T2_multiclass task which has all 3 classes separate.
+    Falls back to diagnostic coverage CSV if only binary task data exists."""
     sub = raw_df[raw_df["cohort"] == cohort]
-    # Use seed 0 as representative
-    rep = sub[sub["seed"] == 0]
-    if rep.empty:
-        rep = sub
-    bd = rep.iloc[0].get("n_test_breakdown")
-    if bd is None:
-        return None
-    # Binary: labels 0,1; multiclass: labels 0,1,2
-    labels = sorted(int(k) for k in bd.keys())
-    if len(labels) == 2:
-        return f"Ntest: CN={bd.get(0,0)}, MCI+AD={bd.get(1,0)}"
-    elif len(labels) == 3:
-        return f"Ntest: CN={bd.get(0,0)}, MCI={bd.get(1,0)}, AD={bd.get(2,0)}"
+    # Prefer T2_multiclass for 3-class breakdown
+    multi = sub[sub["task"] == "T2_multiclass"]
+    if not multi.empty:
+        rep = multi[multi["seed"] == 0]
+        if rep.empty:
+            rep = multi
+        bd = rep.iloc[0].get("n_test_breakdown")
+        if bd is not None:
+            labels = sorted(int(k) for k in bd.keys())
+            if len(labels) >= 3:
+                return f"Ntest: CN={bd.get(0,0)}, MCI={bd.get(1,0)}, AD={bd.get(2,0)}"
+    # Fallback: use diagnostic-coverage CSV (total, not test-only)
+    dc_bd = class_breakdown.get(cohort)
+    if dc_bd:
+        return f"N: CN={dc_bd.get(0,0)}, MCI={dc_bd.get(1,0)}, AD={dc_bd.get(2,0)}"
+    # Last resort: binary manifest
+    if not sub.empty:
+        rep = sub[sub["seed"] == 0]
+        if rep.empty:
+            rep = sub
+        bd = rep.iloc[0].get("n_test_breakdown")
+        if bd is not None:
+            return f"Ntest: CN={bd.get(0,0)}, MCI={bd.get(1,0)}, AD=0"
     return None
 
 # Aggregate mean +/- std per (cohort, strategy, task)
@@ -222,32 +252,47 @@ GROUPS = [
     {
         "title":   "CN vs MCI+AD (binary)",
         "task":    "T1_binary",
-        "metrics": ["accuracy", "balanced_acc", "precision", "recall", "auc_roc", "f1"],
-        "headers": ["Acc", "Bal.Acc", "Prec", "Recall", "AUC", "F1"],
+        "metrics": ["accuracy", "balanced_acc", "sensitivity", "specificity", "precision", "recall", "auc_roc", "f1"],
+        "headers": ["Acc", "Bal.Acc", "Sens", "Spec", "Prec", "Recall", "AUC", "F1"],
+    },
+    {
+        "title":   "CN+MCI vs AD (binary)",
+        "task":    "T1b_binary",
+        "metrics": ["accuracy", "balanced_acc", "sensitivity", "specificity", "precision", "recall", "auc_roc", "f1"],
+        "headers": ["Acc", "Bal.Acc", "Sens", "Spec", "Prec", "Recall", "AUC", "F1"],
     },
     {
         "title":   "CN / MCI / AD (3-class)",
         "task":    "T2_multiclass",
-        "metrics": ["accuracy", "balanced_acc", "precision_macro", "recall_macro", "auc_roc_ovr", "macro_f1"],
-        "headers": ["Acc", "Bal.Acc", "Prec", "Recall", "AUC", "MacroF1"],
+        "metrics": ["accuracy", "balanced_acc", "sensitivity_macro", "specificity_macro", "precision_macro", "recall_macro", "auc_roc_ovr", "macro_f1"],
+        "headers": ["Acc", "Bal.Acc", "Sens", "Spec", "Prec", "Recall", "AUC", "MacroF1"],
     },
     {
         "title":   "AD conversion ≤ 3 yrs",
         "task":    "T3a_conv3y",
-        "metrics": ["accuracy", "balanced_acc", "precision", "recall", "auc_roc", "f1"],
-        "headers": ["Acc", "Bal.Acc", "Prec", "Recall", "AUC", "F1"],
+        "metrics": ["accuracy", "balanced_acc", "sensitivity", "specificity", "precision", "recall", "auc_roc", "f1"],
+        "headers": ["Acc", "Bal.Acc", "Sens", "Spec", "Prec", "Recall", "AUC", "F1"],
     },
     {
         "title":   "AD conversion ≤ 5 yrs",
         "task":    "T3b_conv5y",
-        "metrics": ["accuracy", "balanced_acc", "precision", "recall", "auc_roc", "f1"],
-        "headers": ["Acc", "Bal.Acc", "Prec", "Recall", "AUC", "F1"],
+        "metrics": ["accuracy", "balanced_acc", "sensitivity", "specificity", "precision", "recall", "auc_roc", "f1"],
+        "headers": ["Acc", "Bal.Acc", "Sens", "Spec", "Prec", "Recall", "AUC", "F1"],
     },
 ]
 
 # Row order: cohort sections in fixed order; strategies in fixed order within each cohort.
-COHORT_ORDER = ["bl", "bl + m12", "bl..mAll",
-                "bl..mAll (v2 strat, preproc)"]
+# Build COHORT_ORDER dynamically: fixed cohorts + any aug-dir cohorts in order
+_fixed_cohorts = ["bl", "bl + m12", "bl..mAll", "bl..mAll (v2 strat.)"]
+_extra_cohorts = [co for _, co in all_scan_dirs if co is not None and co not in _fixed_cohorts]
+# Deduplicate while preserving order
+_seen = set()
+_extra_dedup = []
+for c in _extra_cohorts:
+    if c not in _seen:
+        _seen.add(c)
+        _extra_dedup.append(c)
+COHORT_ORDER = _fixed_cohorts + _extra_dedup
 STRATEGY_ORDER = [("frozen", "frozen"), ("full_ft", "full fine-tune")]
 
 ROW_ENTRIES = []   # list of (cohort, strategy_id, strategy_label)
@@ -297,7 +342,7 @@ for col_idx in range(n_total_cols):
 # -- Sizing -------------------------------------------------------------------
 COL_W        = 1.45
 ROW_H        = 0.32
-COHORT_COL_W = 1.55
+COHORT_COL_W = 2.6
 STRAT_COL_W  = 1.10
 
 n_data_cols = sum(len(g["headers"]) for g in GROUPS)
@@ -404,29 +449,26 @@ for r_idx, (cohort, sid, slabel) in enumerate(ROW_ENTRIES):
     # over the whole block (frozen + full_ft) and stack a class-breakdown
     # line beneath the N count so the underpowered-3-class case is obvious.
     if cohort != prev_cohort:
-        n = cohort_N.get(cohort)
-        n_str = f"  (N={n})" if n is not None else ""
-        bd_str = fmt_breakdown(cohort)
+        # Always try test breakdown from dataset_manifest
         test_bd_str = fmt_test_breakdown(cohort)
         # Vertical center of this cohort block (count rows that share cohort)
         block_size = sum(1 for c, _, _ in ROW_ENTRIES[r_idx:] if c == cohort)
         block_top    = row_tops[row_i]
         block_bottom = row_tops[row_i + block_size]
         block_mid    = (block_top + block_bottom) / 2
-        detail_str = bd_str or test_bd_str
-        if detail_str:
+        if test_bd_str:
             line_off = ROW_H * 0.25
             ax.text(col_left[0] + 0.06, block_mid + line_off,
-                    f"{cohort}{n_str}",
+                    cohort,
                     ha="left", va="center", fontsize=7.5,
                     fontweight="bold", color="black")
             ax.text(col_left[0] + 0.06, block_mid - line_off,
-                    detail_str,
+                    test_bd_str,
                     ha="left", va="center", fontsize=5.8,
                     fontstyle="italic", color="#555555")
         else:
             ax.text(col_left[0] + 0.06, block_mid,
-                    f"{cohort}{n_str}",
+                    cohort,
                     ha="left", va="center", fontsize=7.5,
                     fontweight="bold", color="black")
     ax.text(col_cx[1], row_mid(row_i), slabel,

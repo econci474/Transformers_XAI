@@ -145,11 +145,15 @@ def main() -> None:
                 truncation=False,
             )
             input_ids = tokenized["input_ids"].to(device)
-            attention_mask = tokenized["attention_mask"].to(device)
+            # Caduceus tokenizer may not return attention_mask; create from input_ids
+            if "attention_mask" in tokenized:
+                attention_mask = tokenized["attention_mask"].to(device)
+            else:
+                pad_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else 0
+                attention_mask = (input_ids != pad_id).long()
 
             out = model(
                 input_ids,
-                attention_mask=attention_mask,
                 output_hidden_states=True,
             )
             last_hidden = out.hidden_states[-1]
@@ -165,11 +169,14 @@ def main() -> None:
                     truncation=False,
                 )
                 rc_ids = rc_tok["input_ids"].to(device)
-                rc_mask = rc_tok["attention_mask"].to(device)
+                if "attention_mask" in rc_tok:
+                    rc_mask = rc_tok["attention_mask"].to(device)
+                else:
+                    pad_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else 0
+                    rc_mask = (rc_ids != pad_id).long()
 
                 rc_out = model(
                     rc_ids,
-                    attention_mask=rc_mask,
                     output_hidden_states=True,
                 )
                 rc_hidden = rc_out.hidden_states[-1]

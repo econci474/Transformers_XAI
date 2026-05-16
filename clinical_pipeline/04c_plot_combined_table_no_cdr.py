@@ -54,11 +54,22 @@ _t3b["_y"] = pd.to_numeric(_t3b["Label_5y"], errors="coerce")
 _t3b = _t3b.dropna(subset=["_y"])
 t3b_n = len(_t3b); t3b_conv = int(_t3b["_y"].sum()); t3b_nc = t3b_n - t3b_conv
 
+_t3c = _s0_test[_s0_test["Label_bl_multi"].isin(["CN","MCI"])].copy()
+_t3c["_y"] = pd.to_numeric(_t3c["Label_10y"], errors="coerce")
+_t3c = _t3c.dropna(subset=["_y"])
+t3c_n = len(_t3c); t3c_conv = int(_t3c["_y"].sum()); t3c_nc = t3c_n - t3c_conv
+
 # ── 2. Load encoder metrics and aggregate across seeds ─────────────────────────
 enc_rows = []
+n_skipped = 0
 for jf in ENC_DIR.rglob("metrics.json"):
-    with open(jf) as f:
-        data = json.load(f)
+    try:
+        with open(jf) as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, ValueError):
+        print(f"  [WARN] Skipping corrupt/empty file: {jf}")
+        n_skipped += 1
+        continue
     cfg = data["config"]
     met = data["test_metrics"]
     enc_rows.append({
@@ -68,6 +79,8 @@ for jf in ENC_DIR.rglob("metrics.json"):
         "seed":     cfg["seed"],
         **met,
     })
+if n_skipped:
+    print(f"  Skipped {n_skipped} corrupt metrics.json files")
 
 if not enc_rows:
     print("[ERROR] No metrics.json files found in encoder-only_no_cdr/")
@@ -139,6 +152,15 @@ GROUPS = [
         "subtitle":     f"N(test)={t3b_n}, non-conv={t3b_nc}, AD\u22645yr={t3b_conv}",
         "bl_task":      "5 years",
         "enc_task":     "T3b_conv5y",
+        "bl_metrics":   ["Accuracy", "BalancedAcc", "AUC-ROC", "F1"],
+        "enc_metrics":  ["accuracy", "balanced_acc", "auc_roc", "f1"],
+        "headers":      ["Acc", "Bal.Acc", "AUC", "F1"],
+    },
+    {
+        "title":        "AD conversion \u2264 10 yrs",
+        "subtitle":     f"N(test)={t3c_n}, non-conv={t3c_nc}, AD\u226410yr={t3c_conv}",
+        "bl_task":      "10 years",
+        "enc_task":     "T3c_conv10y",
         "bl_metrics":   ["Accuracy", "BalancedAcc", "AUC-ROC", "F1"],
         "enc_metrics":  ["accuracy", "balanced_acc", "auc_roc", "f1"],
         "headers":      ["Acc", "Bal.Acc", "AUC", "F1"],

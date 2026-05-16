@@ -29,3 +29,6 @@ classification_results/
 
 # tool Code local config
 .tool/
+
+#Wandb
+wandb_api.txt
