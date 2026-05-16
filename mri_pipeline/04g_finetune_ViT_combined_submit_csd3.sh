@@ -66,7 +66,7 @@ conda activate mri
 # -- Run-mode knobs (overridable via sbatch --export=ALL,VAR=...) -------------
 AUGMENT="${AUGMENT:-random}"              # none | random | plus_original
 AUG_COPIES="${AUG_COPIES:-1}"             # plus_original: K aug copies per orig
-USE_WANDB="${USE_WANDB:-0}"               # 1 -> enable wandb logging
+USE_WANDB="${USE_WANDB:-1}"               # 1 -> enable wandb logging
 WANDB_PROJECT="${WANDB_PROJECT:-vit_orig_vs_aug}"
 # CSD3 compute nodes have no outbound internet: log offline, `wandb sync` later.
 export WANDB_MODE="${WANDB_MODE:-offline}"
