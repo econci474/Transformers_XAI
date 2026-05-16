@@ -35,7 +35,7 @@ conda activate caduceus
 
 SCRIPT_DIR="/home/ec474/rds/hpc-work/Transformers_XAI/snp_pipeline/caduceus"
 SEQUENCES="/home/ec474/rds/hpc-work/ADNI_SNP/patient_seqs/all_patients.csv"
-OUTDIR="/home/ec474/rds/hpc-work/ADNI_SNP/patient_embeddings"
+OUTDIR="/home/ec474/rds/hpc-work/ADNI_SNP/embeddings"
 
 VARIANTS=("ps" "ph")
 VARIANT="${VARIANTS[$SLURM_ARRAY_TASK_ID]}"
