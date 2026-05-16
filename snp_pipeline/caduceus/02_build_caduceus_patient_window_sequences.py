@@ -10,8 +10,8 @@ tokenisation (1 bp = 1 token), the full 131k context is available.
 
 Effect:
   - Fewer, much wider windows per chromosome (many SNPs grouped together).
-  - Far more flanking genomic context around each SNP cluster.
-  - Typically yields ~5–10 windows total (vs ~25 at 8 kb).
+  - SAME FLANKING AS BMFM (50bp).
+  - Reduces total windows from ~180 (at 8 kb) to ~57 by packing nearby SNPs.
 
 Input
 -----
@@ -54,7 +54,7 @@ OUT_DIR = BASE_DIR / "caduceus_inputs" / "patient_window_sequences"
 
 # Caduceus 131k context: 131,072 bp per window (1 bp = 1 token)
 MAX_LEN = 131_072
-MIN_FLANK = 500    # more generous flanking for the wider context
+MIN_FLANK = 50    # same flanking as before for BMFM
 
 
 def pack_windows(snp_rows: list, max_inner_span: int) -> list[list]:
@@ -146,7 +146,10 @@ def main() -> None:
     win_id = 0
     skipped_chroms = []
 
-    for chrom, grp in sig.groupby("CHR"):
+    sig["_chrom_sort"] = sig["CHR"].apply(lambda x: int(x) if x.isdigit() else 99)
+    sig = sig.sort_values(["_chrom_sort", "BP"]).reset_index(drop=True)
+
+    for chrom, grp in sig.groupby("CHR", sort=False):
         chrom_fa = resolve_chrom(chrom)
         if chrom_fa is None:
             skipped_chroms.append(chrom)
@@ -212,7 +215,7 @@ def main() -> None:
     avg_len = sum(w["length_bp"] for w in windows_meta) / max(len(windows_meta), 1)
     avg_snps = total_snps / max(len(windows_meta), 1)
     print(f"\n  Summary vs 8 kb windows:")
-    print(f"    Total windows:     {win_id} (was ~25 at 8 kb)")
+    print(f"    Total windows:     {win_id} (was ~180 at 8 kb)")
     print(f"    Avg window length: {avg_len:,.0f} bp (was ~8,192 bp)")
     print(f"    Avg SNPs/window:   {avg_snps:.1f}")
     print(f"    Total SNPs:        {total_snps}")

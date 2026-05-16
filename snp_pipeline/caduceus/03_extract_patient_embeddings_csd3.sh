@@ -34,7 +34,7 @@ source "$(conda info --base)/etc/profile.d/conda.sh"
 conda activate caduceus
 
 SCRIPT_DIR="/home/ec474/rds/hpc-work/Transformers_XAI/snp_pipeline/caduceus"
-SEQUENCES="/home/ec474/rds/hpc-work/ADNI_SNP/patient_seqs/all_patients.csv"
+SEQUENCES="/home/ec474/rds/hpc-work/ADNI_SNP/patient_seqs/8k/all_patients.csv"
 OUTDIR="/home/ec474/rds/hpc-work/ADNI_SNP/embeddings"
 
 VARIANTS=("ps" "ph")

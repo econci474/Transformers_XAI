@@ -124,6 +124,9 @@ def main() -> None:
     sig["BP"] = sig["BP"].astype(int)
     sig = sig.sort_values(["CHR", "BP"]).reset_index(drop=True)
     sig = sig[sig["SNP"].isin(bim_lookup)]   # keep only SNPs in BIM
+    # Sort chromosomes numerically (1, 2, 3...10, 11) not lexicographically
+    sig["_chrom_sort"] = sig["CHR"].apply(lambda x: int(x) if x.isdigit() else 99)
+    sig = sig.sort_values(["_chrom_sort", "BP"]).reset_index(drop=True)
     print(f"  Label=1 SNPs with BIM match: {len(sig)}")
 
     # ── Open FASTA ────────────────────────────────────────────────────────────
@@ -148,7 +151,7 @@ def main() -> None:
     win_id = 0
     skipped_chroms = []
 
-    for chrom, grp in sig.groupby("CHR"):
+    for chrom, grp in sig.groupby("CHR", sort=False):
         chrom_fa = resolve_chrom(chrom)
         if chrom_fa is None:
             skipped_chroms.append(chrom)
