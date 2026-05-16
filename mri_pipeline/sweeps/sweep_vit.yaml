@@ -1,0 +1,82 @@
+# =============================================================================
+# sweep_vit.yaml — wandb Bayesian hyperparameter sweep for ViT MRI fine-tuning
+# =============================================================================
+# Target (fixed, NOT swept): T1_binary / seed 0 / full_ft / --long all, using
+# the publication recipe (epochs=50, batch_size=4) and augment=random. Holding
+# augment=random keeps every trial at the proven ~1x-data/50-epoch cost so a
+# trial fits one 12 h Colab/CSD3 window; the orig-vs-aug comparison is the
+# dedicated fixed CSD3 grid (04g), not this sweep.
+#
+# Objective: minimise best_val_loss (emitted to wandb.run.summary by the python
+# script). Matches the script's existing val-loss early-stopping criterion.
+#
+# Run (Colab A100, login/online node — wandb agent needs live internet):
+#   cd mri_pipeline
+#   wandb sweep sweeps/sweep_vit.yaml          # -> entity/vit_viscode2_long_sweep/<id>
+#   wandb agent --count N <entity/vit_viscode2_long_sweep/<id>>
+#
+# Data inputs are READ-ONLY from Google Drive (user uploads to Drive/ADNI_MRI/).
+# Outputs go to Colab-LOCAL /content (fast disk): the per-epoch
+# last_checkpoint.pt is ~1 GB (model+AdamW) and must NOT be written to mounted
+# Drive every epoch (Drive write is far too slow / quota-bound). wandb is the
+# source of truth for sweep results; if the Colab VM recycles, just relaunch
+# `wandb agent` (the sweep is server-side and keeps drawing new configs).
+#
+# NOTE: before launching, `ls /content/drive/MyDrive/ADNI_MRI/` (via Colab MCP)
+# and confirm the four input paths below match the uploaded layout; adjust if
+# the pretrained-ckpt filename or sub-folders differ.
+# =============================================================================
+
+program: 04_supervised_finetuning_ViT.py
+method: bayes
+metric:
+  name: best_val_loss
+  goal: minimize
+
+command:
+  - ${env}
+  - python
+  - ${program}
+  - --task=T1_binary
+  - --seed=0
+  - --strategy=full_ft
+  - --long=all
+  - --epochs=50
+  - --batch_size=4
+  - --augment=random
+  - --pretrained_ckpt=/content/drive/MyDrive/ADNI_MRI/ViT_B_pretrained_noaug_mae75_BRATS2023_IXI_OASIS3_seed_8456_999_077000.pth.tar
+  - --matched_labels_csv=/content/drive/MyDrive/ADNI_MRI/master_mri_clinical_matched_viscode2.csv
+  - --data_dir=/content/drive/MyDrive/ADNI_MRI/baseline_stratified_no_cdr
+  - --vit_inputs_dir=/content/drive/MyDrive/ADNI_MRI/vit_inputs
+  - --out_dir=/content/vit_sweep_outputs
+  - --num_workers=2
+  - --wandb
+  - --wandb_project=vit_viscode2_long_sweep
+  - ${args}
+
+parameters:
+  lr:
+    distribution: log_uniform_values
+    min: 1.0e-5
+    max: 3.0e-4
+  weight_decay:
+    distribution: log_uniform_values
+    min: 1.0e-6
+    max: 1.0e-3
+  drop_path_rate:
+    distribution: uniform
+    min: 0.0
+    max: 0.3
+  attn_dropout:
+    distribution: uniform
+    min: 0.0
+    max: 0.3
+  label_smoothing:
+    values: [0.0, 0.05, 0.1]
+  warmup_epochs:
+    values: [3, 5, 8]
+
+# Prune weak trials early (val-loss not improving) — well before epoch 50.
+early_terminate:
+  type: hyperband
+  min_iter: 12

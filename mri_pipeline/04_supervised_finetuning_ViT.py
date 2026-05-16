@@ -40,11 +40,23 @@ Inputs
 Output layout (matches clinical pipeline)
 -----------------------------------------
   {out_dir}/ViT_B_mae75/{task}/seed_{seed}/{strategy}/
-    metrics.json     {"config": {...}, "test_metrics": {...}}
-    best_model.pt    weights with lowest val_loss
-    train_log.csv    per-epoch train_loss, val_loss, val_acc, lr
+    metrics.json      {"config": {...}, "test_metrics": {...},
+                       "test_diagnostics": {confusion_matrix, per_class
+                       precision/recall/sensitivity/specificity/f1/support,
+                       labels}}
+    best_model.pt     weights with lowest val_loss
+    last_checkpoint.pt  atomic per-epoch resume state (model+optim+scaler+
+                        counters); auto-resumed on rerun unless --no_resume.
+                        Safety net for the 12 h SLURM/Colab wall-time cap.
+    train_log.csv     per-epoch train_loss, val_loss, val_acc, lr (flushed
+                      every epoch, not just at the end)
+    test_predictions.csv  per-sample y_true, y_pred, prob_0..prob_{K-1}
     dataset_manifest.csv  which (Patient_ID, bids_ses, label, image_path) tuples
                           went into each split
+
+  Augmentation (--augment): none | random (default; current behaviour) |
+  plus_original (originals + --aug_copies always-on augmented copies).
+  Optional wandb logging via --wandb (no-op otherwise; honours WANDB_MODE).
 
 Smoke-test usage (local Windows, mri conda env, 28 actual baseline scans)
 --------------------------------------------------------------------------
@@ -69,10 +81,11 @@ import torch
 import torch.nn as nn
 from sklearn.metrics import (
     accuracy_score, average_precision_score, balanced_accuracy_score,
-    f1_score, precision_score, recall_score, roc_auc_score,
+    confusion_matrix, f1_score, precision_recall_fscore_support,
+    precision_score, recall_score, roc_auc_score,
 )
 from sklearn.utils.class_weight import compute_class_weight
-from torch.utils.data import DataLoader
+from torch.utils.data import ConcatDataset, DataLoader
 
 import monai.transforms as mt
 from monai.data import Dataset
@@ -208,6 +221,33 @@ def parse_args():
     p.add_argument("--num_workers",     type=int, default=2)
     p.add_argument("--max_subjects",    type=int, default=None,
                    help="Cap subjects per split (smoke test)")
+    # ── Augmentation control ─────────────────────────────────────────────────
+    p.add_argument("--augment",         type=str, default="random",
+                   choices=["none", "random", "plus_original"],
+                   help="none = no aug (eval transform on train); "
+                        "random = on-the-fly stochastic aug, originals not retained "
+                        "(default — current behaviour); "
+                        "plus_original = originals (no aug) + K always-on augmented "
+                        "copies (set size = (1+K)*N_train).")
+    p.add_argument("--aug_copies",      type=int, default=1,
+                   help="plus_original only: K always-on augmented copies per "
+                        "original (default 1 -> 2x train set).")
+    # ── Sweepable regularisation hyperparameters ─────────────────────────────
+    p.add_argument("--drop_path_rate",  type=float, default=0.1,
+                   help="ViT stochastic-depth rate (model drop_path_rate).")
+    p.add_argument("--attn_dropout",    type=float, default=0.1,
+                   help="ViT attention dropout (model attn_p).")
+    p.add_argument("--label_smoothing", type=float, default=0.0,
+                   help="CrossEntropyLoss label smoothing.")
+    # ── Resume ───────────────────────────────────────────────────────────────
+    p.add_argument("--no_resume",       action="store_true",
+                   help="Ignore any last_checkpoint.pt and start fresh.")
+    # ── wandb (optional; no-op unless --wandb) ───────────────────────────────
+    p.add_argument("--wandb",           action="store_true",
+                   help="Enable Weights & Biases logging (no-op if absent).")
+    p.add_argument("--wandb_project",   type=str, default="vit-mri-finetune")
+    p.add_argument("--wandb_entity",    type=str, default=None)
+    p.add_argument("--wandb_run_name",  type=str, default=None)
     args = p.parse_args()
 
     if args.epochs is None:
@@ -260,6 +300,66 @@ def cohort_label(args, task_cfg) -> str:
     if eff == 12:
         return "bl + m12"
     return f"bl..m{int(eff)}"
+
+
+def class_names_for(task_cfg: dict) -> list:
+    """Per-index human-readable class names for confusion-matrix labelling.
+
+    label_map may be many-to-one (e.g. T1_binary CN->0, MCI->1, AD->1), so each
+    index collects every source name mapped to it ('MCI+AD'). label_map=None
+    (prognosis tasks) -> generic 'class_{i}'.
+    """
+    n = task_cfg["num_labels"]
+    lm = task_cfg.get("label_map")
+    if not lm:
+        return [f"class_{i}" for i in range(n)]
+    names = []
+    for i in range(n):
+        members = [k for k, v in lm.items() if v == i]
+        names.append("+".join(members) if members else f"class_{i}")
+    return names
+
+
+def init_wandb(args, task_cfg: dict, extra=None):
+    """Start a wandb run if --wandb is set; otherwise return None (full no-op).
+
+    Honours WANDB_API_KEY / WANDB_MODE (offline|disabled) / WANDB_DIR from the
+    environment automatically. Degrades to local-only if wandb is not installed.
+    """
+    if not args.wandb:
+        return None
+    try:
+        import wandb
+    except ImportError:
+        print("  [WARN] --wandb set but wandb not installed; continuing local-only.")
+        return None
+    name = args.wandb_run_name or (
+        f"{args.task}-s{args.seed}-{args.strategy}-{args.augment}")
+    cfg = {
+        "task":            args.task,
+        "seed":            args.seed,
+        "strategy":        args.strategy,
+        "augment":         args.augment,
+        "aug_copies":      args.aug_copies,
+        "epochs":          args.epochs,
+        "lr":              args.lr,
+        "weight_decay":    args.weight_decay,
+        "batch_size":      args.batch_size,
+        "warmup_epochs":   args.warmup_epochs,
+        "patience":        args.patience,
+        "drop_path_rate":  args.drop_path_rate,
+        "attn_dropout":    args.attn_dropout,
+        "label_smoothing": args.label_smoothing,
+        "long_mode":       args.long_mode,
+        "max_months":      args.max_months,
+        "session_policy":  task_cfg["session_policy"],
+        "num_labels":      task_cfg["num_labels"],
+        "pretrained_ckpt": args.pretrained_ckpt,
+    }
+    if extra:
+        cfg.update(extra)
+    return wandb.init(project=args.wandb_project, entity=args.wandb_entity,
+                      name=name, config=cfg, reinit=True)
 
 
 MATCHED_STATUSES = ("viscode_exact", "viscode2_exact", "nearest_within_14d")
@@ -380,38 +480,64 @@ def load_split_from_matched(baseline_csv: Path, matched_df: pd.DataFrame,
 
 
 
-def build_dataset(df: pd.DataFrame, train: bool) -> Dataset:
+def _eval_transform() -> mt.Compose:
+    """Load + channel-first + tensor only (no augmentation)."""
+    return mt.Compose([
+        mt.LoadImaged(keys=["image"]),
+        mt.EnsureChannelFirstd(keys=["image"]),
+        mt.ToTensord(keys=["image"]),
+    ])
+
+
+def _train_transform(p_flip=0.2, p_rot=0.2, p_scale=0.1, p_shift=0.1) -> mt.Compose:
+    """Stochastic train aug. Default probs == original behaviour; pass 1.0 for
+    an always-on (deterministic-fire) augmented branch in plus_original mode."""
+    return mt.Compose([
+        mt.LoadImaged(keys=["image"]),
+        mt.EnsureChannelFirstd(keys=["image"]),
+        mt.RandFlipd(keys=["image"], prob=p_flip, spatial_axis=0),
+        mt.RandFlipd(keys=["image"], prob=p_flip, spatial_axis=1),
+        mt.RandFlipd(keys=["image"], prob=p_flip, spatial_axis=2),
+        mt.RandRotate90d(keys=["image"], prob=p_rot, max_k=3),
+        mt.RandScaleIntensityd(keys=["image"], factors=0.1, prob=p_scale),
+        mt.RandShiftIntensityd(keys=["image"], offsets=0.1, prob=p_shift),
+        mt.ToTensord(keys=["image"]),
+    ])
+
+
+def build_dataset(df: pd.DataFrame, train: bool,
+                  augment: str = "random", aug_copies: int = 1):
     """
     MONAI Dataset over already-preprocessed 128^3 z-scored RAS NIfTIs.
-    Train: light augmentation (flip/rot90/intensity).
-    Val/Test: load + ToTensor only.
+
+    augment (train only; val/test always use the no-aug eval transform):
+      "none"          -> eval transform on train (no augmentation at all)
+      "random"        -> on-the-fly stochastic aug, originals NOT retained
+                         (exact original behaviour; the default)
+      "plus_original" -> ConcatDataset of every original (no aug) PLUS
+                         `aug_copies` always-on (prob=1.0) augmented copies, so
+                         originals are retained and the augmented copies are
+                         genuinely distinct. Train set size = (1+aug_copies)*N.
     """
     items = [{"image": row.image_path, "label": int(row.label)}
              for row in df.itertuples()]
 
-    if train:
-        tfm = mt.Compose([
-            mt.LoadImaged(keys=["image"]),
-            mt.EnsureChannelFirstd(keys=["image"]),
-            mt.RandFlipd(keys=["image"], prob=0.2, spatial_axis=0),
-            mt.RandFlipd(keys=["image"], prob=0.2, spatial_axis=1),
-            mt.RandFlipd(keys=["image"], prob=0.2, spatial_axis=2),
-            mt.RandRotate90d(keys=["image"], prob=0.2, max_k=3),
-            mt.RandScaleIntensityd(keys=["image"], factors=0.1, prob=0.1),
-            mt.RandShiftIntensityd(keys=["image"], offsets=0.1, prob=0.1),
-            mt.ToTensord(keys=["image"]),
-        ])
-    else:
-        tfm = mt.Compose([
-            mt.LoadImaged(keys=["image"]),
-            mt.EnsureChannelFirstd(keys=["image"]),
-            mt.ToTensord(keys=["image"]),
-        ])
-    return Dataset(data=items, transform=tfm)
+    if not train or augment == "none":
+        return Dataset(data=items, transform=_eval_transform())
+    if augment == "random":
+        return Dataset(data=items, transform=_train_transform())
+    if augment == "plus_original":
+        k = max(1, int(aug_copies))
+        orig = Dataset(data=items, transform=_eval_transform())
+        aug = [Dataset(data=items, transform=_train_transform(1.0, 1.0, 1.0, 1.0))
+               for _ in range(k)]
+        return ConcatDataset([orig] + aug)
+    raise ValueError(f"Unknown augment mode: {augment!r}")
 
 
 # ── Metrics (mirror clinical_pipeline/03_encoder_finetune.py) ─────────────────
-def compute_test_metrics(y_true: np.ndarray, logits: np.ndarray, task_type: str) -> dict:
+def compute_test_metrics(y_true: np.ndarray, logits: np.ndarray, task_type: str):
+    """Returns (scalar_metrics_dict, preds, probs)."""
     probs = torch.softmax(torch.from_numpy(logits), dim=-1).numpy()
     preds = probs.argmax(axis=-1)
 
@@ -422,12 +548,18 @@ def compute_test_metrics(y_true: np.ndarray, logits: np.ndarray, task_type: str)
     if task_type == "binary":
         positive = probs[:, 1]
         out.update({
-            "precision": float(precision_score(y_true, preds, zero_division=0)),
-            "recall":    float(recall_score(y_true, preds, zero_division=0)),
-            "f1":        float(f1_score(y_true, preds, zero_division=0)),
-            "auc_roc":   float(roc_auc_score(y_true, positive))
-                         if len(np.unique(y_true)) > 1 else float("nan"),
-            "auc_pr":    float(average_precision_score(y_true, positive)),
+            "precision":   float(precision_score(y_true, preds, zero_division=0)),
+            "recall":      float(recall_score(y_true, preds, zero_division=0)),
+            # sensitivity == recall/TPR for the positive class (class 1);
+            # specificity == TNR == recall for the negative class (class 0).
+            "sensitivity": float(recall_score(y_true, preds, pos_label=1,
+                                               zero_division=0)),
+            "specificity": float(recall_score(y_true, preds, pos_label=0,
+                                               zero_division=0)),
+            "f1":          float(f1_score(y_true, preds, zero_division=0)),
+            "auc_roc":     float(roc_auc_score(y_true, positive))
+                           if len(np.unique(y_true)) > 1 else float("nan"),
+            "auc_pr":      float(average_precision_score(y_true, positive)),
         })
     else:
         out.update({
@@ -439,8 +571,48 @@ def compute_test_metrics(y_true: np.ndarray, logits: np.ndarray, task_type: str)
             "auc_pr_macro":    float(average_precision_score(
                 np.eye(probs.shape[1])[y_true], probs, average="macro")),
         })
-    return {k: round(v, 4) if isinstance(v, float) and not np.isnan(v) else v
-            for k, v in out.items()}
+    metrics = {k: round(v, 4) if isinstance(v, float) and not np.isnan(v) else v
+               for k, v in out.items()}
+    return metrics, preds, probs
+
+
+def compute_diagnostics(y_true: np.ndarray, preds: np.ndarray,
+                        num_labels: int, label_names: list) -> dict:
+    """Confusion matrix + per-class P/R/F1/support (everything needed to rebuild
+    a confusion matrix). Kept as a sibling of test_metrics so 05/06 aggregators
+    (which flatten only test_metrics) stay scalar-clean."""
+    labels = list(range(num_labels))
+    cm = confusion_matrix(y_true, preds, labels=labels)
+    pr, rc, f1, sup = precision_recall_fscore_support(
+        y_true, preds, labels=labels, zero_division=0)
+    total = int(cm.sum())
+
+    def _specificity(i: int) -> float:
+        # one-vs-rest TNR: TN / (TN + FP)
+        tp = int(cm[i, i])
+        fp = int(cm[:, i].sum()) - tp
+        fn = int(cm[i, :].sum()) - tp
+        tn = total - tp - fp - fn
+        return tn / (tn + fp) if (tn + fp) > 0 else 0.0
+
+    per_class = {
+        int(i): {
+            "name":        label_names[i],
+            "precision":   round(float(pr[i]), 4),
+            "recall":      round(float(rc[i]), 4),
+            # recall == sensitivity (TPR) for this class one-vs-rest
+            "sensitivity": round(float(rc[i]), 4),
+            "specificity": round(_specificity(i), 4),
+            "f1":          round(float(f1[i]), 4),
+            "support":     int(sup[i]),
+        }
+        for i in range(num_labels)
+    }
+    return {
+        "labels": {int(i): label_names[i] for i in range(num_labels)},
+        "confusion_matrix": cm.tolist(),  # rows = true, cols = pred
+        "per_class": per_class,
+    }
 
 
 # ── Train / eval loops ────────────────────────────────────────────────────────
@@ -579,6 +751,11 @@ def main():
     # Pad missing classes with weight=1.0 so the weight tensor always matches
     # the model's num_labels — small-N splits (e.g. T2 bl-only, N≈22 train)
     # may not contain every class.
+    # INVARIANT: class weights are computed from train_df, NOT the Dataset. In
+    # augment='plus_original' the ConcatDataset duplicates every original
+    # uniformly across all classes (orig + K aug branches all iterate the same
+    # items), so the class ratio is unchanged — do NOT recompute from the
+    # (larger) dataset.
     num_labels = task_cfg["num_labels"]
     classes_present = np.unique(train_df["label"].values).astype(int)
     cw_present = compute_class_weight("balanced", classes=classes_present,
@@ -593,7 +770,9 @@ def main():
     print(f"  Class weights: {dict(enumerate(cw.round(3).tolist()))}")
 
     # ── Datasets / dataloaders ───────────────────────────────────────────────
-    train_loader = DataLoader(build_dataset(train_df, train=True),
+    train_loader = DataLoader(build_dataset(train_df, train=True,
+                                            augment=args.augment,
+                                            aug_copies=args.aug_copies),
                               batch_size=args.batch_size, shuffle=True,
                               num_workers=args.num_workers, pin_memory=True,
                               drop_last=True)
@@ -609,7 +788,8 @@ def main():
         img_size=(128, 128, 128), patch_size=16, in_chans=1,
         n_classes=task_cfg["num_labels"],
         embed_dim=768, depth=12, n_heads=12, mlp_ratio=4.0,
-        qkv_bias=True, drop_path_rate=0.1, p=0.0, attn_p=0.1,
+        qkv_bias=True, drop_path_rate=args.drop_path_rate, p=0.0,
+        attn_p=args.attn_dropout,
         global_avg_pool=False, pos_embed_type="learnable",
         patch_embed_fun="conv3d",
     )
@@ -629,84 +809,178 @@ def main():
                                   weight_decay=args.weight_decay,
                                   betas=(0.9, 0.999))
     scaler = torch.cuda.amp.GradScaler(enabled=(device.type == "cuda"))
-    criterion = nn.CrossEntropyLoss(weight=class_weights)
+    criterion = nn.CrossEntropyLoss(weight=class_weights,
+                                    label_smoothing=args.label_smoothing)
 
-    # ── Training loop ────────────────────────────────────────────────────────
+    # ── wandb (gated; no-op without --wandb) ─────────────────────────────────
+    wb = init_wandb(args, task_cfg, extra={
+        "n_train": int(len(train_df)), "n_val": int(len(val_df)),
+        "n_test": int(len(test_df))})
+
+    # ── Resumable per-epoch checkpoint state ─────────────────────────────────
+    ckpt_path = out_dir / "last_checkpoint.pt"
+    train_log_path = out_dir / "train_log.csv"
     best_val = float("inf")
     best_epoch = -1
     epochs_since_improve = 0
     log_rows = []
+    start_epoch = 0
 
-    for epoch in range(args.epochs):
-        cur_lr = lr_at(epoch, args)
-        for g in optimizer.param_groups:
-            g["lr"] = cur_lr
+    if (not args.no_resume) and ckpt_path.exists():
+        ck = torch.load(ckpt_path, map_location=device)
+        model.load_state_dict(ck["model"])
+        optimizer.load_state_dict(ck["optimizer"])
+        scaler.load_state_dict(ck["scaler"])
+        best_val = ck["best_val"]
+        best_epoch = ck["best_epoch"]
+        epochs_since_improve = ck["epochs_since_improve"]
+        log_rows = ck["log_rows"]
+        start_epoch = ck["epoch"] + 1  # ck["epoch"] = last completed (0-based)
+        print(f"  Resuming from epoch {start_epoch + 1} "
+              f"(last completed epoch {ck['epoch'] + 1}; best_val={best_val:.4f}).")
 
-        tr_loss, tr_acc, _, _ = run_one_epoch(
-            model, train_loader, criterion, optimizer, scaler, device, train=True)
-        va_loss, va_acc, _, _ = run_one_epoch(
-            model, val_loader, criterion, optimizer, scaler, device, train=False)
+    def _save_checkpoint(ep: int):
+        """Atomic per-epoch checkpoint (survives a 12 h SLURM/Colab kill)."""
+        state = {
+            "model":                model.state_dict(),
+            "optimizer":            optimizer.state_dict(),
+            "scaler":               scaler.state_dict(),
+            "epoch":                ep,  # 0-based, just completed
+            "best_val":             best_val,
+            "best_epoch":           best_epoch,
+            "epochs_since_improve": epochs_since_improve,
+            "log_rows":             log_rows,
+            "args":                 vars(args),
+        }
+        tmp = ckpt_path.with_suffix(".pt.tmp")
+        torch.save(state, tmp)
+        os.replace(tmp, ckpt_path)
 
-        log_rows.append({"epoch": epoch + 1, "lr": cur_lr,
-                         "train_loss": tr_loss, "train_acc": tr_acc,
-                         "val_loss": va_loss, "val_acc": va_acc})
-        print(f"  [epoch {epoch+1:>3}/{args.epochs}] "
-              f"lr={cur_lr:.2e}  train_loss={tr_loss:.4f}  train_acc={tr_acc:.4f}  "
-              f"val_loss={va_loss:.4f}  val_acc={va_acc:.4f}")
+    try:
+        # ── Training loop ────────────────────────────────────────────────────
+        for epoch in range(start_epoch, args.epochs):
+            cur_lr = lr_at(epoch, args)
+            for g in optimizer.param_groups:
+                g["lr"] = cur_lr
 
-        if va_loss < best_val:
-            best_val = va_loss
-            best_epoch = epoch + 1
-            epochs_since_improve = 0
-            torch.save({"net": model.state_dict(), "epoch": best_epoch},
-                       out_dir / "best_model.pt")
-        else:
-            epochs_since_improve += 1
+            tr_loss, tr_acc, _, _ = run_one_epoch(
+                model, train_loader, criterion, optimizer, scaler, device, train=True)
+            va_loss, va_acc, _, _ = run_one_epoch(
+                model, val_loader, criterion, optimizer, scaler, device, train=False)
+
+            log_rows.append({"epoch": epoch + 1, "lr": cur_lr,
+                             "train_loss": tr_loss, "train_acc": tr_acc,
+                             "val_loss": va_loss, "val_acc": va_acc})
+            print(f"  [epoch {epoch+1:>3}/{args.epochs}] "
+                  f"lr={cur_lr:.2e}  train_loss={tr_loss:.4f}  train_acc={tr_acc:.4f}  "
+                  f"val_loss={va_loss:.4f}  val_acc={va_acc:.4f}")
+
+            if va_loss < best_val:
+                best_val = va_loss
+                best_epoch = epoch + 1
+                epochs_since_improve = 0
+                torch.save({"net": model.state_dict(), "epoch": best_epoch},
+                           out_dir / "best_model.pt")
+            else:
+                epochs_since_improve += 1
+
+            # Incremental flush + atomic checkpoint every epoch (timeout safety)
+            pd.DataFrame(log_rows).to_csv(train_log_path, index=False)
+            _save_checkpoint(epoch)
+
+            if wb is not None:
+                import wandb
+                wandb.log({"epoch": epoch + 1, "lr": cur_lr,
+                           "train_loss": tr_loss, "train_acc": tr_acc,
+                           "val_loss": va_loss, "val_acc": va_acc,
+                           "best_val_loss": best_val})
+
             if epochs_since_improve >= args.patience:
                 print(f"  Early stopping at epoch {epoch+1} "
                       f"(no val improvement for {args.patience}).")
                 break
 
-    pd.DataFrame(log_rows).to_csv(out_dir / "train_log.csv", index=False)
+        pd.DataFrame(log_rows).to_csv(train_log_path, index=False)
 
-    # ── Final test on best weights ────────────────────────────────────────────
-    best_state = torch.load(out_dir / "best_model.pt", map_location=device)
-    model.load_state_dict(best_state["net"])
-    _, _, test_logits, test_labels = run_one_epoch(
-        model, test_loader, criterion, optimizer, scaler, device, train=False)
-    test_metrics = compute_test_metrics(test_labels, test_logits, task_cfg["task_type"])
-    print(f"  Test metrics: {test_metrics}")
+        # ── Final test on best weights ────────────────────────────────────────
+        best_state = torch.load(out_dir / "best_model.pt", map_location=device)
+        model.load_state_dict(best_state["net"])
+        _, _, test_logits, test_labels = run_one_epoch(
+            model, test_loader, criterion, optimizer, scaler, device, train=False)
+        test_metrics, test_preds, test_probs = compute_test_metrics(
+            test_labels, test_logits, task_cfg["task_type"])
+        print(f"  Test metrics: {test_metrics}")
 
-    # ── Save metrics.json (matches clinical pipeline schema) ─────────────────
-    config = {
-        "model_id":         MODEL_SLUG,
-        "pretrained_ckpt":  args.pretrained_ckpt,
-        "task":             args.task,
-        "task_description": task_cfg["description"],
-        "session":          cohort_label(args, task_cfg),
-        "long_mode":        args.long_mode,
-        "max_months":       args.max_months,
-        "session_policy":   task_cfg["session_policy"],
-        "seed":             args.seed,
-        "strategy":         args.strategy,
-        "epochs":           args.epochs,
-        "best_epoch":       best_epoch,
-        "lr":               args.lr,
-        "weight_decay":     args.weight_decay,
-        "batch_size":       args.batch_size,
-        "warmup_epochs":    args.warmup_epochs,
-        "patience":         args.patience,
-        "n_train":          int(len(train_df)),
-        "n_val":            int(len(val_df)),
-        "n_test":           int(len(test_df)),
-        "class_weights":    {i: round(float(w), 4) for i, w in enumerate(cw.tolist())},
-        "timestamp":        datetime.now().isoformat(),
-    }
-    with open(out_dir / "metrics.json", "w") as f:
-        json.dump({"config": config, "test_metrics": test_metrics}, f, indent=2)
+        # Confusion matrix + per-class P/R/F1/sensitivity/specificity/support
+        label_names = class_names_for(task_cfg)
+        test_diagnostics = compute_diagnostics(
+            test_labels, test_preds, num_labels, label_names)
 
-    print(f"  Saved: {out_dir}/metrics.json")
-    print("=" * 70)
+        # Per-sample predictions (rebuilds any confusion matrix / ROC later)
+        pred_df = pd.DataFrame({
+            "y_true": test_labels.astype(int),
+            "y_pred": test_preds.astype(int),
+        })
+        for c in range(test_probs.shape[1]):
+            pred_df[f"prob_{c}"] = test_probs[:, c]
+        pred_df.to_csv(out_dir / "test_predictions.csv", index=False)
+
+        # ── Save metrics.json (matches clinical pipeline schema) ─────────────
+        config = {
+            "model_id":         MODEL_SLUG,
+            "pretrained_ckpt":  args.pretrained_ckpt,
+            "task":             args.task,
+            "task_description": task_cfg["description"],
+            "session":          cohort_label(args, task_cfg),
+            "long_mode":        args.long_mode,
+            "max_months":       args.max_months,
+            "session_policy":   task_cfg["session_policy"],
+            "seed":             args.seed,
+            "strategy":         args.strategy,
+            "augment":          args.augment,
+            "aug_copies":       args.aug_copies,
+            "epochs":           args.epochs,
+            "best_epoch":       best_epoch,
+            "lr":               args.lr,
+            "weight_decay":     args.weight_decay,
+            "batch_size":       args.batch_size,
+            "warmup_epochs":    args.warmup_epochs,
+            "patience":         args.patience,
+            "drop_path_rate":   args.drop_path_rate,
+            "attn_dropout":     args.attn_dropout,
+            "label_smoothing":  args.label_smoothing,
+            "n_train":          int(len(train_df)),
+            "n_val":            int(len(val_df)),
+            "n_test":           int(len(test_df)),
+            "class_weights":    {i: round(float(w), 4) for i, w in enumerate(cw.tolist())},
+            "timestamp":        datetime.now().isoformat(),
+        }
+        with open(out_dir / "metrics.json", "w") as f:
+            json.dump({"config": config, "test_metrics": test_metrics,
+                       "test_diagnostics": test_diagnostics}, f, indent=2)
+
+        if wb is not None:
+            import wandb
+            wandb.log({f"test/{k}": v for k, v in test_metrics.items()
+                       if isinstance(v, (int, float))})
+            wandb.log({"test/confusion_matrix": wandb.plot.confusion_matrix(
+                y_true=test_labels.astype(int).tolist(),
+                preds=test_preds.astype(int).tolist(),
+                class_names=label_names)})
+            wandb.run.summary["best_val_loss"] = best_val
+            wandb.run.summary["best_epoch"] = best_epoch
+            for k, v in test_metrics.items():
+                if isinstance(v, (int, float)):
+                    wandb.run.summary[f"test_{k}"] = v
+            wandb.run.summary["confusion_matrix"] = test_diagnostics["confusion_matrix"]
+            wandb.run.summary["per_class"] = test_diagnostics["per_class"]
+
+        print(f"  Saved: {out_dir}/metrics.json")
+        print("=" * 70)
+    finally:
+        if wb is not None:
+            import wandb
+            wandb.finish()
 
 
 if __name__ == "__main__":
