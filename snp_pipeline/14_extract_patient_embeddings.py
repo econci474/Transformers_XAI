@@ -84,8 +84,8 @@ def main() -> None:
     ap.add_argument("--batch-size", type=int, default=4)
     ap.add_argument("--device", default="cuda",
                     help="cuda | cpu | cuda:0")
-    ap.add_argument("--max-length", type=int, default=8192,
-                    help="Tokeniser max_length / padding (default: 8192).")
+    ap.add_argument("--max-length", type=int, default=2048,
+                    help="Tokeniser max_length / padding (default: 2048; matches model pre-training).")
     ap.add_argument("--limit", type=int, default=None,
                     help="DEBUG: only process first N sequences.")
     args = ap.parse_args()

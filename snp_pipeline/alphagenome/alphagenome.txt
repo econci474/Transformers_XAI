@@ -1,0 +1,19 @@
+Publication: 
+https://www.nature.com/articles/s41586-025-10014-0#Sec17 
+
+Hugging face: 
+https://huggingface.co/google/alphagenome-all-folds 
+
+AlphaGenome fine tuning colab: 
+https://colab.research.google.com/drive/1QsKf6NUEhWFN2zBne274BmWtNIVi-YsI#scrollTo=tHjm3TE11a_H 
+
+
+tokenises at nucleotide level so 1 token is 1bp
+max input sequence length is 1 Mb, precisely up to about 2²⁰ bp
+
+Could try: 
+- frozen embeddings with classification head (with the various aggregation variants as per BMFM)
+- finetuning on the patient sequences directly for the classification task (ever converter)
+- for each GWAS significant SNP extract the AlphaGenome predicted eQTL (RNA expression) / aQTL (accessibility, ATAC) >> concatenate these, check if with MLP possible to predict z score for disease association
+once it sees patient sequence with the alleles, it should be able to produce like a polygenic risk score (PRS) that's based on the eQTLs/aQTLs of the GWAS hits, and correctly predict higher risk of ever converting to MCI/AD?? 
+Need to think about this idea more

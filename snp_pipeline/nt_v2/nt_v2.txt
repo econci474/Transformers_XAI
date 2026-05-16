@@ -1,0 +1,22 @@
+
+https://huggingface.co/InstaDeepAI/nucleotide-transformer-v2-500m-multi-species
+
+tokenized sequence have a maximum length of 2,048.
+
+Publication: https://www.nature.com/articles/s41592-024-02523-z#Sec42 
+
+Ever converted labels on stratified no cdr: 
+D:\ADNI_BIDS_project\derivatives\clinical\no_cdr_stratified_ever_convert\tabular\baseline\seed_{0,1,2}/{train,val,test}.csv 
+
+Scripts within the above directory: 
+1) test_ntv2_tokeniser_length
+The max sequence length should be the same as BMFM so hopefully will tokenise within that too
+NT uses 6-kmer tokenisation I believe
+2) downlaod model / what it requires including environment, if a different one needed from snp
+3) extract_patient_embeddings (from frozen model) 
+4) train classification head
+5) parameter efficient fine tuning training script on patient sequences (stratified no cdr cohort) to classify ever converter labels
+6) parameter efficient fine tuning training that takes the bmfm input sequences to do the signed regression task
+7) parameter efficient fine tuning taking that takes the bmfm input classification sequence dataset for the classification binned z-score task
+
+Forward & Reverse strands 

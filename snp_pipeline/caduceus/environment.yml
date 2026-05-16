@@ -1,0 +1,48 @@
+# Caduceus — Conda Environment
+# ================================================
+# Install:  conda env create -f environment.yml
+# Activate: conda activate caduceus
+#
+# IMPORTANT: mamba-ssm requires CUDA toolkit at build time.
+#   On CSD3: module load cuda/12.1 BEFORE running conda env create.
+#
+# Targets: Python 3.11, PyTorch 2.2+ with CUDA 12.1
+
+name: caduceus
+
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+  - defaults
+
+dependencies:
+  - python=3.11
+  - pytorch>=2.2
+  - torchvision
+  - torchaudio
+  - pytorch-cuda=12.1
+
+  # HuggingFace ecosystem
+  - pip
+
+  - pip:
+    - transformers>=4.38
+    - huggingface-hub>=0.20
+    - safetensors
+
+    # Caduceus-specific: Mamba SSM backbone
+    - mamba-ssm>=1.2.0
+    - causal-conv1d>=1.2.0
+
+    # Scientific
+    - numpy
+    - pandas
+    - scikit-learn
+    - scipy
+
+    # Monitoring
+    - tqdm
+
+    # Genomics
+    - pyfaidx

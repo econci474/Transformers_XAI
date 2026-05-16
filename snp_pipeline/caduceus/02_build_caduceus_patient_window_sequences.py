@@ -1,45 +1,37 @@
 """
-13_build_patient_window_sequences.py
-=====================================
-Build per-patient × per-window 8 kb chromosome-context DNA sequences for
-downstream BMFM embedding extraction.
+02_build_caduceus_patient_window_sequences.py
+==============================================
+Build per-patient × per-window DNA sequences sized for the Caduceus 131k
+context window (131,072 bp), rather than the BMFM 8 kb window.
 
-Window construction follows `08e_augment_bmfm_gwas_regression_by_chrom.py`:
-greedy packing of the 430 GW-sig SNPs into ≤ 8 kb windows per chromosome,
-with ≥ MIN_FLANK bp of flanking reference on each side.
+This is a direct adaptation of snp_pipeline/13_build_patient_window_sequences.py
+with MAX_LEN raised from 8,192 bp to 131,072 bp.  With single-nucleotide
+tokenisation (1 bp = 1 token), the full 131k context is available.
 
-Per-patient encoding (binary dosage; see [[project_*]] for rationale):
-  for each window of N SNPs at positions p_1 … p_N:
-    sequence = reference[p_1 - left_flank : p_N + right_flank]
-    for each SNP_k in the window:
-      if patient_dosage[SNP_k] >= 1:
-        sequence[p_k - win_start] = A1   (the allele in patient BIM A1 column)
-      else:
-        sequence[p_k - win_start] = REF  (A2 from BIM = reference; already in seq)
-
-Result: ONE sequence per (patient, window). For 616 patients × ~25 windows
-≈ 15.4 k sequences total.
+Effect:
+  - Fewer, much wider windows per chromosome (many SNPs grouped together).
+  - Far more flanking genomic context around each SNP cluster.
+  - Typically yields ~5–10 windows total (vs ~25 at 8 kb).
 
 Input
 -----
-  patient_genotypes/patient_dosage.tsv   (from 12_extract_patient_genotypes.py)
-  patient_genotypes/patient_dosage.bim   (allele table; A1 column = patient alt)
-  external_gwas_labels.tsv               (BP positions for the SNPs)
-  Homo_sapiens.GRCh38.dna.primary_assembly.fa
+  Same as 13_build_patient_window_sequences.py:
+    patient_genotypes/patient_dosage.tsv   (from 12_extract_patient_genotypes.py)
+    patient_genotypes/patient_dosage.bim   (allele table; A1 = patient alt)
+    external_gwas_labels.tsv               (BP positions for the SNPs)
+    Homo_sapiens.GRCh38.dna.primary_assembly.fa
 
 Output
 ------
-  bmfm_inputs/patient_window_sequences/
-    windows.tsv                          (one row per window; window_id, chrom,
-                                          start_1based, end_1based, n_snps,
-                                          snp_ids, snp_positions)
-    sequences/all_patients.csv           (PTID, window_id, sequence, n_carried)
+  D:/ADNI_SNP_Omni2.5M_20140220/caduceus_inputs/patient_window_sequences/
+    windows.tsv
+    sequences/all_patients.csv
 
 Usage
 -----
   conda activate snp
-  python snp_pipeline/13_build_patient_window_sequences.py
-  python snp_pipeline/13_build_patient_window_sequences.py --check
+  python snp_pipeline/caduceus/02_build_caduceus_patient_window_sequences.py
+  python snp_pipeline/caduceus/02_build_caduceus_patient_window_sequences.py --check
 """
 from __future__ import annotations
 
@@ -56,16 +48,19 @@ DOSAGE_TSV = BASE_DIR / "bmfm_inputs" / "patient_genotypes" / "patient_dosage.ts
 DOSAGE_BIM = BASE_DIR / "bmfm_inputs" / "patient_genotypes" / "patient_dosage.bim"
 LABELS_TSV = BASE_DIR / "bmfm_inputs" / "external_gwas_labels.tsv"
 FASTA = BASE_DIR / "Homo_sapiens.GRCh38.dna.primary_assembly.fa"
-OUT_DIR = BASE_DIR / "bmfm_inputs" / "patient_window_sequences"
 
-MAX_LEN = 8192    # bp per window; BPE tokeniser compresses ~8 kb into ≤2048 tokens
-MIN_FLANK = 50    # bp of REF flank on each side
+# Caduceus-specific output directory
+OUT_DIR = BASE_DIR / "caduceus_inputs" / "patient_window_sequences"
+
+# Caduceus 131k context: 131,072 bp per window (1 bp = 1 token)
+MAX_LEN = 131_072
+MIN_FLANK = 500    # more generous flanking for the wider context
 
 
 def pack_windows(snp_rows: list, max_inner_span: int) -> list[list]:
     """Greedy 1-D packing of SNP rows (sorted by BP) into ≤ max_inner_span groups.
 
-    Identical to the algorithm in 08e_augment_bmfm_gwas_regression_by_chrom.py.
+    Identical to the algorithm in 13_build_patient_window_sequences.py.
     """
     windows = []
     cur = [snp_rows[0]]
@@ -87,7 +82,8 @@ def main() -> None:
     p.add_argument("--labels", type=Path, default=LABELS_TSV)
     p.add_argument("--fasta", type=Path, default=FASTA)
     p.add_argument("--outdir", type=Path, default=OUT_DIR)
-    p.add_argument("--max-len", type=int, default=MAX_LEN, dest="max_len")
+    p.add_argument("--max-len", type=int, default=MAX_LEN, dest="max_len",
+                    help="Max window length in bp (default: 131,072 for Caduceus)")
     p.add_argument("--min-flank", type=int, default=MIN_FLANK, dest="min_flank")
     p.add_argument("--check", action="store_true",
                    help="Dry-run: print window stats only.")
@@ -117,13 +113,13 @@ def main() -> None:
     bim_lookup = {row.rsID: row for row in bim.itertuples(index=False)}
     print(f"  BIM: {len(bim)} rows")
 
-    # ── Load labels TSV (need BP for ordering; A1/A2 from BIM are authoritative) ─
+    # ── Load labels TSV ───────────────────────────────────────────────────────
     labels = pd.read_csv(args.labels, sep="\t", low_memory=False)
     sig = labels.loc[labels["label"] == 1, ["SNP", "CHR", "BP"]].copy()
     sig["CHR"] = sig["CHR"].astype(str)
     sig["BP"] = sig["BP"].astype(int)
     sig = sig.sort_values(["CHR", "BP"]).reset_index(drop=True)
-    sig = sig[sig["SNP"].isin(bim_lookup)]   # keep only SNPs in BIM
+    sig = sig[sig["SNP"].isin(bim_lookup)]
     print(f"  Label=1 SNPs with BIM match: {len(sig)}")
 
     # ── Open FASTA ────────────────────────────────────────────────────────────
@@ -141,10 +137,12 @@ def main() -> None:
         return None
 
     # ── Pack windows ──────────────────────────────────────────────────────────
-    print(f"\nPacking windows (max_len={args.max_len} bp, min_flank={args.min_flank} bp)")
-    windows_meta = []      # rows for windows.tsv
-    win_refseqs = {}       # window_id → (chrom_fa, win_start0, ref_seq)
-    win_snp_info = {}      # window_id → list of dicts {rsID, BP, offset, A1, A2}
+    print(f"\nPacking windows (max_len={args.max_len:,} bp, "
+          f"min_flank={args.min_flank:,} bp, "
+          f"inner_span_limit={inner_span_limit:,} bp)")
+    windows_meta = []
+    win_refseqs = {}
+    win_snp_info = {}
     win_id = 0
     skipped_chroms = []
 
@@ -165,8 +163,8 @@ def main() -> None:
             left_flank = args.min_flank + extra // 2
             right_flank = args.min_flank + (extra - extra // 2)
 
-            win_start0 = max(0, first_bp - 1 - left_flank)   # 0-based incl
-            win_end0 = min(chrom_len, last_bp + right_flank)  # 0-based excl
+            win_start0 = max(0, first_bp - 1 - left_flank)
+            win_end0 = min(chrom_len, last_bp + right_flank)
             ref_seq = str(fa[chrom_fa][win_start0:win_end0]).upper()
 
             snp_info = []
@@ -177,8 +175,8 @@ def main() -> None:
                     "rsID": row.SNP,
                     "BP": row.BP,
                     "offset": offset,
-                    "A1": bim_row.A1.upper(),  # patient alt
-                    "A2": bim_row.A2.upper(),  # REF
+                    "A1": bim_row.A1.upper(),
+                    "A2": bim_row.A2.upper(),
                 })
             window_id = f"chr{chrom}_w{wi:03d}"
             win_id += 1
@@ -205,7 +203,19 @@ def main() -> None:
     for w in windows_meta:
         win_by_chrom[w["chrom"]] += 1
     for c in sorted(win_by_chrom, key=lambda x: int(x) if x.isdigit() else 99):
-        print(f"    chr{c:>3}: {win_by_chrom[c]:>3} windows")
+        n_snps_in_chrom = sum(w["n_snps"] for w in windows_meta if w["chrom"] == c)
+        print(f"    chr{c:>3}: {win_by_chrom[c]:>2} windows  "
+              f"({n_snps_in_chrom:>3} SNPs)")
+
+    # Summary: compare to 8kb windows
+    total_snps = sum(w["n_snps"] for w in windows_meta)
+    avg_len = sum(w["length_bp"] for w in windows_meta) / max(len(windows_meta), 1)
+    avg_snps = total_snps / max(len(windows_meta), 1)
+    print(f"\n  Summary vs 8 kb windows:")
+    print(f"    Total windows:     {win_id} (was ~25 at 8 kb)")
+    print(f"    Avg window length: {avg_len:,.0f} bp (was ~8,192 bp)")
+    print(f"    Avg SNPs/window:   {avg_snps:.1f}")
+    print(f"    Total SNPs:        {total_snps}")
 
     if args.check:
         print(f"\n[check] would emit {len(dosage)} patients × {win_id} windows = "
@@ -223,7 +233,6 @@ def main() -> None:
     out_path = seqs_dir / "all_patients.csv"
 
     print(f"\nBuilding sequences  →  {out_path}")
-    # Keep dosage rows aligned with patient order from the TSV.
     rows_out = []
     for prow in dosage.itertuples(index=False):
         ptid = prow.PTID
@@ -233,7 +242,6 @@ def main() -> None:
             n_carried = 0
             for s in win_snp_info[window_id]:
                 d = dosage_for_pt.get(s["rsID"])
-                # NaN means missing genotype; treat as 0 (REF) — same as plink default.
                 if pd.notna(d) and int(d) >= 1:
                     if 0 <= s["offset"] < len(seq):
                         seq[s["offset"]] = s["A1"]
@@ -249,6 +257,7 @@ def main() -> None:
     out_df.to_csv(out_path, index=False)
     print(f"  Rows: {len(out_df)}  ({out_df['n_carried'].sum()} A1 substitutions total)")
     print(f"  Avg carried per (patient, window): {out_df['n_carried'].mean():.2f}")
+    print(f"  Avg sequence length: {out_df['sequence'].str.len().mean():,.0f} bp")
 
 
 if __name__ == "__main__":

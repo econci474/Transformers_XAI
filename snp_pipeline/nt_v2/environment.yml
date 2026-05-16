@@ -1,0 +1,46 @@
+# Nucleotide Transformer v2 — Conda Environment
+# ================================================
+# Install:  conda env create -f environment.yml
+# Activate: conda activate ntv2
+#
+# Targets: Python 3.11, PyTorch 2.2+ with CUDA 12.1
+# For CPU-only (local testing): change pytorch-cuda to cpuonly
+
+name: ntv2
+
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+  - defaults
+
+dependencies:
+  - python=3.11
+  - pytorch>=2.2
+  - torchvision
+  - torchaudio
+  - pytorch-cuda=12.1
+
+  # HuggingFace ecosystem
+  - pip
+
+  - pip:
+    - transformers>=4.38
+    - peft>=0.8
+    - accelerate>=0.26
+    - datasets>=2.16
+    - huggingface-hub>=0.20
+    - safetensors
+
+    # Scientific
+    - numpy
+    - pandas
+    - scikit-learn
+    - scipy
+
+    # Monitoring
+    - tensorboard
+    - tqdm
+
+    # Genomics (for tokeniser test with real FASTA)
+    - pyfaidx

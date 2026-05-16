@@ -1,0 +1,36 @@
+HF: https://huggingface.co/collections/kuleshov-group/caduceus
+
+caduceus-*_seqlen-1k_*    ≈ 1,024 bp input context
+caduceus-*_seqlen-131k_*  = 131,072 bp input context
+
+Caduceus uses single-nucleotide tokenisation, so for practical purposes:
+1 token ≈ 1 bp
+
+So seqlen-1k means about 1 kb DNA, and seqlen-131k means 131,072 bp DNA.
+
+ph = post-hoc conjoining
+pretrained with RC data augmentation, required both forward and RC at inference
+
+ps = parameter sharing
+RC equivariant 
+
+
+Primary - try 
+caduceus-ph_seqlen-131k-d_model-256-n_layer-16
+caduceus-ps_seqlen-131k-d_model-256-n_layer-16
+
+
+HF: https://huggingface.co/kuleshov-group/caduceus-ps_seqlen-131k_d_model-256_n_layer-16
+HF: https://huggingface.co/kuleshov-group/caduceus-ph_seqlen-131k_d_model-256_n_layer-16
+GitHub: https://github.com/kuleshov-group/caduceus 
+
+C:\Users\elena\iCloudDrive\Desktop\ACS_MPhil\Thesis\git\Transformers_XAI\snp_pipeline\caduceus
+
+Please can you write the following scripts within the above directory: 
+1) inspect the GitHub and understand if the currently available checkpoints on HF are trained on GRCh37 (as in the publication) or GRCh38.
+The GitHub gives instructions as to how to pretrain the model on GRCh38 if the checkpoints are indeed from 37. 
+2) We might need to create new patient window sequences that maximise the length context of 113k bp. 
+3) downlaod model / what it requires including environment, if a different one needed from snp
+4) extract_patient_embeddings (from frozen model, and compare the various aggregation strategies, mean / attention)) 
+5) train classification head
+6) parameter efficient fine tuning training script on patient sequences (stratified no cdr cohort) to classify ever converter labels

@@ -61,7 +61,7 @@ FASTA      = BASE_DIR / "Homo_sapiens.GRCh38.dna.primary_assembly.fa"
 OUT_SUBDIR = "bmfm_gwas_signed_regression_without_ukb"
 OUT_DIR    = BASE_DIR / "bmfm_inputs" / OUT_SUBDIR
 
-MAX_MODEL_LEN = 8192   # ModernBERT hard limit
+MAX_MODEL_LEN = 8192   # bp budget — BPE tokeniser compresses ~8 kb into ≤2048 tokens
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
 _p = argparse.ArgumentParser(
