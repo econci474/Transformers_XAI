@@ -57,6 +57,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import random
 import sys
 import time
@@ -259,6 +260,20 @@ class FocalLoss(nn.Module):
         return focal.mean()
 
 
+class WeightedBCE(nn.Module):
+    """Plain class-weighted BCE-with-logits (FocalLoss with gamma=0 is
+    mathematically identical; this is the explicit, named variant)."""
+    def __init__(self, pos_weight: float = 1.0):
+        super().__init__()
+        self.pos_weight = pos_weight
+
+    def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        return F.binary_cross_entropy_with_logits(
+            logits, targets.float(),
+            pos_weight=torch.tensor(self.pos_weight, device=logits.device),
+        )
+
+
 # ── BMFM model loading + LoRA injection ─────────────────────────────────────
 def load_bmfm_ref_with_lora(*, lora_r: int = 16, lora_alpha: int = 32,
                              lora_dropout: float = 0.1,
@@ -415,20 +430,46 @@ def patient_metrics(logits: np.ndarray, y: np.ndarray) -> dict:
     return out
 
 
+def init_wandb(args):
+    """Start a wandb run if --wandb; else return None (full no-op).
+
+    ImportError-safe; honours WANDB_API_KEY / WANDB_MODE / WANDB_DIR from env.
+    """
+    if not args.wandb:
+        return None
+    try:
+        import wandb
+    except ImportError:
+        print("  [warn] --wandb set but wandb not installed; continuing local-only.")
+        return None
+    mode = "frozen_live" if args.no_lora else "lora"
+    name = args.wandb_run_name or (
+        f"{args.label_mode}-{args.aggregation}-{args.per_window_pool}-{mode}-s{args.seed}")
+    return wandb.init(project=args.wandb_project, entity=args.wandb_entity,
+                      name=name, reinit=True,
+                      config={k: str(v) for k, v in vars(args).items()})
+
+
 # ── Train / eval loop ────────────────────────────────────────────────────────
-def run_inference(model: PatientClassifier, loader: DataLoader, device: torch.device
+_AMP_DTYPE = {"bf16": torch.bfloat16, "fp16": torch.float16, "fp32": None}
+
+
+def run_inference(model: PatientClassifier, loader: DataLoader, device: torch.device,
+                  *, precision: str = "bf16"
                   ) -> tuple[np.ndarray, np.ndarray, list[str]]:
     """Return (logits, y, ptids) on the given loader."""
     model.eval()
     all_logits, all_y, all_ptids = [], [], []
-    use_amp = device.type == "cuda"
+    amp_dtype = _AMP_DTYPE[precision]
+    use_amp = device.type == "cuda" and amp_dtype is not None
     with torch.no_grad():
         for batch in loader:
             ids  = batch["input_ids"].to(device)
             mask = batch["attention_mask"].to(device)
             cidx = batch["chrom_idx"].to(device)
             wmsk = batch["window_mask"].to(device)
-            with torch.autocast(device_type=device.type, dtype=torch.bfloat16,
+            with torch.autocast(device_type=device.type,
+                                 dtype=amp_dtype or torch.bfloat16,
                                  enabled=use_amp):
                 logits = model(ids, mask, cidx, wmsk)
             all_logits.append(logits.float().cpu().numpy())
@@ -441,24 +482,58 @@ def train_one(model: PatientClassifier, train_loader: DataLoader,
               val_loader: DataLoader, *, epochs: int, lr: float,
               weight_decay: float, focal_gamma: float, pos_weight: float,
               patience: int, device: torch.device,
-              out_dir: Path | None = None, log_every: int = 10):
-    """Train end-to-end with per-epoch partial-progress checkpointing.
+              out_dir: Path | None = None, log_every: int = 10,
+              loss_name: str = "focal", precision: str = "bf16",
+              wb=None, resume: bool = True):
+    """Train end-to-end with per-epoch partial-progress + resumable checkpoint.
 
-    If ``out_dir`` is given, after every epoch we write a fresh ``val_curve.csv``
-    and ``metrics_partial.json`` capturing the best val AUC so far. Lets us
-    survive a Colab disconnect mid-training; the next run sees the partial
-    artefacts (though it currently still re-trains from scratch — true
-    optimizer-state resume is overkill at 5 epochs).
+    If ``out_dir`` is given, after every epoch we write ``val_curve.csv``,
+    ``metrics_partial.json`` and an atomic ``last_checkpoint.pt`` (trainable
+    params only — LoRA+aggregator+head+optimizer+scaler, NOT the frozen 113M
+    base). On a fresh run (no metrics.json yet) we auto-resume from it, so a
+    Colab/SLURM 12 h disconnect continues instead of restarting. ``resume``
+    False forces from-scratch.
     """
     opt = torch.optim.AdamW([p for p in model.parameters() if p.requires_grad],
                             lr=lr, weight_decay=weight_decay)
-    loss_fn = FocalLoss(gamma=focal_gamma, pos_weight=pos_weight)
-    use_amp = device.type == "cuda"
+    if loss_name == "weighted_bce":
+        loss_fn = WeightedBCE(pos_weight=pos_weight)
+    else:
+        loss_fn = FocalLoss(gamma=focal_gamma, pos_weight=pos_weight)
+    amp_dtype = _AMP_DTYPE[precision]
+    use_amp = device.type == "cuda" and amp_dtype is not None
+    scaler = torch.cuda.amp.GradScaler(
+        enabled=(device.type == "cuda" and precision == "fp16"))
+
+    # Trainable-only state (keeps the resumable checkpoint small; the frozen
+    # base is reloaded identically from HF each run so only deltas need saving).
+    trainable_names = {n for n, p in model.named_parameters() if p.requires_grad}
+    def _trainable_sd():
+        return {k: v.detach().cpu().clone()
+                for k, v in model.state_dict().items() if k in trainable_names}
+
     best_auc, since = -1.0, 0
     best_state = None
     curve = []
+    start_ep = 0
     n_train_batches = len(train_loader)
-    for ep in range(epochs):
+
+    ckpt_path = (out_dir / "last_checkpoint.pt") if out_dir is not None else None
+    if resume and ckpt_path is not None and ckpt_path.exists():
+        try:
+            ck = torch.load(ckpt_path, map_location="cpu")
+            model.load_state_dict(ck["trainable"], strict=False)
+            opt.load_state_dict(ck["opt"])
+            scaler.load_state_dict(ck["scaler"])
+            best_auc = ck["best_auc"]; since = ck["since"]
+            best_state = ck["best_state"]; curve = ck["curve"]
+            start_ep = ck["epoch"] + 1
+            print(f"  [resume] continuing from epoch {start_ep} "
+                  f"(best_val_auc so far={best_auc:.3f})", flush=True)
+        except Exception as e:
+            print(f"  [warn] resume failed ({e}); training from scratch")
+
+    for ep in range(start_ep, epochs):
         t0 = time.time()
         model.train()
         running, n_batches = 0.0, 0
@@ -469,14 +544,16 @@ def train_one(model: PatientClassifier, train_loader: DataLoader,
             cidx = batch["chrom_idx"].to(device, non_blocking=True)
             wmsk = batch["window_mask"].to(device, non_blocking=True)
             y    = batch["y"].to(device, non_blocking=True)
-            with torch.autocast(device_type=device.type, dtype=torch.bfloat16,
+            with torch.autocast(device_type=device.type,
+                                 dtype=amp_dtype or torch.bfloat16,
                                  enabled=use_amp):
                 logits = model(ids, mask, cidx, wmsk)
             # Loss in fp32 for numerical stability (logits upcast out of autocast)
             loss = loss_fn(logits.float(), y)
             opt.zero_grad()
-            loss.backward()
-            opt.step()
+            scaler.scale(loss).backward()
+            scaler.step(opt)
+            scaler.update()
             running += float(loss.item())
             n_batches += 1
             # Heartbeat so an epoch is not silent for hours; also measures
@@ -489,7 +566,8 @@ def train_one(model: PatientClassifier, train_loader: DataLoader,
                       f"{bt:.2f}s/patient  epoch_elapsed={el/60:.1f}min",
                       flush=True)
         # eval
-        val_logits, val_y, _ = run_inference(model, val_loader, device)
+        val_logits, val_y, _ = run_inference(model, val_loader, device,
+                                             precision=precision)
         val_m = patient_metrics(val_logits, val_y)
         ep_t = time.time() - t0
         curve.append({"epoch": ep, "train_loss": running/max(1,n_batches),
@@ -500,12 +578,18 @@ def train_one(model: PatientClassifier, train_loader: DataLoader,
               f"({ep_t:.1f}s)")
         if val_m["auc"] > best_auc:
             best_auc = val_m["auc"]
-            best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
+            best_state = _trainable_sd()
             since = 0
         else:
             since += 1
 
-        # Per-epoch partial-progress checkpoint (for disconnect recovery)
+        if wb is not None:
+            import wandb
+            wandb.log({"epoch": ep, "train_loss": running/max(1, n_batches),
+                       **{f"val/{k}": v for k, v in val_m.items()
+                          if isinstance(v, (int, float))}})
+
+        # Per-epoch partial-progress + atomic resumable checkpoint
         if out_dir is not None:
             try:
                 pd.DataFrame(curve).to_csv(out_dir / "val_curve.csv", index=False)
@@ -517,12 +601,24 @@ def train_one(model: PatientClassifier, train_loader: DataLoader,
                     }, f, indent=2)
             except Exception as e:
                 print(f"  [warn] partial-save failed: {e}")
+            if ckpt_path is not None:
+                try:
+                    tmp = ckpt_path.with_suffix(".pt.tmp")
+                    torch.save({
+                        "epoch": ep, "best_auc": best_auc, "since": since,
+                        "curve": curve, "best_state": best_state,
+                        "trainable": _trainable_sd(),
+                        "opt": opt.state_dict(), "scaler": scaler.state_dict(),
+                    }, tmp)
+                    os.replace(tmp, ckpt_path)
+                except Exception as e:
+                    print(f"  [warn] checkpoint save failed: {e}")
 
         if since >= patience:
             print(f"  early stop at epoch {ep} (no val_auc improvement in {patience} epochs)")
             break
     if best_state is not None:
-        model.load_state_dict(best_state)
+        model.load_state_dict(best_state, strict=False)
     return model, {"best_val_auc": best_auc, "n_epochs": len(curve)}, curve
 
 
@@ -578,6 +674,25 @@ def main() -> None:
     ap.add_argument("--force", action="store_true",
                     help="Re-run even if metrics.json already exists in output_dir.")
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
+    # Loss selection
+    ap.add_argument("--loss", choices=["focal", "weighted_bce"], default="focal",
+                    help="focal = FocalLoss(gamma) (default, current behaviour); "
+                         "weighted_bce = BCEWithLogitsLoss(pos_weight) — same "
+                         "pos_weight, no focal modulation.")
+    # Numeric precision for the BMFM forward
+    ap.add_argument("--precision", choices=["bf16", "fp16", "fp32"], default="bf16",
+                    help="Autocast dtype. bf16 = current behaviour; fp32 disables "
+                         "autocast (safest on A100 vs the bf16-NaN history); "
+                         "fp16 uses a GradScaler.")
+    # Resumable training checkpoint (Colab/SLURM 12 h cap safety net)
+    ap.add_argument("--no_resume", action="store_true",
+                    help="Ignore any last_checkpoint.pt and train from scratch.")
+    # wandb (optional; full no-op unless --wandb)
+    ap.add_argument("--wandb", action="store_true",
+                    help="Log to Weights & Biases (no-op if absent / wandb missing).")
+    ap.add_argument("--wandb-project", default="bmfm_classification_lora_finetuning")
+    ap.add_argument("--wandb-entity", default=None)
+    ap.add_argument("--wandb-run-name", default=None)
     args = ap.parse_args()
 
     torch.manual_seed(args.seed)
@@ -673,7 +788,13 @@ def main() -> None:
         n_pos = labels["train"]["y"].sum()
         n_neg = len(labels["train"]) - n_pos
         args.pos_weight = float(n_neg / max(n_pos, 1))
-    print(f"[loss] focal γ={args.focal_gamma}  pos_weight={args.pos_weight:.3f}")
+    if args.loss == "weighted_bce":
+        print(f"[loss] weighted_bce  pos_weight={args.pos_weight:.3f}")
+    else:
+        print(f"[loss] focal γ={args.focal_gamma}  pos_weight={args.pos_weight:.3f}")
+    print(f"[precision] {args.precision}")
+
+    wb = init_wandb(args)
 
     # ── Train ───────────────────────────────────────────────────────────────
     t_train = time.time()
@@ -683,13 +804,17 @@ def main() -> None:
         focal_gamma=args.focal_gamma, pos_weight=args.pos_weight,
         patience=args.patience, device=device, out_dir=out_dir,
         log_every=args.log_every,
+        loss_name=args.loss, precision=args.precision, wb=wb,
+        resume=not args.no_resume,
     )
     train_min = (time.time() - t_train) / 60
     print(f"[train] done in {train_min:.1f} min  best_val_auc={fit_info['best_val_auc']:.3f}")
 
     # ── Final eval ──────────────────────────────────────────────────────────
-    val_logits, val_y, _   = run_inference(model, val_loader,  device)
-    test_logits, test_y, _ = run_inference(model, test_loader, device)
+    val_logits,  val_y,  val_ids  = run_inference(model, val_loader,  device,
+                                                  precision=args.precision)
+    test_logits, test_y, test_ids = run_inference(model, test_loader, device,
+                                                  precision=args.precision)
     val_m  = patient_metrics(val_logits,  val_y)
     test_m = patient_metrics(test_logits, test_y)
     print(f"\nVAL  : {val_m}")
@@ -703,6 +828,8 @@ def main() -> None:
             "pool": args.per_window_pool,   # for column-compat with script 15
             "aggregation": args.aggregation,
             "seed": args.seed,
+            "loss": args.loss,
+            "precision": args.precision,
             "fit_info": fit_info,
             "lora": {"r": args.lora_r, "alpha": args.lora_alpha, "dropout": args.lora_dropout},
             "train_minutes": train_min,
@@ -710,6 +837,32 @@ def main() -> None:
             "test": test_m,
         }, f, indent=2)
     pd.DataFrame(curve).to_csv(out_dir / "val_curve.csv", index=False)
+
+    # Per-sample predictions (rebuilds any confusion matrix / ROC later)
+    for _nm, _ids, _lg, _yt in (("val",  val_ids,  val_logits,  val_y),
+                                ("test", test_ids, test_logits, test_y)):
+        _prob = 1.0 / (1.0 + np.exp(-_lg))
+        pd.DataFrame({
+            "PTID":   _ids,
+            "y_true": _yt.astype(int),
+            "y_pred": (_lg > 0).astype(int),
+            "logit":  _lg,
+            "prob":   _prob,
+        }).to_csv(out_dir / f"{_nm}_predictions.csv", index=False)
+
+    if wb is not None:
+        import wandb
+        for _split, _m in (("val", val_m), ("test", test_m)):
+            wb.summary.update({f"{_split}_{k}": v for k, v in _m.items()
+                               if isinstance(v, (int, float))})
+        wb.summary["best_val_auc"] = fit_info["best_val_auc"]
+        for _split, _yt, _lg in (("val", val_y, val_logits),
+                                 ("test", test_y, test_logits)):
+            wandb.log({f"{_split}/confusion_matrix": wandb.plot.confusion_matrix(
+                y_true=_yt.astype(int).tolist(),
+                preds=(_lg > 0).astype(int).tolist(),
+                class_names=["neg", "pos"])})
+        wandb.finish()
     # Save the trainable head + aggregator (frozen base is not re-saved;
     # LoRA adapter saved separately below via save_pretrained).
     torch.save({
