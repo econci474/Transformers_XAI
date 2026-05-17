@@ -2,11 +2,23 @@
 04_supervised_finetuning_BrainMVP.py
 =====================================
 Supervised fine-tuning of BrainMVP UniFormer-Small (CVPR 2025 Highlight)
-on ADNI T1w MRIs preprocessed by 03_prepare_BrainMVP.py (96^3 @ 1.0mm RAS).
+on ADNI T1w MRIs preprocessed by 03_prepare_BrainMVP.py (128×128×64 @ 1mm).
 
-Mirrors the ViT pipeline (04_supervised_finetuning_ViT.py) exactly — same
-tasks, splits, augmentation modes, metrics, output format — but swaps the
-ViT-B encoder for BrainMVP's pretrained UniFormer-Small encoder.
+Input images are 128×128×64 NIfTI volumes. Following the BrainMVP paper
+(Appendix I, Classification), a spatial crop to 96×96×64 is applied:
+  - Training: RandSpatialCrop (data augmentation)
+  - Inference: CenterSpatialCrop (deterministic)
+
+Augmentation arms (--augment)
+-----------------------------
+  "none"           → CenterSpatialCrop 96×96×64 only (paper inference spec).
+                     No augmentation. Baseline control.
+  "stochastic"     → RandSpatialCrop 96×96×64 + stochastic flips/intensity
+                     (p=0.5). Each epoch sees a different random crop + maybe
+                     augmented version. This is the default.
+  "plus_original"  → ConcatDataset of center-cropped originals (no aug) PLUS
+                     aug_copies of (RandSpatialCrop + always-on aug with p=1.0).
+                     Train set size = (1 + aug_copies) × N.
 
 Architecture
 ------------
@@ -28,7 +40,9 @@ import pandas as pd
 import torch
 import torch.nn as nn
 from sklearn.utils.class_weight import compute_class_weight
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, ConcatDataset
+import monai.transforms as mt
+from monai.data import Dataset as MonaiDataset
 
 # Reuse ALL shared infrastructure from the ViT pipeline
 THIS_DIR = Path(__file__).resolve().parent
@@ -51,7 +65,6 @@ cohort_label = _vit.cohort_label
 class_names_for = _vit.class_names_for
 load_matched_labels = _vit.load_matched_labels
 session_to_months = _vit.session_to_months
-build_dataset = _vit.build_dataset
 patient_id_to_bids_sub = _vit.patient_id_to_bids_sub
 compute_test_metrics = _vit.compute_test_metrics
 compute_diagnostics = _vit.compute_diagnostics
@@ -59,12 +72,74 @@ run_one_epoch = _vit.run_one_epoch
 lr_at = _vit.lr_at
 init_wandb = _vit.init_wandb
 
+# ── BrainMVP spatial crop dimensions ──────────────────────────────────────────
+BMVP_CROP = (96, 96, 64)   # paper Appendix I: classification ROI
+
 # BrainMVP UniFormer
 from brain_mvp.uniformer_blocks import uniformer_small
 
 warnings.filterwarnings("ignore")
 
 MODEL_SLUG = "BrainMVP_uniformer"
+
+
+# ── BrainMVP-specific transforms ──────────────────────────────────────────────
+def _bmvp_eval_transform() -> mt.Compose:
+    """Inference: load → center crop 96×96×64 (paper spec)."""
+    return mt.Compose([
+        mt.LoadImaged(keys=["image"]),
+        mt.EnsureChannelFirstd(keys=["image"]),
+        mt.CenterSpatialCropd(keys=["image"], roi_size=BMVP_CROP),
+        mt.ToTensord(keys=["image"]),
+    ])
+
+
+def _bmvp_stochastic_transform(p_flip=0.5, p_scale=0.5, p_shift=0.5) -> mt.Compose:
+    """Training: random crop 96×96×64 + stochastic augmentation."""
+    return mt.Compose([
+        mt.LoadImaged(keys=["image"]),
+        mt.EnsureChannelFirstd(keys=["image"]),
+        mt.RandSpatialCropd(keys=["image"], roi_size=BMVP_CROP, random_center=True),
+        mt.RandFlipd(keys=["image"], prob=p_flip, spatial_axis=0),
+        mt.RandFlipd(keys=["image"], prob=p_flip, spatial_axis=1),
+        mt.RandFlipd(keys=["image"], prob=p_flip, spatial_axis=2),
+        mt.RandScaleIntensityd(keys=["image"], factors=0.1, prob=p_scale),
+        mt.RandShiftIntensityd(keys=["image"], offsets=0.1, prob=p_shift),
+        mt.ToTensord(keys=["image"]),
+    ])
+
+
+def build_bmvp_dataset(df, train: bool,
+                       augment: str = "stochastic", aug_copies: int = 1):
+    """
+    BrainMVP dataset with spatial crops per the paper.
+
+    Input volumes: 128×128×64 (from 03_prepare_BrainMVP.py).
+    Model input  : 96×96×64  (cropped here).
+
+    augment (train only; val/test always use CenterSpatialCrop):
+      "none"          → CenterSpatialCrop only, no augmentation (baseline)
+      "stochastic"    → RandSpatialCrop + stochastic aug (p=0.5 flips, etc.)
+      "plus_original" → ConcatDataset of center-cropped originals (no aug)
+                        + aug_copies of (RandSpatialCrop + always-on aug).
+                        Train set size = (1 + aug_copies) × N.
+    """
+    items = [{"image": row.image_path, "label": int(row.label)}
+             for row in df.itertuples()]
+
+    if not train or augment == "none":
+        return MonaiDataset(data=items, transform=_bmvp_eval_transform())
+    if augment == "stochastic":
+        return MonaiDataset(data=items, transform=_bmvp_stochastic_transform())
+    if augment == "plus_original":
+        k = max(1, int(aug_copies))
+        orig = MonaiDataset(data=items, transform=_bmvp_eval_transform())
+        aug = [MonaiDataset(data=items,
+                            transform=_bmvp_stochastic_transform(
+                                p_flip=1.0, p_scale=1.0, p_shift=1.0))
+               for _ in range(k)]
+        return ConcatDataset([orig] + aug)
+    raise ValueError(f"Unknown augment mode: {augment!r}")
 
 
 def _resolve_brainmvp_path(patient_id: str, viscode: str, inputs_dir: Path) -> str:
@@ -207,11 +282,14 @@ def parse_args():
     p.add_argument("--lr", type=float, default=None)
     p.add_argument("--weight_decay", type=float, default=1e-4)
     p.add_argument("--warmup_epochs", type=int, default=5)
-    p.add_argument("--patience", type=int, default=10)
+    p.add_argument("--patience", type=int, default=50)
     p.add_argument("--num_workers", type=int, default=2)
     p.add_argument("--max_subjects", type=int, default=None)
-    p.add_argument("--augment", type=str, default="random",
-                   choices=["none", "random", "plus_original"])
+    p.add_argument("--augment", type=str, default="stochastic",
+                   choices=["none", "stochastic", "plus_original"],
+                   help="none = center crop only; "
+                        "stochastic = random crop + p=0.5 aug; "
+                        "plus_original = center crop originals + K always-on aug copies")
     p.add_argument("--aug_copies", type=int, default=1)
     p.add_argument("--drop_rate", type=float, default=0.1,
                    help="Dropout before classification head")
@@ -223,10 +301,11 @@ def parse_args():
     p.add_argument("--wandb_run_name", type=str, default=None)
     args = p.parse_args()
 
+    # BrainMVP paper Appendix I: 200 epochs, lr=3e-4, cosine schedule
     if args.epochs is None:
-        args.epochs = 50 if args.strategy == "full_ft" else 70
+        args.epochs = 200 if args.strategy == "full_ft" else 100
     if args.lr is None:
-        args.lr = 1e-4 if args.strategy == "full_ft" else 1e-3
+        args.lr = 3e-4 if args.strategy == "full_ft" else 1e-3
 
     # Resolve session selection mode (same logic as ViT)
     if args.long is None:
@@ -323,17 +402,19 @@ def main():
     print(f"  Class weights: {dict(enumerate(cw.round(3).tolist()))}")
 
     # ── Dataloaders ───────────────────────────────────────────────────────────
+    train_ds = build_bmvp_dataset(train_df, train=True, augment=args.augment,
+                                  aug_copies=args.aug_copies)
+    print(f"  Train dataset size: {len(train_ds)} "
+          f"(augment={args.augment}, aug_copies={args.aug_copies})")
     train_loader = DataLoader(
-        build_dataset(train_df, train=True, augment=args.augment,
-                      aug_copies=args.aug_copies),
-        batch_size=args.batch_size, shuffle=True,
+        train_ds, batch_size=args.batch_size, shuffle=True,
         num_workers=args.num_workers, pin_memory=True, drop_last=True)
     val_loader = DataLoader(
-        build_dataset(val_df, train=False),
+        build_bmvp_dataset(val_df, train=False),
         batch_size=1, shuffle=False,
         num_workers=args.num_workers, pin_memory=True)
     test_loader = DataLoader(
-        build_dataset(test_df, train=False),
+        build_bmvp_dataset(test_df, train=False),
         batch_size=1, shuffle=False,
         num_workers=args.num_workers, pin_memory=True)
 

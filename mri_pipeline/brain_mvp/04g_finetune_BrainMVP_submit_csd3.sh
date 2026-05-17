@@ -23,8 +23,8 @@
 #
 # Usage:
 #   sbatch --export=ALL,AUGMENT=none          mri_pipeline/brain_mvp/04g_finetune_BrainMVP_submit_csd3.sh
-#   sbatch --export=ALL,AUGMENT=random        mri_pipeline/brain_mvp/04g_finetune_BrainMVP_submit_csd3.sh
-#   sbatch --export=ALL,AUGMENT=plus_original mri_pipeline/brain_mvp/04g_finetune_BrainMVP_submit_csd3.sh
+#   sbatch --export=ALL,AUGMENT=stochastic     mri_pipeline/brain_mvp/04g_finetune_BrainMVP_submit_csd3.sh
+#   sbatch --export=ALL,AUGMENT=plus_original  mri_pipeline/brain_mvp/04g_finetune_BrainMVP_submit_csd3.sh
 # =============================================================================
 
 # -- Environment --------------------------------------------------------------
@@ -35,7 +35,7 @@ source "$(conda info --base)/etc/profile.d/conda.sh"
 conda activate mri
 
 # -- Run-mode knobs -----------------------------------------------------------
-AUGMENT="${AUGMENT:-random}"
+AUGMENT="${AUGMENT:-stochastic}"
 AUG_COPIES="${AUG_COPIES:-1}"
 USE_WANDB="${USE_WANDB:-1}"
 WANDB_PROJECT="${WANDB_PROJECT:-brainmvp_finetune}"
