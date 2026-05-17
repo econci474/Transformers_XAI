@@ -484,6 +484,7 @@ def train_one(model: PatientClassifier, train_loader: DataLoader,
               patience: int, device: torch.device,
               out_dir: Path | None = None, log_every: int = 10,
               loss_name: str = "focal", precision: str = "bf16",
+              lr_scheduler: str = "none", warmup_frac: float = 0.0,
               wb=None, resume: bool = True):
     """Train end-to-end with per-epoch partial-progress + resumable checkpoint.
 
@@ -496,6 +497,19 @@ def train_one(model: PatientClassifier, train_loader: DataLoader,
     """
     opt = torch.optim.AdamW([p for p in model.parameters() if p.requires_grad],
                             lr=lr, weight_decay=weight_decay)
+    # Optional per-epoch LR schedule: linear warmup → cosine decay over
+    # `epochs`. Default "none" → scheduler is None → constant LR (unchanged).
+    scheduler = None
+    if lr_scheduler == "cosine":
+        _warm = max(1, math.ceil(warmup_frac * epochs)) if warmup_frac > 0 else 0
+        def _lr_lambda(e: int) -> float:
+            if _warm and e < _warm:
+                return float(e + 1) / float(_warm)
+            denom = max(1, epochs - _warm)
+            prog = min(1.0, (e - _warm) / denom)
+            return 0.5 * (1.0 + math.cos(math.pi * prog))
+        scheduler = torch.optim.lr_scheduler.LambdaLR(opt, _lr_lambda)
+        print(f"[sched] cosine LR: warmup={_warm} ep, decay over {epochs} ep")
     if loss_name == "weighted_bce":
         loss_fn = WeightedBCE(pos_weight=pos_weight)
     else:
@@ -525,6 +539,8 @@ def train_one(model: PatientClassifier, train_loader: DataLoader,
             model.load_state_dict(ck["trainable"], strict=False)
             opt.load_state_dict(ck["opt"])
             scaler.load_state_dict(ck["scaler"])
+            if scheduler is not None and ck.get("scheduler") is not None:
+                scheduler.load_state_dict(ck["scheduler"])
             best_auc = ck["best_auc"]; since = ck["since"]
             best_state = ck["best_state"]; curve = ck["curve"]
             start_ep = ck["epoch"] + 1
@@ -565,6 +581,10 @@ def train_one(model: PatientClassifier, train_loader: DataLoader,
                       f"loss={running/n_batches:.4f}  "
                       f"{bt:.2f}s/patient  epoch_elapsed={el/60:.1f}min",
                       flush=True)
+        # LR used for THIS epoch's steps (captured before stepping the sched)
+        cur_lr = opt.param_groups[0]["lr"]
+        if scheduler is not None:
+            scheduler.step()
         # eval
         val_logits, val_y, _ = run_inference(model, val_loader, device,
                                              precision=precision)
@@ -572,7 +592,7 @@ def train_one(model: PatientClassifier, train_loader: DataLoader,
         ep_t = time.time() - t0
         curve.append({"epoch": ep, "train_loss": running/max(1,n_batches),
                        "val_auc": val_m["auc"], "val_bACC": val_m["balanced_accuracy"],
-                       "elapsed_s": ep_t})
+                       "lr": cur_lr, "elapsed_s": ep_t})
         print(f"  ep {ep:>2}  train_loss={running/max(1,n_batches):.4f}  "
               f"val_auc={val_m['auc']:.3f}  val_bACC={val_m['balanced_accuracy']:.3f}  "
               f"({ep_t:.1f}s)")
@@ -586,6 +606,7 @@ def train_one(model: PatientClassifier, train_loader: DataLoader,
         if wb is not None:
             import wandb
             wandb.log({"epoch": ep, "train_loss": running/max(1, n_batches),
+                       "lr": cur_lr,
                        **{f"val/{k}": v for k, v in val_m.items()
                           if isinstance(v, (int, float))}})
 
@@ -609,6 +630,8 @@ def train_one(model: PatientClassifier, train_loader: DataLoader,
                         "curve": curve, "best_state": best_state,
                         "trainable": _trainable_sd(),
                         "opt": opt.state_dict(), "scaler": scaler.state_dict(),
+                        "scheduler": (scheduler.state_dict()
+                                      if scheduler is not None else None),
                     }, tmp)
                     os.replace(tmp, ckpt_path)
                 except Exception as e:
@@ -669,6 +692,13 @@ def main() -> None:
                          "patients to validate the pipeline + measure per-patient cost.")
     ap.add_argument("--log-every", type=int, default=10,
                     help="Print a training heartbeat every N patients (0 = epoch-only).")
+    # LR schedule (optional; default 'none' = constant LR = prior behaviour)
+    ap.add_argument("--lr-scheduler", choices=["none", "cosine"], default="none",
+                    help="none = constant LR (default, byte-identical to prior runs); "
+                         "cosine = linear warmup then cosine decay over --epochs.")
+    ap.add_argument("--warmup-frac", type=float, default=0.0,
+                    help="Fraction of --epochs used for linear LR warmup when "
+                         "--lr-scheduler cosine (e.g. 0.02 ≈ 1 epoch of 50).")
     # Output
     ap.add_argument("--output-root", type=Path, required=True)
     ap.add_argument("--force", action="store_true",
@@ -804,7 +834,8 @@ def main() -> None:
         focal_gamma=args.focal_gamma, pos_weight=args.pos_weight,
         patience=args.patience, device=device, out_dir=out_dir,
         log_every=args.log_every,
-        loss_name=args.loss, precision=args.precision, wb=wb,
+        loss_name=args.loss, precision=args.precision,
+        lr_scheduler=args.lr_scheduler, warmup_frac=args.warmup_frac, wb=wb,
         resume=not args.no_resume,
     )
     train_min = (time.time() - t_train) / 60
