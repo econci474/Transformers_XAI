@@ -129,7 +129,7 @@ python "${SCRIPT_DIR}/04_supervised_finetuning_BrainMVP.py" \
     --data_dir            "${DATA_DIR}" \
     --brainmvp_inputs_dir "${BRAINMVP_INPUTS_DIR}" \
     --out_dir             "${OUT_DIR}" \
-    --num_workers         2
+    --num_workers         0
 
 EXIT_CODE=$?
 

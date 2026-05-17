@@ -233,16 +233,24 @@ def load_brainmvp_pretrained(model: BrainMVPClassifier, ckpt_path: str):
         state = ckpt
 
     # Extract encoder.uniformer.* keys
-    prefix = "encoder.uniformer."
+    # Handle 'module.' prefix from DataParallel wrapping
+    prefix_candidates = ["encoder.uniformer.", "module.encoder.uniformer."]
     encoder_state = {}
-    for k, v in state.items():
-        if k.startswith(prefix):
-            encoder_state[k[len(prefix):]] = v
+    matched_prefix = None
+    for prefix in prefix_candidates:
+        for k, v in state.items():
+            if k.startswith(prefix):
+                encoder_state[k[len(prefix):]] = v
+                matched_prefix = prefix
+        if encoder_state:
+            break
 
     if not encoder_state:
-        # Maybe keys don't have the prefix — try loading directly
-        print(f"  [WARN] No '{prefix}' keys found; attempting direct load")
+        # Maybe keys don't have any prefix — try loading directly
+        print(f"  [WARN] No encoder.uniformer keys found; attempting direct load")
         encoder_state = state
+    else:
+        print(f"  Matched prefix: '{matched_prefix}'")
 
     loaded = model.encoder.load_state_dict(encoder_state, strict=False)
     n_loaded = len(encoder_state) - len(loaded.unexpected_keys)
@@ -283,7 +291,8 @@ def parse_args():
     p.add_argument("--weight_decay", type=float, default=1e-4)
     p.add_argument("--warmup_epochs", type=int, default=5)
     p.add_argument("--patience", type=int, default=50)
-    p.add_argument("--num_workers", type=int, default=2)
+    p.add_argument("--num_workers", type=int, default=0,
+                   help="DataLoader workers (0=main process; avoids bus errors)")
     p.add_argument("--max_subjects", type=int, default=None)
     p.add_argument("--augment", type=str, default="stochastic",
                    choices=["none", "stochastic", "plus_original"],
