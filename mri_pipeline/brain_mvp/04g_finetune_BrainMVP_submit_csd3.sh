@@ -8,7 +8,7 @@
 #SBATCH --ntasks=1
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=3
-#SBATCH --mem=32G
+#SBATCH --mem=48G
 #SBATCH --time=12:00:00
 #SBATCH --array=0-17
 # =============================================================================
@@ -22,8 +22,8 @@
 # Output layout: brain_mvp_uniformer/aug_${AUGMENT}/BrainMVP_uniformer/...
 #
 # Usage:
-#   sbatch --export=ALL,AUGMENT=none         mri_pipeline/brain_mvp/04g_finetune_BrainMVP_submit_csd3.sh
-#   sbatch --export=ALL,AUGMENT=random       mri_pipeline/brain_mvp/04g_finetune_BrainMVP_submit_csd3.sh
+#   sbatch --export=ALL,AUGMENT=none          mri_pipeline/brain_mvp/04g_finetune_BrainMVP_submit_csd3.sh
+#   sbatch --export=ALL,AUGMENT=random        mri_pipeline/brain_mvp/04g_finetune_BrainMVP_submit_csd3.sh
 #   sbatch --export=ALL,AUGMENT=plus_original mri_pipeline/brain_mvp/04g_finetune_BrainMVP_submit_csd3.sh
 # =============================================================================
 
@@ -129,7 +129,7 @@ python "${SCRIPT_DIR}/04_supervised_finetuning_BrainMVP.py" \
     --data_dir            "${DATA_DIR}" \
     --vit_inputs_dir      "${VIT_INPUTS_DIR}" \
     --out_dir             "${OUT_DIR}" \
-    --num_workers         "${SLURM_CPUS_PER_TASK}"
+    --num_workers         2
 
 EXIT_CODE=$?
 
