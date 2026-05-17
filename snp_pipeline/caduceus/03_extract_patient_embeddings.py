@@ -122,16 +122,34 @@ def main() -> None:
     hidden_dim = None
     buffers: dict[str, np.ndarray] = {}
 
+    # ── Resume from checkpoint if available ───────────────────────────────────
+    ckpt_path = out_dir / "checkpoint.npz"
+    start_batch = 0
+    if ckpt_path.exists():
+        print(f"\n  Resuming from checkpoint: {ckpt_path}")
+        ckpt = np.load(ckpt_path, allow_pickle=True)
+        start_batch = int(ckpt["completed_batches"])
+        hidden_dim = int(ckpt["hidden_dim"])
+        for k in ckpt.files:
+            if k.startswith("mean__"):
+                ptid = k[len("mean__"):]
+                buffers[ptid] = ckpt[k]
+        print(f"  Loaded {len(buffers)} patients, resuming from batch {start_batch}/{n_batches}")
+
+    CKPT_EVERY = 500  # save checkpoint every N batches
+
     # ── Forward in batches ────────────────────────────────────────────────────
     n_batches = (len(df) + args.batch_size - 1) // args.batch_size
-    print(f"\nForward pass: {n_batches} batches of {args.batch_size}")
+    print(f"\nForward pass: {n_batches} batches of {args.batch_size}"
+          f" (starting from batch {start_batch})")
 
     is_ph = args.variant == "ph"
     if is_ph:
         print("  [info] ph variant: averaging fwd + RC embeddings")
 
     with torch.no_grad():
-        for b_idx in tqdm(range(n_batches), desc="Embedding"):
+        for b_idx in tqdm(range(start_batch, n_batches), desc="Embedding",
+                          initial=start_batch, total=n_batches):
             chunk = df.iloc[b_idx * args.batch_size:(b_idx + 1) * args.batch_size]
             seqs = chunk["sequence"].tolist()
             ptids = chunk["PTID"].tolist()
@@ -142,7 +160,8 @@ def main() -> None:
                 seqs,
                 return_tensors="pt",
                 padding=True,
-                truncation=False,
+                truncation=True,
+                max_length=131072,
             )
             input_ids = tokenized["input_ids"].to(device)
             # Caduceus tokenizer may not return attention_mask; create from input_ids
@@ -166,7 +185,8 @@ def main() -> None:
                     rc_seqs,
                     return_tensors="pt",
                     padding=True,
-                    truncation=False,
+                    truncation=True,
+                    max_length=131072,
                 )
                 rc_ids = rc_tok["input_ids"].to(device)
                 if "attention_mask" in rc_tok:
@@ -200,7 +220,17 @@ def main() -> None:
                                             np.nan, dtype=np.float32)
                 buffers[ptid][win_idx[wid]] = vec
 
-    # ── Save (dual-pool format: mean__<PTID> keys) ───────────────────────────
+            # Periodic checkpoint
+            if (b_idx + 1) % CKPT_EVERY == 0:
+                _save_ckpt = {"completed_batches": np.array(b_idx + 1),
+                              "hidden_dim": np.array(hidden_dim),
+                              "window_ids": np.array(window_ids_unique)}
+                for pt, arr in buffers.items():
+                    _save_ckpt[f"mean__{pt}"] = arr
+                np.savez_compressed(ckpt_path, **_save_ckpt)
+                tqdm.write(f"  [ckpt] saved at batch {b_idx + 1}/{n_batches}")
+
+    # ── Save final output ─────────────────────────────────────────────────────
     print(f"\nWriting {out_npz}")
     save_dict = {"window_ids": np.array(window_ids_unique),
                  "upstream": np.array(tag)}
@@ -208,6 +238,11 @@ def main() -> None:
         save_dict[f"mean__{ptid}"] = arr
     np.savez_compressed(out_npz, **save_dict)
     print(f"  {len(buffers)} patient arrays, each {n_windows} × {hidden_dim}")
+
+    # Clean up checkpoint now that final output is saved
+    if ckpt_path.exists():
+        ckpt_path.unlink()
+        print("  Removed checkpoint (final output saved).")
 
     nan_pat = [pt for pt, arr in buffers.items() if np.isnan(arr).any()]
     if nan_pat:

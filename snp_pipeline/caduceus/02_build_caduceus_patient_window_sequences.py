@@ -52,8 +52,9 @@ FASTA = BASE_DIR / "Homo_sapiens.GRCh38.dna.primary_assembly.fa"
 # Caduceus-specific output directory
 OUT_DIR = BASE_DIR / "caduceus_inputs" / "patient_window_sequences"
 
-# Caduceus 131k context: 131,072 bp per window (1 bp = 1 token)
-MAX_LEN = 131_072
+# Caduceus 131k context: model accepts 131,072 tokens.  The tokenizer adds
+# BOS + EOS (2 special tokens), so the raw sequence must be <= 131,070 bp.
+MAX_LEN = 131_070
 MIN_FLANK = 50    # same flanking as before for BMFM
 
 
