@@ -63,8 +63,8 @@ def hp_tag(p: dict, k: int, seed: int) -> str:
 
 
 def select_windows_for_top_snps(wins_df: pd.DataFrame, gwas_labels_path: Path,
-                                 k: int) -> tuple[list[str], pd.DataFrame]:
-    """Return (top_snps, kept_rows). Rank SNPs that appear in ≥1 window by
+                                 k: int) -> tuple[list[str], pd.DataFrame, pd.DataFrame]:
+    """Return (top_snps, kept_rows, snps_rows). Rank SNPs that appear in ≥1 window by
     |z_score| (deterministic tie-break by SNP id), take top-k, keep the
     windows containing any of them. No re-windowing."""
     g = pd.read_csv(gwas_labels_path, sep="\t", low_memory=False)
@@ -84,7 +84,19 @@ def select_windows_for_top_snps(wins_df: pd.DataFrame, gwas_labels_path: Path,
     # provenance: per-kept-window max|z| over its SNPs
     kept["max_abs_z"] = kept["snp_ids"].map(
         lambda s: max((zmap.get(x, 0.0) for x in str(s).split("|")), default=0.0))
-    return top_snps, kept
+    # SNP-level provenance: the ORIGINAL external_gwas_labels rows for the
+    # top-k SNPs (all columns: CHR, BP, REF, EA, OA, z_score, …) + abs_z +
+    # the window(s) each SNP falls in, ordered by |z| (selection order).
+    g = g.copy()
+    g["SNP"] = g["SNP"].astype(str)
+    snps_df = g[g["SNP"].isin(set(top_snps))].drop_duplicates("SNP").copy()
+    snps_df["abs_z"] = snps_df["SNP"].map(zmap)
+    snps_df["window_ids"] = snps_df["SNP"].map(
+        lambda s: "|".join(snp_to_windows.get(s, [])))
+    _rank = {s: i for i, s in enumerate(top_snps)}
+    snps_df = (snps_df.assign(_r=snps_df["SNP"].map(_rank))
+                      .sort_values("_r").drop(columns="_r"))
+    return top_snps, kept, snps_df
 
 
 def main() -> None:
@@ -106,32 +118,45 @@ def main() -> None:
     ap.add_argument("--wandb-project", default="bmfm_classification_lora_ft_topk")
     ap.add_argument("--device", default=None, help="pass-through to script 18")
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--write-selection-only", action="store_true",
+                    help="Write the Top-K provenance TSVs (windows + SNP-level) "
+                         "then exit — no training. Useful to regenerate the "
+                         "selection locally.")
     args = ap.parse_args()
 
     args.base_root.mkdir(parents=True, exist_ok=True)
 
     # ── Build the Top-K-SNP filtered windows.tsv (once, shared by all points) ──
     wins_df = pd.read_csv(args.windows, sep="\t")
-    top_snps, kept = select_windows_for_top_snps(
+    top_snps, kept, snps_df = select_windows_for_top_snps(
         wins_df, Path(args.gwas_labels), args.top_k)
     kept_in_order = wins_df[wins_df["window_id"].astype(str).isin(
         set(kept["window_id"].astype(str)))].copy()           # original order
     chroms = sorted(kept_in_order["chrom"].astype(str).unique(),
                     key=lambda c: int(c) if c.isdigit() else 99)
     filt_windows = args.base_root / f"topk{args.top_k}_windows.tsv"
-    prov = args.base_root / f"topk{args.top_k}_selected.tsv"
+    prov = args.base_root / f"topk{args.top_k}_selected.tsv"          # window-level
+    snps_prov = args.base_root / f"topk{args.top_k}_snps.tsv"         # SNP-level
     print(f"[topk] {len(top_snps)} top SNPs → {len(kept_in_order)}/{len(wins_df)} "
           f"windows over chroms {chroms}")
     print(f"[topk] top SNPs (by |z|): {', '.join(top_snps[:10])}"
           f"{' …' if len(top_snps) > 10 else ''}")
-    if args.dry_run:
-        print(f"[dry-run] would write {filt_windows} and {prov}")
+    do_write = (not args.dry_run) or args.write_selection_only
+    if not do_write:
+        print(f"[dry-run] would write {filt_windows}, {prov}, {snps_prov}")
     else:
         kept_in_order[wins_df.columns].to_csv(filt_windows, sep="\t", index=False)
         kept.sort_values("max_abs_z", ascending=False)[
             ["window_id", "chrom", "max_abs_z", "snp_ids"]
         ].to_csv(prov, sep="\t", index=False)
-        print(f"[topk] wrote {filt_windows}\n[topk] wrote {prov}")
+        snps_df.to_csv(snps_prov, sep="\t", index=False)
+        print(f"[topk] wrote {filt_windows}\n[topk] wrote {prov}"
+              f"\n[topk] wrote {snps_prov}  ({len(snps_df)} SNPs, "
+              f"cols: {', '.join(map(str, snps_df.columns))})")
+
+    if args.write_selection_only:
+        print("[selection-only] provenance written; not launching the sweep.")
+        return
 
     points = TIER1 + (TIER2_EXTRA if args.tier == 2 else [])
     grid = [(p, s) for p in points for s in args.seeds]
