@@ -2,7 +2,7 @@
 04_supervised_finetuning_BrainMVP.py
 =====================================
 Supervised fine-tuning of BrainMVP UniFormer-Small (CVPR 2025 Highlight)
-on ADNI T1w MRIs preprocessed by 03_prepare_ViT.py (128^3 @ 1.75mm RAS).
+on ADNI T1w MRIs preprocessed by 03_prepare_BrainMVP.py (96^3 @ 1.0mm RAS).
 
 Mirrors the ViT pipeline (04_supervised_finetuning_ViT.py) exactly — same
 tasks, splits, augmentation modes, metrics, output format — but swaps the
@@ -50,9 +50,9 @@ TASK_CONFIG = _vit.TASK_CONFIG
 cohort_label = _vit.cohort_label
 class_names_for = _vit.class_names_for
 load_matched_labels = _vit.load_matched_labels
-load_split_from_matched = _vit.load_split_from_matched
 session_to_months = _vit.session_to_months
 build_dataset = _vit.build_dataset
+patient_id_to_bids_sub = _vit.patient_id_to_bids_sub
 compute_test_metrics = _vit.compute_test_metrics
 compute_diagnostics = _vit.compute_diagnostics
 run_one_epoch = _vit.run_one_epoch
@@ -65,6 +65,58 @@ from brain_mvp.uniformer_blocks import uniformer_small
 warnings.filterwarnings("ignore")
 
 MODEL_SLUG = "BrainMVP_uniformer"
+
+
+def _resolve_brainmvp_path(patient_id: str, viscode: str, inputs_dir: Path) -> str:
+    """Resolve image path for BrainMVP 128x64 preprocessed NIfTIs."""
+    sub = patient_id_to_bids_sub(patient_id)
+    ses_label = f"ses-{viscode}"
+    return str(inputs_dir / sub / ses_label /
+               f"{sub}_{ses_label}_space-BrainMVP128x64_desc-preproc_T1w.nii.gz")
+
+
+def load_split_brainmvp(baseline_csv, matched_df, task_cfg, inputs_dir,
+                        session_filter=None, max_months=None):
+    """Same as ViT load_split_from_matched but uses BrainMVP96 file paths."""
+    # Get the labelled rows from the ViT pipeline loader (which checks file existence)
+    # We can't reuse it directly since it hardcodes ViT128 filenames,
+    # so we replicate the logic with our path resolver.
+    import re as _re
+    from bidsification.exclusions import is_excluded_subject
+
+    subjects = pd.read_csv(baseline_csv, usecols=["Patient_ID"])["Patient_ID"].unique().tolist()
+    df = matched_df[matched_df["Patient_ID"].isin(subjects)].copy()
+
+    if session_filter is not None:
+        df = df[df["bids_ses"] == session_filter].copy()
+    elif max_months is not None:
+        df["_months"] = df["bids_ses"].map(session_to_months)
+        df = df.dropna(subset=["_months"])
+        df = df[df["_months"] <= max_months].drop(columns=["_months"])
+
+    if task_cfg["session_policy"] == "baseline_anchored":
+        cap = int(task_cfg.get("label_anchor_max_months", 0))
+        df["_months"] = df["bids_ses"].map(session_to_months)
+        df = df.dropna(subset=["_months"])
+        df = df[df["_months"] <= cap].drop(columns=["_months"]).copy()
+    elif task_cfg["session_policy"] == "baseline_only":
+        df = df[df["bids_ses"] == "bl"].copy()
+
+    if task_cfg["filter_non_ad"]:
+        df = df[df["Label_bl_multi"] != "AD"].copy()
+
+    df = df[~df["Patient_ID"].apply(is_excluded_subject)].copy()
+    df = _vit._resolve_labels(df, task_cfg)
+
+    df["image_path"] = df.apply(
+        lambda r: _resolve_brainmvp_path(r["Patient_ID"], r["bids_ses"], inputs_dir),
+        axis=1)
+    have = df["image_path"].apply(os.path.isfile)
+    n_missing = int((~have).sum())
+    df = df[have].copy()
+
+    out_cols = ["Patient_ID", "bids_ses", "label", "image_path"]
+    return df.reset_index(drop=True)[out_cols], n_missing
 
 
 # ── BrainMVP classifier wrapper ──────────────────────────────────────────────
@@ -146,8 +198,8 @@ def parse_args():
                            r"\master_mri_clinical_matched_labels.csv")
     p.add_argument("--data_dir", type=str,
                    default=r"D:\ADNI_BIDS_project\derivatives\clinical\verbose\baseline")
-    p.add_argument("--vit_inputs_dir", type=str,
-                   default=r"D:\ADNI_BIDS_project\derivatives\vit_inputs")
+    p.add_argument("--brainmvp_inputs_dir", type=str,
+                   default=r"D:\ADNI_BIDS_project\derivatives\brainmvp_inputs")
     p.add_argument("--out_dir", type=str, required=True,
                    help="Output root (e.g. /path/to/brain_mvp_uniformer/aug_none)")
     p.add_argument("--epochs", type=int, default=None)
@@ -221,28 +273,28 @@ def main():
 
     # ── Load splits (identical to ViT) ────────────────────────────────────────
     seed_dir = Path(args.data_dir) / f"seed_{args.seed}"
-    vit_dir = Path(args.vit_inputs_dir)
+    mvp_dir = Path(args.brainmvp_inputs_dir)
     matched_df = load_matched_labels(args.matched_labels_csv)
 
     if args.long_mode is None:
-        train_df, n_miss_tr = load_split_from_matched(
-            seed_dir / "train.csv", matched_df, task_cfg, vit_dir,
+        train_df, n_miss_tr = load_split_brainmvp(
+            seed_dir / "train.csv", matched_df, task_cfg, mvp_dir,
             session_filter=args.session)
-        val_df, n_miss_va = load_split_from_matched(
-            seed_dir / "val.csv", matched_df, task_cfg, vit_dir,
+        val_df, n_miss_va = load_split_brainmvp(
+            seed_dir / "val.csv", matched_df, task_cfg, mvp_dir,
             session_filter=args.session)
-        test_df, n_miss_te = load_split_from_matched(
-            seed_dir / "test.csv", matched_df, task_cfg, vit_dir,
+        test_df, n_miss_te = load_split_brainmvp(
+            seed_dir / "test.csv", matched_df, task_cfg, mvp_dir,
             session_filter=args.session)
     else:
-        train_df, n_miss_tr = load_split_from_matched(
-            seed_dir / "train.csv", matched_df, task_cfg, vit_dir,
+        train_df, n_miss_tr = load_split_brainmvp(
+            seed_dir / "train.csv", matched_df, task_cfg, mvp_dir,
             max_months=args.max_months)
-        val_df, n_miss_va = load_split_from_matched(
-            seed_dir / "val.csv", matched_df, task_cfg, vit_dir,
+        val_df, n_miss_va = load_split_brainmvp(
+            seed_dir / "val.csv", matched_df, task_cfg, mvp_dir,
             max_months=args.max_months)
-        test_df, n_miss_te = load_split_from_matched(
-            seed_dir / "test.csv", matched_df, task_cfg, vit_dir,
+        test_df, n_miss_te = load_split_brainmvp(
+            seed_dir / "test.csv", matched_df, task_cfg, mvp_dir,
             max_months=args.max_months)
 
     if args.max_subjects:

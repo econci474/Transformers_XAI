@@ -10,7 +10,7 @@
 #SBATCH --cpus-per-task=3
 #SBATCH --mem=48G
 #SBATCH --time=12:00:00
-#SBATCH --array=0-17
+#SBATCH --array=0-17%4
 # =============================================================================
 # 04g_finetune_BrainMVP_submit_csd3.sh
 # =============================================================================
@@ -44,7 +44,7 @@ export WANDB_MODE="${WANDB_MODE:-offline}"
 # -- Hardcoded paths ----------------------------------------------------------
 SCRIPT_DIR="/home/ec474/rds/hpc-work/Transformers_XAI/mri_pipeline/brain_mvp"
 PRETRAINED_CKPT="/home/ec474/rds/hpc-work/ViT_pretrained/BrainMVP_uniformer.pt"
-VIT_INPUTS_DIR="/home/ec474/rds/hpc-work/ADNI_SMRIPREP/derivatives/vit_inputs"
+BRAINMVP_INPUTS_DIR="/home/ec474/rds/hpc-work/ADNI_SMRIPREP/derivatives/brainmvp_inputs"
 
 # VISCODE2-aligned master from 03c
 MATCHED_LABELS_CSV="/home/ec474/rds/hpc-work/ADNI_SMRIPREP/derivatives/mri_clinical_matched/viscode_2_aligned/master_mri_clinical_matched_viscode2.csv"
@@ -127,7 +127,7 @@ python "${SCRIPT_DIR}/04_supervised_finetuning_BrainMVP.py" \
     --pretrained_ckpt     "${PRETRAINED_CKPT}" \
     --matched_labels_csv  "${MATCHED_LABELS_CSV}" \
     --data_dir            "${DATA_DIR}" \
-    --vit_inputs_dir      "${VIT_INPUTS_DIR}" \
+    --brainmvp_inputs_dir "${BRAINMVP_INPUTS_DIR}" \
     --out_dir             "${OUT_DIR}" \
     --num_workers         2
 
