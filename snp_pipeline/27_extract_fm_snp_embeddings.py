@@ -79,29 +79,76 @@ def mean_pool(hidden, attn):                              # nt_v2/03 L26-29
     return (hidden * m).sum(1) / m.sum(1).clamp_min(1)
 
 
-def _load_bmfm(model_id, device):                         # 14 L103-139
-    from bmfm_targets.config.main_config import load_checkpoint_configs
-    from bmfm_targets.models.model_utils import load_bmfm_model
-    from bmfm_targets.tokenization.multifield_tokenizer import (
-        MultiFieldTokenizer)
-    cfg = load_checkpoint_configs(model_id)
-    model = load_bmfm_model(cfg)
-    if hasattr(model, "config"):
-        model.config._attn_implementation = "sdpa"
-    tok = (MultiFieldTokenizer.from_pretrained(model_id)
-           if hasattr(MultiFieldTokenizer, "from_pretrained") else None)
-    if tok is None:
-        from bmfm_targets.models.model_utils import load_tokenizer
-        tok = load_tokenizer(cfg)
-    return model.eval().to(device), tok
+def _load_bmfm(model_id, device, max_len=2048):
+    """Load BMFM-DNA-{REF,SNP} via the CURRENT bmfm_targets API (the older
+    `load_checkpoint_configs`/`load_bmfm_model` have been removed). Ports
+    the working pattern from script 18 L288-407 and the reference notebook
+    `Drive/ADNI_SNP/notebooks/bmfm_embedding_extraction.ipynb`:
+
+      1. SDPA monkey-patch on `SCModernBertForMultiTaskModeling.__init__`
+         (BEFORE any instantiation) so the multi-field FA2 bug is avoided.
+      2. `register_configs_and_models()` + `download_ckpt_from_huggingface`
+         + `migrate_checkpoint_if_needed` → state dict with prefix
+         `scmodernbert.X` (migrate already strips the outer `model.`).
+      3. `get_base_model_from_config(state["hyper_parameters"]["model_config"])`
+         → `SCModernBertModel` (encoder only, 768-d).
+      4. `model.load_state_dict({k.removeprefix("scmodernbert."): v for k,v
+         in sd if k.startswith("scmodernbert.")}, strict=False)` — 135
+         weights load; 2 missing (pooler.dense.*) are unused for embeddings.
+      5. Tokenizer: raw `tokenizers.Tokenizer.from_file(<snap>/tokenizers/
+         dna_chunks/tokenizer.json)` with padding/truncation pre-configured.
+         NOTE: not `MultiFieldTokenizer`. Special token IDs: CLS=3, SEP=1,
+         PAD=2.
+    """
+    import os
+    from bmfm_targets.models.model_utils import (
+        register_configs_and_models, download_ckpt_from_huggingface,
+        migrate_checkpoint_if_needed, get_base_model_from_config)
+    # SDPA monkey-patch — must run before `get_base_model_from_config`
+    import bmfm_targets.models.predictive.scmodernbert.modeling_scmodernbert as mb
+    Cls = mb.SCModernBertForMultiTaskModeling
+    if not getattr(Cls, "_sdpa_patched", False):
+        _orig = Cls.__init__
+
+        def _sdpa_init(self, config, *a, **kw):
+            config._attn_implementation = "sdpa"
+            return _orig(self, config, *a, **kw)
+        Cls.__init__ = _sdpa_init
+        Cls._sdpa_patched = True
+    register_configs_and_models()
+    ckpt = download_ckpt_from_huggingface(model_id)
+    state = migrate_checkpoint_if_needed(ckpt)
+    mc = state["hyper_parameters"]["model_config"]
+    model = get_base_model_from_config(mc)
+    sd = state["state_dict"]
+    sd_stripped = {k.removeprefix("scmodernbert."): v for k, v in sd.items()
+                   if k.startswith("scmodernbert.")}
+    model.load_state_dict(sd_stripped, strict=False)
+    model = model.eval().to(device)
+    # Raw tokenizers.Tokenizer (NOT MultiFieldTokenizer)
+    from tokenizers import Tokenizer
+    snap = os.path.dirname(ckpt)
+    tok_path = os.path.join(snap, "tokenizers", "dna_chunks", "tokenizer.json")
+    tok = Tokenizer.from_file(tok_path)
+    tok.enable_padding(length=max_len, pad_id=2, pad_token="[PAD]")
+    tok.enable_truncation(max_length=max_len)
+    return model, tok
 
 
-def _embed_bmfm(model, tok, seqs, device, max_len):       # 14 L169-182
-    t = tok([{"dna_chunks": s} for s in seqs], padding="max_length",
-            truncation=True, max_length=max_len, return_tensors="pt")
-    out = model(input_ids=t["input_ids"].to(device),
-                attention_mask=t["attention_mask"].to(device))
-    emb = out["embeddings"] if isinstance(out, dict) else out.embeddings
+def _embed_bmfm(model, tok, seqs, device, max_len):
+    """Frozen forward + CLS pooling (script-18 path).
+    BMFM expects input_ids shape `(B, num_fields=1, L)` — so we
+    `unsqueeze(1)` the 2-D `(B, L)` token tensor. Uses `out.pooler_output`
+    (the BMFM CLS-pooled vector, identical to `out.last_hidden_state[:,0,:]`
+    here per the reference notebook).
+    """
+    encs = tok.encode_batch(seqs, add_special_tokens=True)
+    ids = torch.tensor([e.ids for e in encs], dtype=torch.long, device=device)
+    mask = torch.tensor([e.attention_mask for e in encs], dtype=torch.long,
+                        device=device)
+    out = model(input_ids=ids.unsqueeze(1), attention_mask=mask)
+    emb = (out.pooler_output if hasattr(out, "pooler_output")
+           else out.last_hidden_state[:, 0, :])
     return emb.detach().to(torch.float32).cpu().numpy()
 
 
