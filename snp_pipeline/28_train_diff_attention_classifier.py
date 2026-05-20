@@ -99,9 +99,11 @@ def main() -> None:
     ap.add_argument("--snp-encoder", action="store_true")
     ap.add_argument("--gwas-filtered", type=Path, default=fl.GWAS_FILTERED)
     ap.add_argument("--diffs-root", type=Path,
-                    default=fl.BASE / "GWAS_filtered")
-    ap.add_argument("--diffs-subdir", default="fm_embeddings",
-                    help="<set>/<diffs-subdir>/<model>/<set>_snp_embeddings.npz")
+                    default=fl.BASE / "fm_embeddings_short_seq_1kb",
+                    help="flat layout: <diffs-root>/<model>/<set>_snp_embeddings.npz "
+                         "(matches the Drive structure script 27 writes; "
+                         "downloaded locally to "
+                         "D:/ADNI_SNP_Omni2.5M_20140220/fm_embeddings_short_seq_1kb/)")
     ap.add_argument("--conv-labels", type=Path, default=fl.CONV_LABELS)
     ap.add_argument("--splits-root", type=Path, default=fl.SPLITS_ROOT)
     ap.add_argument("--output-root", type=Path, required=True)
@@ -148,7 +150,7 @@ def main() -> None:
                           .str.startswith("drop_"), "rsID"].astype(str))
     snp = snp[snp["rsID"].astype(str).isin(keep_rs)].reset_index(drop=True)
 
-    diff_npz = (args.diffs_root / sset / args.diffs_subdir / args.model /
+    diff_npz = (args.diffs_root / args.model /
                 f"{sset}_snp_embeddings.npz")
     diff, rs_emb = fl.load_diff(diff_npz, snp)             # asserts alignment
     H = diff.shape[1]
