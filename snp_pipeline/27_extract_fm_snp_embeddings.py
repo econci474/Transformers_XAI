@@ -69,9 +69,12 @@ MODELS = {
     # no fwd+RC averaging needed (single forward = RC-invariant output).
     # The 1k-seqlen d_model-118 variant the user flagged as "smaller might
     # be better for our purposes". Same Mamba deps as ph.
+    # Caduceus-PS hidden dim is 2*d_model (parameter-sharing conjoined
+    # representation, both strands' state-space outputs concatenated):
+    # d_model=118 → H=236; d_model=256 → H=512 (per memory).
     "caduceus_ps": {"id": "kuleshov-group/caduceus-ps_seqlen-1k_"
                           "d_model-118_n_layer-4_lr-8e-3",
-                    "kind": "hf_mlm", "pool": "mean", "H": 118,
+                    "kind": "hf_mlm", "pool": "mean", "H": 236,
                     "max_len": 1024, "rc": False, "pass_mask": False},
 }
 
