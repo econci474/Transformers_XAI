@@ -56,7 +56,7 @@ SPLITS_ROOT = Path("D:/ADNI_BIDS_project/derivatives/clinical/"
                     "no_cdr_stratified/tabular/baseline")
 SNP_SETS = {"9W27B": 32, "9W27B5D": 37}          # nominal (pre-QC) sizes
 MODEL_DIMS = {"bmfm_ref": 768, "bmfm_snp": 768, "ntv2": 1024,
-              "caduceus_ph": 256}
+              "caduceus_ph": 256, "caduceus_ps": 118}
 VALID_BASES = set("ACGT")
 _MISSING_AL = {"", ".", "NA", "NAN", "NONE", "<NA>"}
 

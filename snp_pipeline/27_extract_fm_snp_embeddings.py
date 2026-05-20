@@ -65,6 +65,14 @@ MODELS = {
                           "d_model-256_n_layer-4_lr-8e-3",
                     "kind": "hf_mlm", "pool": "mean", "H": 256,
                     "max_len": 1024, "rc": True, "pass_mask": False},
+    # Caduceus-PS — parameter-sharing variant: RC-equivariant by design, so
+    # no fwd+RC averaging needed (single forward = RC-invariant output).
+    # The 1k-seqlen d_model-118 variant the user flagged as "smaller might
+    # be better for our purposes". Same Mamba deps as ph.
+    "caduceus_ps": {"id": "kuleshov-group/caduceus-ps_seqlen-1k_"
+                          "d_model-118_n_layer-4_lr-8e-3",
+                    "kind": "hf_mlm", "pool": "mean", "H": 118,
+                    "max_len": 1024, "rc": False, "pass_mask": False},
 }
 
 _COMP = str.maketrans("ACGTacgt", "TGCAtgca")

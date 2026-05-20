@@ -32,7 +32,8 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--snp-sets", nargs="+", default=["9W27B", "9W27B5D"])
     ap.add_argument("--models", nargs="+",
-                    default=["bmfm_ref", "bmfm_snp", "ntv2", "caduceus_ph"])
+                    default=["bmfm_ref", "bmfm_snp", "ntv2",
+                             "caduceus_ph", "caduceus_ps"])
     ap.add_argument("--aggregations", nargs="+",
                     default=["global_attn", "chrom_hier"])
     ap.add_argument("--mlp-depths", nargs="+", default=["2L", "3L"])
