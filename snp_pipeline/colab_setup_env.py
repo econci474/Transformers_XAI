@@ -88,6 +88,27 @@ def ensure_dirs() -> None:
         d.mkdir(parents=True, exist_ok=True)
 
 
+def _ensure_executable_ptxas() -> str | None:
+    """Copy a base-Colab triton ptxas to /content (+x) and return its path.
+    The persisted Drive triton has ptxas without +x (FUSE strips it), which
+    crashes Mamba/Caduceus (triton selective_scan calls ptxas). Setting
+    `TRITON_PTXAS_PATH` to a local +x copy works around it. Idempotent."""
+    import glob, shutil, stat
+    loc = "/content/triton_ptxas"
+    if os.path.isfile(loc) and os.access(loc, os.X_OK):
+        return loc
+    cands = []
+    for root in ("/usr/local/lib", "/usr/lib"):
+        cands += glob.glob(f"{root}/**/triton/backends/nvidia/bin/ptxas",
+                           recursive=True)
+    cands = [p for p in cands if "drive" not in p and os.access(p, os.X_OK)]
+    if not cands:
+        return None
+    shutil.copy2(cands[0], loc)
+    os.chmod(loc, 0o755)
+    return loc
+
+
 def set_env() -> None:
     """Export the BMFM env vars and put the persisted libs dir first on the
     import path. Cheap + idempotent — safe to call from the Colab kernel so
@@ -102,6 +123,10 @@ def set_env() -> None:
     parts = [p for p in cur.split(os.pathsep) if p]
     if libs not in parts:
         os.environ["PYTHONPATH"] = os.pathsep.join([libs, *parts])
+    ptxas = _ensure_executable_ptxas()
+    if ptxas:
+        os.environ["TRITON_PTXAS_PATH"] = ptxas
+        _log(f"TRITON_PTXAS_PATH={ptxas}  (Mamba/Caduceus path)")
     _log(f"env set ({len(ENV)} vars); PYTHONPATH[0]={libs}")
 
 
