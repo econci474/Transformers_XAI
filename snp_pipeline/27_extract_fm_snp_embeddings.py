@@ -60,11 +60,11 @@ MODELS = {
     "ntv2":      {"id": "InstaDeepAI/nucleotide-transformer-v2-500m-"
                         "multi-species",
                   "kind": "hf_mlm", "pool": "mean", "H": 1024,
-                  "max_len": 2048, "rc": False},
+                  "max_len": 2048, "rc": False, "pass_mask": True},
     "caduceus_ph": {"id": "kuleshov-group/caduceus-ph_seqlen-1k_"
                           "d_model-256_n_layer-4_lr-8e-3",
                     "kind": "hf_mlm", "pool": "mean", "H": 256,
-                    "max_len": 1024, "rc": True},
+                    "max_len": 1024, "rc": True, "pass_mask": False},
 }
 
 _COMP = str.maketrans("ACGTacgt", "TGCAtgca")
@@ -113,13 +113,19 @@ def _load_hf(model_id, device):                           # nt_v2/caduceus
     return model, tok
 
 
-def _embed_hf(model, tok, seqs, device, max_len):
+def _embed_hf(model, tok, seqs, device, max_len, pass_mask=True):
+    """Forward + mean-pool. Some models (Caduceus/Mamba) don't accept
+    attention_mask in forward(); pass_mask=False skips it but we still
+    compute the mask for the pooling step (mean over real tokens)."""
     t = tok(seqs, return_tensors="pt", padding="max_length",
             truncation=True, max_length=max_len)
     ids = t["input_ids"].to(device)
     am = (t["attention_mask"].to(device) if "attention_mask" in t
           else (ids != (tok.pad_token_id or 0)).long())
-    out = model(ids, attention_mask=am, output_hidden_states=True)
+    kwargs = {"output_hidden_states": True}
+    if pass_mask:
+        kwargs["attention_mask"] = am
+    out = model(ids, **kwargs)
     return mean_pool(out.hidden_states[-1], am).detach().to(
         torch.float32).cpu().numpy()
 
@@ -166,7 +172,9 @@ def main() -> None:
         strand_mode = "fwd"
     else:
         model, tok = _load_hf(spec["id"], device)
-        emb_fn = lambda S: _embed_hf(model, tok, S, device, spec["max_len"])
+        pm = spec.get("pass_mask", True)
+        emb_fn = lambda S: _embed_hf(model, tok, S, device,
+                                      spec["max_len"], pass_mask=pm)
         strand_mode = "fwd_rc_avg" if spec.get("rc") else "fwd"
 
     def embed_all(seqs):
