@@ -14,6 +14,13 @@ diagnostic-reversion + corrupted-MRI subjects filtered out (see
 `bidsification.exclusions.is_excluded_subject(..., include_diagnostic_reversion=True)`).
 The pre-exclusion tree is preserved unchanged.
 
+The post-exclusion sheets are additionally extended with the per-subject
+conversion-group columns joined from conversion_labels.tsv (bl_dx, last_dx,
+FU_years, years_to_MCI, years_to_AD, conversion_group, AD_bl, AD_final,
+pMCI, sMCI, pCN_to_AD, pCN_to_MCI, sCN, CN_to_MCI, CN_to_AD, Excluded) so
+the clinical sheets can be stratified by the same conversion-group folds the
+MRI / SNP modalities use.
+
 Input:
   D:\\ADNI_BIDS_project\\derivatives\\clinical\\verbose\\longitudinal\\master_clinical_verbose.csv
   D:\\ADNI_BIDS_project\\derivatives\\clinical\\tabular\\longitudinal\\master_clinical_tabular.csv
@@ -53,6 +60,19 @@ TABULAR_MASTER = os.path.join(BASE_DIR, "tabular", "longitudinal", "master_clini
 # Output roots: pre-exclusion (existing) + post-exclusion (sister)
 OUT_ROOT_PRE  = os.path.join(BASE_DIR, "no_cdr_stratified")
 OUT_ROOT_POST = os.path.join(BASE_DIR, "no_cdr_stratified_post_exclusion")
+
+# Conversion-group reference (per-subject flags + years-to-event + label).
+# The post-exclusion sheets are extended with these columns so downstream
+# consumers can stratify by the same conversion-group folds the other
+# modalities use, without re-joining conversion_labels.tsv themselves.
+CONV_TSV = r"D:\ADNI_SNP_Omni2.5M_20140220\conversion_labels\conversion_labels.tsv"
+CONV_GROUP_COLS = [
+    "bl_dx", "last_dx", "FU_years", "years_to_MCI", "years_to_AD",
+    "conversion_group",
+    "AD_bl", "AD_final", "pMCI", "sMCI",
+    "pCN_to_AD", "pCN_to_MCI", "sCN",
+    "CN_to_MCI", "CN_to_AD", "Excluded",
+]
 
 # CDR columns to drop from tabular data
 CDR_COLUMNS = ["CDR_Global", "CDR_SumBoxes"]
@@ -131,6 +151,31 @@ def _safe_csv(df, path, label=""):
         df.to_csv(path, index=False)
     except PermissionError as exc:
         print(f"    [WARN] could not write {path} ({label}): {exc} — skipping.")
+
+
+def _join_conversion_columns(master_df, conv_tsv_path):
+    """Left-merge the per-subject conversion-group columns (CONV_GROUP_COLS)
+    from conversion_labels.tsv onto a per-visit master, keyed on Patient_ID.
+
+    Every visit row of a subject receives that subject's (constant)
+    conversion-group flags / years-to-event / conversion_group label, so the
+    sheet can be stratified by the same folds the MRI and SNP modalities use.
+    """
+    cv = pd.read_csv(conv_tsv_path, sep="\t",
+                     usecols=["Patient_ID"] + CONV_GROUP_COLS)
+    cv["Patient_ID"] = cv["Patient_ID"].astype(str)
+    # Drop any pre-existing copies so the merge doesn't create _x/_y suffixes.
+    out = master_df.copy()
+    out["Patient_ID"] = out["Patient_ID"].astype(str)
+    dupes = [c for c in CONV_GROUP_COLS if c in out.columns]
+    if dupes:
+        out = out.drop(columns=dupes)
+    merged = out.merge(cv, on="Patient_ID", how="left")
+    n_missing = int(merged["conversion_group"].isna().sum())
+    if n_missing:
+        print(f"    [WARN] {n_missing} rows had no conversion_labels match "
+              f"(conversion-group columns left NaN)")
+    return merged
 
 
 def _emit_tree(out_root, master_verbose, master_tabular, tag):
@@ -283,6 +328,15 @@ print(f"[exclusion] dropping {n_excl_subj_t} tabular subjects "
 
 master_verbose_post = master_verbose[~excluded_mask_verb].reset_index(drop=True)
 master_tabular_post = master_tabular[~excluded_mask_tab ].reset_index(drop=True)
+
+# Extend the post-exclusion sheets with conversion-group columns so they can
+# be stratified by the same folds as the MRI / SNP modalities.
+print(f"\n[conversion-group] joining {len(CONV_GROUP_COLS)} columns from "
+      f"{CONV_TSV}")
+master_verbose_post = _join_conversion_columns(master_verbose_post, CONV_TSV)
+master_tabular_post = _join_conversion_columns(master_tabular_post, CONV_TSV)
+print(f"  verbose post columns: {len(master_verbose_post.columns)}, "
+      f"tabular post columns: {len(master_tabular_post.columns)}")
 
 _emit_tree(OUT_ROOT_POST, master_verbose_post, master_tabular_post, tag="POST")
 
