@@ -22,7 +22,9 @@ Run
   python clinical_pipeline/05b_modality_coverage_table_viscode2.py
 """
 
+import argparse
 import re
+import sys
 import textwrap
 from pathlib import Path
 
@@ -36,14 +38,36 @@ matplotlib.rcParams["font.family"] = "DejaVu Serif"
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 REPO_ROOT      = Path(r"C:\Users\elena\iCloudDrive\Desktop\ACS_MPhil\Thesis\git\Transformers_XAI")
-MASTER_CLIN    = Path(r"D:\ADNI_BIDS_project\derivatives\clinical\no_cdr_stratified"
-                      r"\tabular\longitudinal\master_clinical_tabular.csv")
-MASTER_MRI_V2  = Path(r"D:\ADNI_BIDS_project\derivatives\mri_clinical_matched"
-                      r"\viscode_2_aligned\master_mri_clinical_matched_viscode2.csv")
+sys.path.insert(0, str(REPO_ROOT))
+from bidsification.exclusions import is_excluded_subject  # noqa: E402
+
+_ap = argparse.ArgumentParser()
+_ap.add_argument("--post-exclusion", action="store_true",
+                  help="Read from no_cdr_stratified_post_exclusion + "
+                       "VISCODE_2_aligned_extended_post_exclusion and suffix "
+                       "outputs with _post_exclusion.")
+_args = _ap.parse_args()
+POST_EXCLUSION = bool(_args.post_exclusion)
+SUFFIX         = "_post_exclusion" if POST_EXCLUSION else ""
+
+if POST_EXCLUSION:
+    MASTER_CLIN   = Path(r"D:\ADNI_BIDS_project\derivatives\clinical"
+                          r"\no_cdr_stratified_post_exclusion"
+                          r"\tabular\longitudinal\master_clinical_tabular.csv")
+    MASTER_MRI_V2 = Path(r"D:\ADNI_BIDS_project\derivatives\mri_clinical_matched"
+                          r"\VISCODE_2_aligned_extended_post_exclusion"
+                          r"\master_mri_clinical_matched_viscode2_extended.csv")
+else:
+    MASTER_CLIN   = Path(r"D:\ADNI_BIDS_project\derivatives\clinical"
+                          r"\no_cdr_stratified"
+                          r"\tabular\longitudinal\master_clinical_tabular.csv")
+    MASTER_MRI_V2 = Path(r"D:\ADNI_BIDS_project\derivatives\mri_clinical_matched"
+                          r"\viscode_2_aligned\master_mri_clinical_matched_viscode2.csv")
 SNP_TSV        = Path(r"D:\ADNI_BIDS_project\bids\genotype\subjects_with_snp_and_mri.tsv")
 
 OUT_DIR = REPO_ROOT / "clinical_pipeline" / "outputs" / "modality_coverage" / "viscode_2_aligned"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
+print(f"[mode] POST_EXCLUSION = {POST_EXCLUSION}  SUFFIX = '{SUFFIX}'")
 
 MATCHED_STATUSES = ("viscode2_exact", "nearest_within_14d")
 
@@ -87,6 +111,10 @@ print(f"Loading SNP+MRI cohort      : {SNP_TSV}")
 snp_df = pd.read_csv(SNP_TSV, sep="\t")
 snp_df["Patient_ID"] = snp_df["participant_id"].apply(to_pid)
 snp_pids = set(snp_df["Patient_ID"].dropna().unique())
+if POST_EXCLUSION:
+    snp_pids = {p for p in snp_pids
+                if not is_excluded_subject(p, include_diagnostic_reversion=True)}
+    print(f"  POST_EXCLUSION SNP+MRI cohort: {len(snp_pids)}")
 
 # Filter to cohort
 clin = clin[clin["Patient_ID"].isin(snp_pids)].copy()
@@ -149,8 +177,8 @@ for ses in all_sessions:
     })
 
 result_df = pd.DataFrame(result_rows)
-result_df.to_csv(OUT_DIR / "modality_coverage_viscode2.csv", index=False)
-print(f"Saved CSV -> {OUT_DIR / 'modality_coverage_viscode2.csv'}")
+result_df.to_csv(OUT_DIR / f"modality_coverage_viscode2{SUFFIX}.csv", index=False)
+print(f"Saved CSV -> {OUT_DIR / ('modality_coverage_viscode2'+SUFFIX+'.csv')}")
 print(result_df.to_string(index=False))
 print()
 
@@ -273,9 +301,9 @@ ax.text(LEFT, foot_y, "\n".join(textwrap.wrap(footnote, width=foot_wrap)),
         ha="left", va="top", fontsize=7, color="#444444")
 
 plt.tight_layout(pad=0.1)
-fig.savefig(OUT_DIR / "modality_coverage_viscode2.png", bbox_inches="tight", dpi=300)
-fig.savefig(OUT_DIR / "modality_coverage_viscode2.pdf", bbox_inches="tight", dpi=300)
+fig.savefig(OUT_DIR / f"modality_coverage_viscode2{SUFFIX}.png", bbox_inches="tight", dpi=300)
+fig.savefig(OUT_DIR / f"modality_coverage_viscode2{SUFFIX}.pdf", bbox_inches="tight", dpi=300)
 plt.close()
-print(f"Saved PNG -> {OUT_DIR / 'modality_coverage_viscode2.png'}")
-print(f"Saved PDF -> {OUT_DIR / 'modality_coverage_viscode2.pdf'}")
+print(f"Saved PNG -> {OUT_DIR / ('modality_coverage_viscode2'+SUFFIX+'.png')}")
+print(f"Saved PDF -> {OUT_DIR / ('modality_coverage_viscode2'+SUFFIX+'.pdf')}")
 print("\nDone.")

@@ -8,9 +8,27 @@ Usage:
 
     df = df[~df['SubjectID'].apply(is_excluded_subject)]
     df = df[~df.apply(lambda r: is_excluded_session(r['participant_id'], r['scan_date']), axis=1)]
+
+Categories of exclusion:
+    1. Site-381 cohort 10xxx (pattern, ALWAYS excluded)
+       — ADNI repository data-quality flag
+    2. Corrupted-MRI subjects (set, ALWAYS excluded)
+       — per-subject data-quality issue (image unreadable)
+    3. Diagnostic-reversion subjects (Excluded==1 in conversion_labels.tsv;
+       OPT-IN via include_diagnostic_reversion=True)
+       — non-sustained / reversion conversion-group filter, used by the
+         post-exclusion cohort regeneration (clinical_pipeline 05b/06c/06d/
+         07/07b/01d). Existing callers stay opt-out so their semantics
+         don't silently change.
+    4. Session-level MALFUNC scans (set, ALWAYS excluded)
+       — scanner malfunction recorded in MRI3META.csv
 """
 
+from functools import lru_cache
+from pathlib import Path
 import re
+
+import pandas as pd
 
 # ── Hard-excluded subject PTIDs ────────────────────────────────────────────────
 # These subjects must be excluded from ALL pipeline outputs due to data
@@ -25,22 +43,82 @@ EXCLUDED_PTID_PATTERNS = [
 # If you need to add individual PTIDs explicitly:
 EXCLUDED_PTID_LIST = []  # Add specific PTIDs here if needed beyond pattern
 
-def is_excluded_subject(ptid: str) -> bool:
-    """Return True if a PTID should be excluded from the BIDS dataset."""
+# Corrupted-MRI subjects (data-quality, always excluded).
+# Reason: image unreadable. Distinct from MALFUNC (per-session scanner
+# malfunction) because the entire subject's imaging is unusable.
+CORRUPTED_MRI_PTIDS = {
+    "041_S_4629",   # corrupted MRI volumes
+}
+
+
+# ── Diagnostic-reversion subjects (opt-in) ─────────────────────────────────────
+# Sourced from conversion_labels.tsv (column Excluded==1), produced by
+# clinical_pipeline/07_conversion_group_extended.py. Subjects flagged as
+# reverters or non-sustained conversions. Opt-in via kwarg so existing
+# callers (e.g. ViT supervised fine-tune) keep their current semantics.
+CONVERSION_LABELS_TSV = Path(
+    r"D:\ADNI_SNP_Omni2.5M_20140220\conversion_labels\conversion_labels.tsv"
+)
+
+
+@lru_cache(maxsize=1)
+def diagnostic_reversion_pids() -> frozenset:
+    """Patient_IDs flagged Excluded==1 in conversion_labels.tsv.
+
+    Single source of truth for the post-exclusion cohort. Returns an empty
+    frozenset if the TSV is missing (so the module imports cleanly even on
+    machines without the D: drive).
+    """
+    if not CONVERSION_LABELS_TSV.exists():
+        return frozenset()
+    cv = pd.read_csv(CONVERSION_LABELS_TSV, sep="\t",
+                     usecols=["Patient_ID", "Excluded"])
+    return frozenset(cv.loc[cv["Excluded"] == 1, "Patient_ID"].astype(str))
+
+
+def is_excluded_subject(ptid: str,
+                         *,
+                         include_diagnostic_reversion: bool = False) -> bool:
+    """Return True if a PTID should be excluded from the BIDS dataset.
+
+    Args:
+        ptid: Patient_ID in canonical form (e.g. '041_S_4629').
+        include_diagnostic_reversion: opt-in to also exclude subjects
+            flagged Excluded==1 in conversion_labels.tsv (diagnostic
+            reversion / non-sustained conversion). Used by the
+            post-exclusion regeneration scripts in clinical_pipeline.
+            Default False — preserves existing caller semantics.
+
+    Returns:
+        True iff the PTID matches ANY of:
+            - site-381 10xxx pattern (always)
+            - EXCLUDED_PTID_LIST (always)
+            - CORRUPTED_MRI_PTIDS (always)
+            - diagnostic_reversion_pids()   [only when kwarg is True]
+    """
     if not ptid or ptid != ptid:   # NaN check
         return False
     ptid = str(ptid).strip()
     if ptid in EXCLUDED_PTID_LIST:
         return True
-    return any(re.match(p, ptid) for p in EXCLUDED_PTID_PATTERNS)
+    if ptid in CORRUPTED_MRI_PTIDS:
+        return True
+    if any(re.match(p, ptid) for p in EXCLUDED_PTID_PATTERNS):
+        return True
+    if include_diagnostic_reversion and ptid in diagnostic_reversion_pids():
+        return True
+    return False
+
 
 # Convenience: set of all excluded PTIDs from patterns
 # (populated lazily — not pre-computed since pattern-based)
-EXCLUDED_PTIDS = set(EXCLUDED_PTID_LIST)
+EXCLUDED_PTIDS = set(EXCLUDED_PTID_LIST) | set(CORRUPTED_MRI_PTIDS)
 
 # Summary for logging
 EXCLUSION_REASON = {
-    r"^381_S_10\d+": "Data quality concerns flagged by ADNI repository (site 381, cohort 10xxx)",
+    r"^381_S_10\d+":       "Data quality concerns flagged by ADNI repository (site 381, cohort 10xxx)",
+    "corrupted_mri":       "Corrupted MRI data (image unreadable)",
+    "diagnostic_reversion": "Diagnostic reversion / non-sustained conversion (conversion_labels.tsv Excluded==1)",
 }
 
 # ── Session-level exclusions ───────────────────────────────────────────────────

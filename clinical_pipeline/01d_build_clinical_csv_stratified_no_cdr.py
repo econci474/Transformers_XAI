@@ -9,15 +9,24 @@ stratified 80/10/10 splits (preserving CN/MCI/AD proportions).
 This addresses data leakage from CDR being tightly associated with the
 diagnostic label.
 
+The script also writes a sister `_post_exclusion` derivative tree with
+diagnostic-reversion + corrupted-MRI subjects filtered out (see
+`bidsification.exclusions.is_excluded_subject(..., include_diagnostic_reversion=True)`).
+The pre-exclusion tree is preserved unchanged.
+
 Input:
   D:\\ADNI_BIDS_project\\derivatives\\clinical\\verbose\\longitudinal\\master_clinical_verbose.csv
   D:\\ADNI_BIDS_project\\derivatives\\clinical\\tabular\\longitudinal\\master_clinical_tabular.csv
 
-Output (under D:\\ADNI_BIDS_project\\derivatives\\clinical\\no_cdr_stratified\\):
-  verbose\\longitudinal\\master_clinical_verbose.csv
-  tabular\\longitudinal\\master_clinical_tabular.csv
-  verbose\\baseline\\seed_{0,1,2}\\{train,val,test}.csv
-  tabular\\baseline\\seed_{0,1,2}\\{train,val,test}.csv
+Output trees:
+  D:\\ADNI_BIDS_project\\derivatives\\clinical\\no_cdr_stratified\\
+                ……_post_exclusion\\
+    verbose\\longitudinal\\master_clinical_verbose.csv
+    tabular\\longitudinal\\master_clinical_tabular.csv
+    verbose\\baseline\\seed_{0,1,2}\\{train,val,test}.csv
+    tabular\\baseline\\seed_{0,1,2}\\{train,val,test}.csv
+    verbose\\by_visit\\visit_*.csv,  by_subject\\<PID>.csv
+    tabular\\by_visit\\visit_*.csv,  by_subject\\<PID>.csv
 
 Run:
   python clinical_pipeline/01d_build_clinical_csv_stratified_no_cdr.py
@@ -25,19 +34,25 @@ Run:
 
 import os
 import re
+import sys
 import numpy as np
 import pandas as pd
 from pathlib import Path
 from sklearn.model_selection import train_test_split
+
+# Resolve repo root so we can import bidsification.exclusions
+REPO_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO_ROOT))
+from bidsification.exclusions import is_excluded_subject  # noqa: E402
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 BASE_DIR = r"D:\ADNI_BIDS_project\derivatives\clinical"
 VERBOSE_MASTER = os.path.join(BASE_DIR, "verbose", "longitudinal", "master_clinical_verbose.csv")
 TABULAR_MASTER = os.path.join(BASE_DIR, "tabular", "longitudinal", "master_clinical_tabular.csv")
 
-OUT_ROOT    = os.path.join(BASE_DIR, "no_cdr_stratified")
-VERBOSE_OUT = os.path.join(OUT_ROOT, "verbose")
-TABULAR_OUT = os.path.join(OUT_ROOT, "tabular")
+# Output roots: pre-exclusion (existing) + post-exclusion (sister)
+OUT_ROOT_PRE  = os.path.join(BASE_DIR, "no_cdr_stratified")
+OUT_ROOT_POST = os.path.join(BASE_DIR, "no_cdr_stratified_post_exclusion")
 
 # CDR columns to drop from tabular data
 CDR_COLUMNS = ["CDR_Global", "CDR_SumBoxes"]
@@ -69,9 +84,153 @@ def strip_cdr_from_text(text: str) -> str:
     return text.strip()
 
 
+def _make_stratified_splits(master, baseline_dir, label):
+    """Save 80/10/10 train/val/test with stratification on Label_bl_multi."""
+    bl_rows = master[master["VISCODE_long"] == "bl"]
+    sc_rows = master[master["VISCODE_long"] == "sc"]
+    bl_set  = set(bl_rows["Patient_ID"])
+    bl_df   = pd.concat([bl_rows,
+                         sc_rows[~sc_rows["Patient_ID"].isin(bl_set)]]).drop_duplicates("Patient_ID")
+
+    n = len(bl_df)
+    strat_col = bl_df["Label_bl_multi"].fillna("UNKNOWN")
+
+    print(f"\n  {label}: {n} baseline subjects")
+    print(f"  Class distribution: {dict(strat_col.value_counts())}")
+
+    Path(baseline_dir).mkdir(parents=True, exist_ok=True)
+
+    for seed in SEEDS:
+        train_df, rest_df = train_test_split(
+            bl_df, test_size=0.20, random_state=seed,
+            stratify=strat_col)
+
+        rest_strat = rest_df["Label_bl_multi"].fillna("UNKNOWN")
+        val_df, test_df = train_test_split(
+            rest_df, test_size=0.50, random_state=seed,
+            stratify=rest_strat)
+
+        seed_dir = os.path.join(baseline_dir, f"seed_{seed}")
+        Path(seed_dir).mkdir(exist_ok=True)
+        for name, df in [("train", train_df), ("val", val_df), ("test", test_df)]:
+            try:
+                df.to_csv(os.path.join(seed_dir, f"{name}.csv"), index=False)
+            except PermissionError as exc:
+                print(f"    [WARN] could not write seed_{seed}/{name}.csv: {exc} — skipping.")
+
+        for name, df in [("train", train_df), ("val", val_df), ("test", test_df)]:
+            counts = df["Label_bl_multi"].value_counts().to_dict()
+            total  = len(df)
+            pcts   = {k: f"{v/total*100:.1f}%" for k, v in counts.items()}
+            print(f"    seed_{seed} {name:5s}: N={total:3d}  {counts}  ({pcts})")
+
+
+def _safe_csv(df, path, label=""):
+    """to_csv that tolerates locked files (Excel-open etc) — warns and skips."""
+    try:
+        df.to_csv(path, index=False)
+    except PermissionError as exc:
+        print(f"    [WARN] could not write {path} ({label}): {exc} — skipping.")
+
+
+def _emit_tree(out_root, master_verbose, master_tabular, tag):
+    """
+    Write the full output subtree under out_root, mirroring the existing layout:
+        verbose/longitudinal/, baseline/seed_*/, by_visit/, by_subject/
+        tabular/   (same)
+    `tag` is used purely for log lines (e.g. "PRE", "POST"). Individual file
+    writes that fail with PermissionError (e.g. file open in Excel) are
+    logged and skipped — the rest of the tree still gets written.
+    """
+    print(f"\n{'='*60}")
+    print(f"  EMIT TREE [{tag}] → {out_root}")
+    print(f"{'='*60}")
+    print(f"  rows verbose: {len(master_verbose)}, "
+          f"subjects: {master_verbose['Patient_ID'].nunique()}")
+    print(f"  rows tabular: {len(master_tabular)}, "
+          f"subjects: {master_tabular['Patient_ID'].nunique()}")
+
+    verbose_root = os.path.join(out_root, "verbose")
+    tabular_root = os.path.join(out_root, "tabular")
+
+    # ── Longitudinal masters ─────────────────────────────────────────────
+    verbose_long_dir = os.path.join(verbose_root, "longitudinal")
+    tabular_long_dir = os.path.join(tabular_root, "longitudinal")
+    Path(verbose_long_dir).mkdir(parents=True, exist_ok=True)
+    Path(tabular_long_dir).mkdir(parents=True, exist_ok=True)
+
+    _safe_csv(master_verbose,
+              os.path.join(verbose_long_dir, "master_clinical_verbose.csv"),
+              "verbose longitudinal master")
+    _safe_csv(master_tabular,
+              os.path.join(tabular_long_dir, "master_clinical_tabular.csv"),
+              "tabular longitudinal master")
+    print(f"  longitudinal masters → {verbose_long_dir}, {tabular_long_dir}")
+
+    # ── By-visit CSVs ─────────────────────────────────────────────────────
+    verbose_bv = os.path.join(verbose_root, "by_visit")
+    tabular_bv = os.path.join(tabular_root, "by_visit")
+    Path(verbose_bv).mkdir(parents=True, exist_ok=True)
+    Path(tabular_bv).mkdir(parents=True, exist_ok=True)
+
+    for vt in master_verbose["VISCODE_long"].dropna().unique():
+        for df, bv_dir, label in [(master_verbose, verbose_bv, "verbose"),
+                                   (master_tabular, tabular_bv, "tabular")]:
+            sub = df[df["VISCODE_long"] == vt]
+            if sub.empty:
+                continue
+            _safe_csv(sub, os.path.join(bv_dir, f"visit_{vt}.csv"),
+                      f"{label} by_visit visit_{vt}")
+    print(f"  by_visit CSVs → {verbose_bv}, {tabular_bv}")
+
+    # ── Stratified baseline splits ────────────────────────────────────────
+    verbose_bl = os.path.join(verbose_root, "baseline")
+    tabular_bl = os.path.join(tabular_root, "baseline")
+
+    print(f"\n  ── Verbose splits ──")
+    _make_stratified_splits(master_verbose, verbose_bl, f"Verbose [{tag}]")
+
+    print(f"\n  ── Tabular splits ──")
+    _make_stratified_splits(master_tabular, tabular_bl, f"Tabular [{tag}]")
+
+    # ── By-subject CSVs ───────────────────────────────────────────────────
+    verbose_bs = os.path.join(verbose_root, "by_subject")
+    tabular_bs = os.path.join(tabular_root, "by_subject")
+    Path(verbose_bs).mkdir(parents=True, exist_ok=True)
+    Path(tabular_bs).mkdir(parents=True, exist_ok=True)
+
+    for ptid in master_verbose["Patient_ID"].unique():
+        safe_id = str(ptid).replace("/", "_")
+        _safe_csv(master_verbose[master_verbose["Patient_ID"] == ptid],
+                  os.path.join(verbose_bs, f"{safe_id}.csv"),
+                  f"verbose by_subject {safe_id}")
+    for ptid in master_tabular["Patient_ID"].unique():
+        safe_id = str(ptid).replace("/", "_")
+        _safe_csv(master_tabular[master_tabular["Patient_ID"] == ptid],
+                  os.path.join(tabular_bs, f"{safe_id}.csv"),
+                  f"tabular by_subject {safe_id}")
+    n_subj_v = master_verbose["Patient_ID"].nunique()
+    n_subj_t = master_tabular["Patient_ID"].nunique()
+    print(f"\n  by_subject CSVs: verbose={n_subj_v}, tabular={n_subj_t}")
+
+    # ── Verification ──────────────────────────────────────────────────────
+    print(f"\n  ── Verification [{tag}] ──")
+    try:
+        test_tab = pd.read_csv(os.path.join(tabular_bl, "seed_0", "test.csv"), low_memory=False)
+        cdr_remaining = [c for c in test_tab.columns if "CDR" in c.upper()]
+        print(f"    CDR columns in tabular test: {cdr_remaining if cdr_remaining else 'NONE ✓'}")
+
+        test_verb = pd.read_csv(os.path.join(verbose_bl, "seed_0", "test.csv"), low_memory=False)
+        if "Generated_Text" in test_verb.columns:
+            cdr_in_text = test_verb["Generated_Text"].str.contains("CDR", case=False, na=False).sum()
+            print(f"    Rows with 'CDR' in Generated_Text: {cdr_in_text} (should be 0)")
+    except FileNotFoundError as exc:
+        print(f"    [WARN] verification skipped: {exc}")
+
+
 # ── Load masters ──────────────────────────────────────────────────────────────
 print("=" * 60)
-print("  BUILD NO-CDR STRATIFIED CSVs")
+print("  BUILD NO-CDR STRATIFIED CSVs  (pre + post-exclusion)")
 print("=" * 60)
 
 print(f"\nLoading verbose master : {VERBOSE_MASTER}")
@@ -102,105 +261,29 @@ if "Generated_Text" in master_verbose.columns:
     print(f"  Before: ...{before_sample}...")
     print(f"  After : ...{after_sample}...")
 
-# ── Save master CSVs ──────────────────────────────────────────────────────────
-verbose_long_dir = os.path.join(VERBOSE_OUT, "longitudinal")
-tabular_long_dir = os.path.join(TABULAR_OUT, "longitudinal")
-Path(verbose_long_dir).mkdir(parents=True, exist_ok=True)
-Path(tabular_long_dir).mkdir(parents=True, exist_ok=True)
+# ── Pre-exclusion tree ────────────────────────────────────────────────────────
+_emit_tree(OUT_ROOT_PRE, master_verbose, master_tabular, tag="PRE")
 
-master_verbose.to_csv(os.path.join(verbose_long_dir, "master_clinical_verbose.csv"), index=False)
-master_tabular.to_csv(os.path.join(tabular_long_dir, "master_clinical_tabular.csv"), index=False)
-print(f"\nSaved verbose master → {verbose_long_dir}")
-print(f"Saved tabular master → {tabular_long_dir}")
+# ── Post-exclusion tree ───────────────────────────────────────────────────────
+# Filter out diagnostic-reversion (Excluded==1) + corrupted-MRI + site-381.
+master_verbose["Patient_ID"] = master_verbose["Patient_ID"].astype(str)
+master_tabular["Patient_ID"] = master_tabular["Patient_ID"].astype(str)
 
-# ── Save per-visit CSVs ───────────────────────────────────────────────────────
-verbose_bv = os.path.join(VERBOSE_OUT, "by_visit")
-tabular_bv = os.path.join(TABULAR_OUT, "by_visit")
-Path(verbose_bv).mkdir(parents=True, exist_ok=True)
-Path(tabular_bv).mkdir(parents=True, exist_ok=True)
+excluded_mask_verb = master_verbose["Patient_ID"].apply(
+    lambda p: is_excluded_subject(p, include_diagnostic_reversion=True))
+excluded_mask_tab  = master_tabular["Patient_ID"].apply(
+    lambda p: is_excluded_subject(p, include_diagnostic_reversion=True))
 
-for vt in master_verbose["VISCODE_long"].unique():
-    for df, bv_dir in [(master_verbose, verbose_bv), (master_tabular, tabular_bv)]:
-        sub = df[df["VISCODE_long"] == vt]
-        if sub.empty:
-            continue
-        sub.to_csv(os.path.join(bv_dir, f"visit_{vt}.csv"), index=False)
-print(f"Saved per-visit CSVs")
+n_excl_subj_v = master_verbose.loc[excluded_mask_verb, "Patient_ID"].nunique()
+n_excl_subj_t = master_tabular.loc[excluded_mask_tab,  "Patient_ID"].nunique()
+print(f"\n[exclusion] dropping {n_excl_subj_v} verbose subjects "
+      f"({int(excluded_mask_verb.sum())} rows)")
+print(f"[exclusion] dropping {n_excl_subj_t} tabular subjects "
+      f"({int(excluded_mask_tab.sum())} rows)")
 
-# ── Stratified baseline splits ────────────────────────────────────────────────
-def _make_stratified_splits(master, baseline_dir, label):
-    """Save 80/10/10 train/val/test with stratification on Label_bl_multi."""
-    bl_rows = master[master["VISCODE_long"] == "bl"]
-    sc_rows = master[master["VISCODE_long"] == "sc"]
-    bl_set  = set(bl_rows["Patient_ID"])
-    bl_df   = pd.concat([bl_rows,
-                         sc_rows[~sc_rows["Patient_ID"].isin(bl_set)]]).drop_duplicates("Patient_ID")
+master_verbose_post = master_verbose[~excluded_mask_verb].reset_index(drop=True)
+master_tabular_post = master_tabular[~excluded_mask_tab ].reset_index(drop=True)
 
-    n = len(bl_df)
-    strat_col = bl_df["Label_bl_multi"].fillna("UNKNOWN")
-
-    print(f"\n  {label}: {n} baseline subjects")
-    print(f"  Class distribution: {dict(strat_col.value_counts())}")
-
-    Path(baseline_dir).mkdir(parents=True, exist_ok=True)
-
-    for seed in SEEDS:
-        train_df, rest_df = train_test_split(
-            bl_df, test_size=0.20, random_state=seed,
-            stratify=strat_col)
-
-        rest_strat = rest_df["Label_bl_multi"].fillna("UNKNOWN")
-        val_df, test_df = train_test_split(
-            rest_df, test_size=0.50, random_state=seed,
-            stratify=rest_strat)
-
-        seed_dir = os.path.join(baseline_dir, f"seed_{seed}")
-        Path(seed_dir).mkdir(exist_ok=True)
-        train_df.to_csv(os.path.join(seed_dir, "train.csv"), index=False)
-        val_df.to_csv(os.path.join(seed_dir, "val.csv"),     index=False)
-        test_df.to_csv(os.path.join(seed_dir, "test.csv"),   index=False)
-
-        for name, df in [("train", train_df), ("val", val_df), ("test", test_df)]:
-            counts = df["Label_bl_multi"].value_counts().to_dict()
-            total  = len(df)
-            pcts   = {k: f"{v/total*100:.1f}%" for k, v in counts.items()}
-            print(f"    seed_{seed} {name:5s}: N={total:3d}  {counts}  ({pcts})")
-
-
-verbose_bl = os.path.join(VERBOSE_OUT, "baseline")
-tabular_bl = os.path.join(TABULAR_OUT, "baseline")
-
-print("\n── Verbose splits ──")
-_make_stratified_splits(master_verbose, verbose_bl, "Verbose")
-
-print("\n── Tabular splits ──")
-_make_stratified_splits(master_tabular, tabular_bl, "Tabular")
-
-# ── Save per-subject CSVs ─────────────────────────────────────────────────────
-verbose_bs = os.path.join(VERBOSE_OUT, "by_subject")
-tabular_bs = os.path.join(TABULAR_OUT, "by_subject")
-Path(verbose_bs).mkdir(parents=True, exist_ok=True)
-Path(tabular_bs).mkdir(parents=True, exist_ok=True)
-
-for ptid in master_verbose["Patient_ID"].unique():
-    safe_id = ptid.replace("/", "_")
-    master_verbose[master_verbose["Patient_ID"] == ptid].to_csv(
-        os.path.join(verbose_bs, f"{safe_id}.csv"), index=False)
-    master_tabular[master_tabular["Patient_ID"] == ptid].to_csv(
-        os.path.join(tabular_bs, f"{safe_id}.csv"), index=False)
-
-n_subj = master_verbose["Patient_ID"].nunique()
-print(f"\nSaved {n_subj} per-subject CSVs")
-
-# ── Verify CDR is gone ────────────────────────────────────────────────────────
-print("\n── Verification ──")
-test_tab = pd.read_csv(os.path.join(tabular_bl, "seed_0", "test.csv"), low_memory=False)
-cdr_remaining = [c for c in test_tab.columns if "CDR" in c.upper()]
-print(f"  CDR columns in tabular test: {cdr_remaining if cdr_remaining else 'NONE ✓'}")
-
-test_verb = pd.read_csv(os.path.join(verbose_bl, "seed_0", "test.csv"), low_memory=False)
-if "Generated_Text" in test_verb.columns:
-    cdr_in_text = test_verb["Generated_Text"].str.contains("CDR", case=False, na=False).sum()
-    print(f"  Rows with 'CDR' in Generated_Text: {cdr_in_text} (should be 0)")
+_emit_tree(OUT_ROOT_POST, master_verbose_post, master_tabular_post, tag="POST")
 
 print("\nDone.")
