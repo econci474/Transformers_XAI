@@ -40,6 +40,7 @@ import pandas as pd
 import torch
 import torch.nn as nn
 from sklearn.utils.class_weight import compute_class_weight
+from sklearn.metrics import balanced_accuracy_score
 from torch.utils.data import DataLoader, ConcatDataset
 import monai.transforms as mt
 from monai.data import Dataset as MonaiDataset
@@ -314,7 +315,9 @@ def parse_args():
     if args.epochs is None:
         args.epochs = 200 if args.strategy == "full_ft" else 100
     if args.lr is None:
-        args.lr = 3e-4 if args.strategy == "full_ft" else 1e-3
+        # full_ft: 5e-5 -- a standard foundation-model full-fine-tune LR.
+        # The paper's 3e-4 diverged to NaN (~epoch 27) on every full_ft run.
+        args.lr = 5e-5 if args.strategy == "full_ft" else 1e-3
 
     # Resolve session selection mode (same logic as ViT)
     if args.long is None:
@@ -453,7 +456,8 @@ def main():
 
     # ── Resume ────────────────────────────────────────────────────────────────
     ckpt_path = out_dir / "last_checkpoint.pt"
-    best_val = float("inf")
+    best_metric = -1.0                    # best val balanced accuracy
+    best_val_loss_at_best = float("inf")  # tie-breaker
     best_epoch = -1
     epochs_since_improve = 0
     log_rows = []
@@ -464,17 +468,20 @@ def main():
         model.load_state_dict(ck["model"])
         optimizer.load_state_dict(ck["optimizer"])
         scaler.load_state_dict(ck["scaler"])
-        best_val = ck["best_val"]
-        best_epoch = ck["best_epoch"]
-        epochs_since_improve = ck["epochs_since_improve"]
-        log_rows = ck["log_rows"]
+        best_metric = ck.get("best_metric", -1.0)
+        best_val_loss_at_best = ck.get("best_val_loss_at_best", float("inf"))
+        best_epoch = ck.get("best_epoch", -1)
+        epochs_since_improve = ck.get("epochs_since_improve", 0)
+        log_rows = ck.get("log_rows", [])
         start_epoch = ck["epoch"] + 1
         print(f"  Resuming from epoch {start_epoch + 1}")
 
     def _save_checkpoint(ep):
         state = {"model": model.state_dict(), "optimizer": optimizer.state_dict(),
                  "scaler": scaler.state_dict(), "epoch": ep,
-                 "best_val": best_val, "best_epoch": best_epoch,
+                 "best_metric": best_metric,
+                 "best_val_loss_at_best": best_val_loss_at_best,
+                 "best_epoch": best_epoch,
                  "epochs_since_improve": epochs_since_improve,
                  "log_rows": log_rows}
         tmp = ckpt_path.with_suffix(".pt.tmp")
@@ -489,18 +496,36 @@ def main():
 
             tr_loss, tr_acc, _, _ = run_one_epoch(
                 model, train_loader, criterion, optimizer, scaler, device, True)
-            va_loss, va_acc, _, _ = run_one_epoch(
+            va_loss, va_acc, va_logits, va_labels = run_one_epoch(
                 model, val_loader, criterion, optimizer, scaler, device, False)
+
+            # Abort on a non-finite loss: once weights are NaN they stay NaN, so
+            # there is nothing to recover -- stop and keep the last good
+            # best_model.pt (full_ft at the old lr=3e-4 diverged here ~epoch 27).
+            if not (np.isfinite(tr_loss) and np.isfinite(va_loss)):
+                print(f"  [ABORT] non-finite loss at epoch {epoch+1} "
+                      f"(tr_loss={tr_loss}, va_loss={va_loss}) -- stopping.")
+                break
+
+            va_bacc = float(balanced_accuracy_score(
+                va_labels.astype(int), va_logits.argmax(axis=-1)))
 
             log_rows.append({"epoch": epoch + 1, "lr": cur_lr,
                              "train_loss": tr_loss, "train_acc": tr_acc,
-                             "val_loss": va_loss, "val_acc": va_acc})
+                             "val_loss": va_loss, "val_acc": va_acc,
+                             "val_bacc": va_bacc})
             print(f"  [epoch {epoch+1:>3}/{args.epochs}] "
                   f"lr={cur_lr:.2e}  tr_loss={tr_loss:.4f}  "
-                  f"va_loss={va_loss:.4f}  va_acc={va_acc:.4f}")
+                  f"va_loss={va_loss:.4f}  va_acc={va_acc:.4f}  "
+                  f"va_bacc={va_bacc:.4f}")
 
-            if va_loss < best_val:
-                best_val = va_loss
+            # Select on val balanced accuracy; tie-break on lower val_loss.
+            improved = (va_bacc > best_metric + 1e-6) or (
+                abs(va_bacc - best_metric) <= 1e-6
+                and va_loss < best_val_loss_at_best)
+            if improved:
+                best_metric = va_bacc
+                best_val_loss_at_best = va_loss
                 best_epoch = epoch + 1
                 epochs_since_improve = 0
                 torch.save({"net": model.state_dict(), "epoch": best_epoch},
@@ -515,7 +540,8 @@ def main():
                 import wandb
                 wandb.log({"epoch": epoch + 1, "lr": cur_lr,
                            "train_loss": tr_loss, "val_loss": va_loss,
-                           "val_acc": va_acc, "best_val_loss": best_val})
+                           "val_acc": va_acc, "val_bacc": va_bacc,
+                           "best_val_balanced_acc": best_metric})
 
             if epochs_since_improve >= args.patience:
                 print(f"  Early stopping at epoch {epoch+1}")
@@ -524,6 +550,11 @@ def main():
         pd.DataFrame(log_rows).to_csv(out_dir / "train_log.csv", index=False)
 
         # ── Test ──────────────────────────────────────────────────────────────
+        if not (out_dir / "best_model.pt").exists():
+            print("  [ERROR] no best_model.pt -- training produced no usable "
+                  "epoch (NaN abort before the first checkpoint). "
+                  "No metrics.json written.")
+            return
         best_state = torch.load(out_dir / "best_model.pt", map_location=device)
         model.load_state_dict(best_state["net"])
         _, _, test_logits, test_labels = run_one_epoch(
@@ -557,6 +588,7 @@ def main():
             "aug_copies": args.aug_copies,
             "epochs": args.epochs,
             "best_epoch": best_epoch,
+            "best_val_balanced_acc": round(float(best_metric), 4),
             "lr": args.lr,
             "weight_decay": args.weight_decay,
             "batch_size": args.batch_size,
