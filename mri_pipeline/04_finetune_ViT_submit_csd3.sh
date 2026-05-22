@@ -10,7 +10,7 @@
 #SBATCH --cpus-per-task=3
 #SBATCH --mem=32G
 #SBATCH --time=12:00:00
-#SBATCH --array=0-23
+#SBATCH --array=0-23%4
 # =============================================================================
 # 04_finetune_ViT_submit_csd3.sh   --   ViT debugging re-run
 # =============================================================================
