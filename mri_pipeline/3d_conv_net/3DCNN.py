@@ -32,8 +32,8 @@ this thesis):
 
 Input
 -----
-A single-channel 3D volume of shape ``[B, 1, 182, 218, 182]`` — the
-canonical MNI152NLin2009cAsym 1 mm voxel grid produced by sMRIprep.
+A single-channel 3D volume of shape ``[B, 1, 193, 229, 193]`` — the
+MNI152NLin2009cAsym res-1 (1 mm) voxel grid produced by sMRIprep.
 Intensities are expected to be z-scored on the non-zero (brain) voxels by
 the preprocessing step; this module performs NO normalisation of its own.
 
@@ -140,23 +140,25 @@ class MRI3DCNN(nn.Module):
     Vanilla single-stream 3D CNN.
 
     Topology (channel counts and kernel sizes follow the Spasov MRI
-    pathway). For a [B, 1, 182, 218, 182] input the spatial size shrinks as
+    pathway). For a [B, 1, 193, 229, 193] input the spatial size shrinks as
     annotated on the right (D x H x W after each block):
 
-        input                                         1 x 182 x 218 x 182
-        block1  Conv 1 ->24  k(11,13,11) s4 + pool   24 x  23 x  28 x  23
-        block2  Conv 24->48  k(5,6,5)    s1 + pool   48 x  12 x  15 x  12
-        block3  Conv 48->96  k(3,3,3)    s1 + pool   96 x   6 x   8 x   6
-        block4  Conv 96->48  k(3,4,3)    s1 + pool   48 x   3 x   5 x   3
+        input                                         1 x 193 x 229 x 193
+        block1  Conv 1 ->24  k(11,13,11) s4 + pool   24 x  25 x  29 x  25
+        block2  Conv 24->48  k(5,6,5)    s1 + pool   48 x  13 x  15 x  13
+        block3  Conv 48->96  k(3,3,3)    s1 + pool   96 x   7 x   8 x   7
+        block4  Conv 96->48  k(3,4,3)    s1 + pool   48 x   4 x   5 x   4
         block5  Conv 48-> 8  k(3,4,3)    s1 + pool    8 x   2 x   3 x   2
         flatten                                              96 features
         fc1     Linear 96 -> 32  (+ BN + ELU + drop)
         head    Linear 32 -> n_outputs                       logits
 
-    The first block does the heavy lifting on memory: a large anisotropic
-    11x13x11 kernel with stride 4 aggressively downsamples the full-
-    resolution 182x218x182 volume straight away, which is what keeps the
-    rest of the network small enough to train on a single GPU.
+    The classifier head is LazyLinear, so the network adapts to any
+    consistent input grid; the sizes above are for the 193x229x193
+    MNI152NLin2009cAsym grid this project uses (Spasov 2019 used the
+    182x218x182 FSL MNI152 grid). The first block does the heavy lifting on
+    memory: a large anisotropic 11x13x11 kernel with stride 4 aggressively
+    downsamples the full-resolution volume straight away.
     """
 
     def __init__(self, in_channels=1, n_outputs=1, dropout=DEFAULT_DROPOUT):
@@ -208,7 +210,7 @@ class MRI3DCNN(nn.Module):
     def forward(self, x):
         """
         Args:
-            x: input tensor of shape [B, in_channels, 182, 218, 182].
+            x: input tensor of shape [B, in_channels, 193, 229, 193].
         Returns:
             logits of shape [B, n_outputs].
         """

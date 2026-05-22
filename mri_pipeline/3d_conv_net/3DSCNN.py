@@ -26,9 +26,9 @@ features) and a SINGLE stream (no redundant two-stream topology).
 
 Input
 -----
-A single-channel 3D volume of shape ``[B, 1, 182, 218, 182]`` — the
-canonical MNI152NLin2009cAsym 1 mm voxel grid from sMRIprep, z-scored on
-the non-zero (brain) voxels by the preprocessing step. No normalisation is
+A single-channel 3D volume of shape ``[B, 1, 193, 229, 193]`` — the
+MNI152NLin2009cAsym res-1 (1 mm) voxel grid from sMRIprep, z-scored on the
+non-zero (brain) voxels by the preprocessing step. No normalisation is
 done inside this module.
 
 Output
@@ -184,15 +184,15 @@ class MRI3DSeparableCNN(nn.Module):
     Separable-convolution single-stream 3D CNN.
 
     Topology is IDENTICAL to ``MRI3DCNN`` in 3DCNN.py — only the
-    convolution type differs. For a [B, 1, 182, 218, 182] input the spatial
+    convolution type differs. For a [B, 1, 193, 229, 193] input the spatial
     size shrinks exactly as in the vanilla network (D x H x W after each
     block):
 
-        input                                          1 x 182 x 218 x 182
-        block1  SepConv 1 ->24  k(11,13,11) s4 + pool  24 x  23 x  28 x  23
-        block2  SepConv 24->48  k(5,6,5)    s1 + pool  48 x  12 x  15 x  12
-        block3  SepConv 48->96  k(3,3,3)    s1 + pool  96 x   6 x   8 x   6
-        block4  SepConv 96->48  k(3,4,3)    s1 + pool  48 x   3 x   5 x   3
+        input                                          1 x 193 x 229 x 193
+        block1  SepConv 1 ->24  k(11,13,11) s4 + pool  24 x  25 x  29 x  25
+        block2  SepConv 24->48  k(5,6,5)    s1 + pool  48 x  13 x  15 x  13
+        block3  SepConv 48->96  k(3,3,3)    s1 + pool  96 x   7 x   8 x   7
+        block4  SepConv 96->48  k(3,4,3)    s1 + pool  48 x   4 x   5 x   4
         block5  SepConv 48-> 8  k(3,4,3)    s1 + pool   8 x   2 x   3 x   2
         flatten                                               96 features
         fc1     Linear 96 -> 32  (+ BN + ELU + drop)
@@ -242,7 +242,7 @@ class MRI3DSeparableCNN(nn.Module):
     def forward(self, x):
         """
         Args:
-            x: input tensor of shape [B, in_channels, 182, 218, 182].
+            x: input tensor of shape [B, in_channels, 193, 229, 193].
         Returns:
             logits of shape [B, n_outputs].
         """
