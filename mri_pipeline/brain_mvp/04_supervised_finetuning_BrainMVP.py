@@ -70,7 +70,7 @@ patient_id_to_bids_sub = _vit.patient_id_to_bids_sub
 compute_test_metrics = _vit.compute_test_metrics
 compute_diagnostics = _vit.compute_diagnostics
 run_one_epoch = _vit.run_one_epoch
-lr_at = _vit.lr_at
+lr_multiplier_at = _vit.lr_multiplier_at
 init_wandb = _vit.init_wandb
 
 # ── BrainMVP spatial crop dimensions ──────────────────────────────────────────
@@ -490,7 +490,8 @@ def main():
 
     try:
         for epoch in range(start_epoch, args.epochs):
-            cur_lr = lr_at(epoch, args)
+            # lr_multiplier_at returns a 0-1 multiplier; scale by the peak LR.
+            cur_lr = args.lr * lr_multiplier_at(epoch, args)
             for g in optimizer.param_groups:
                 g["lr"] = cur_lr
 
