@@ -1176,7 +1176,10 @@ def main():
                 if isinstance(v, (int, float)):
                     wandb.run.summary[f"test_subject_{k}"] = v
             wandb.run.summary["confusion_matrix"] = test_diagnostics["confusion_matrix"]
-            wandb.run.summary["per_class"] = test_diagnostics["per_class"]
+            # per_class has integer class keys; wandb's summary encoder only
+            # handles string keys in a nested dict — stringify them.
+            wandb.run.summary["per_class"] = {
+                str(k): v for k, v in test_diagnostics["per_class"].items()}
 
         print(f"  Saved: {out_dir}/metrics.json")
         print("=" * 70)
