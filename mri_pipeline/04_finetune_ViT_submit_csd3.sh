@@ -26,7 +26,8 @@
 #   Strategy : full_ft | frozen | scratch
 # scratch = random init, no MAE checkpoint -> output slug ViT_B_scratch.
 #
-# Runs offline wandb -> sync to project 'vit_debugging' after the sweep:
+# Runs offline wandb -- full_ft/frozen -> project 'vit_debugging',
+# scratch -> project 'vit_baseline'. wandb sync after the sweep:
 #   wandb sync <OUT_DIR>/ViT_B_*/*/seed_*/*/wandb/offline-run-*
 #
 # SLURM .log/.err and the per-run offline-wandb data both land under the
@@ -93,11 +94,14 @@ TASK="${TASKS[$TASK_IDX]}"
 SEED="${SEEDS[$SEED_IDX]}"
 STRATEGY="${STRATEGIES[$STRAT_IDX]}"
 
-# scratch runs use a distinct model slug (matches 04_supervised_finetuning_ViT.py)
+# scratch runs use a distinct model slug + wandb project: the from-scratch ViT
+# is a baseline, kept separate from the full_ft/frozen debugging runs.
 if [ "${STRATEGY}" = "scratch" ]; then
     MODEL_SLUG="ViT_B_scratch"
+    WANDB_PROJECT="vit_baseline"
 else
     MODEL_SLUG="ViT_B_mae75"
+    WANDB_PROJECT="vit_debugging"
 fi
 RUN_DIR="${OUT_DIR}/${MODEL_SLUG}/${TASK}/seed_${SEED}/${STRATEGY}"
 METRICS="${RUN_DIR}/metrics.json"
@@ -122,7 +126,7 @@ echo "  Strategy       : ${STRATEGY}"
 echo "  Sessions       : ${PY_SESSION_FLAGS}"
 echo "  Pretrained     : ${PRETRAINED_CKPT}"
 echo "  Output dir     : ${RUN_DIR}"
-echo "  wandb          : offline -> project vit_debugging (WANDB_DIR=${WANDB_DIR})"
+echo "  wandb          : offline -> project ${WANDB_PROJECT} (WANDB_DIR=${WANDB_DIR})"
 echo "  Started        : $(date)"
 echo "============================================================"
 
@@ -165,7 +169,7 @@ python "${SCRIPT_DIR}/04_supervised_finetuning_ViT.py" \
     --out_dir             "${OUT_DIR}" \
     --grad_accum_steps    8 \
     --wandb \
-    --wandb_project       vit_debugging \
+    --wandb_project       "${WANDB_PROJECT}" \
     --num_workers         "${SLURM_CPUS_PER_TASK}"
 
 EXIT_CODE=$?
