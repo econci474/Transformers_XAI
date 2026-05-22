@@ -16,8 +16,10 @@ Tasks (mirroring clinical_pipeline/03_encoder_finetune.py)
 
 Strategies
 ----------
-  full_ft : all parameters trained (lr=1e-4)
-  frozen  : encoder frozen, classification head only (lr=1e-3)
+  full_ft : MAE-pretrained encoder + head, all parameters trained (lr=1e-4)
+  frozen  : MAE-pretrained encoder frozen, classification head only (lr=1e-3)
+  scratch : random init, NO pretrained checkpoint, all parameters trained
+            (lr=1e-3) — the ablation isolating the value of MAE pretraining
 
 Inputs
 ------
@@ -199,8 +201,10 @@ def parse_args():
                    choices=list(TASK_CONFIG.keys()))
     p.add_argument("--seed",            type=int, required=True, choices=[0, 1, 2])
     p.add_argument("--strategy",        type=str, default="full_ft",
-                   choices=["full_ft", "frozen"])
-    p.add_argument("--pretrained_ckpt", type=str, required=True)
+                   choices=["full_ft", "frozen", "scratch"])
+    p.add_argument("--pretrained_ckpt", type=str, default=None,
+                   help="MAE-pretrained .pth (ckpt['net'] state_dict). Required "
+                        "for full_ft / frozen; ignored for scratch.")
     session_group = p.add_mutually_exclusive_group()
     session_group.add_argument("--session", type=str, default="bl",
                    help="Single session to pair with each Patient_ID (default 'bl'). "
@@ -225,23 +229,24 @@ def parse_args():
     p.add_argument("--out_dir",         type=str,
                    default=str(THIS_DIR / "outputs"))
     p.add_argument("--epochs",          type=int, default=None,
-                   help="Default: 50 (full_ft) or 70 (frozen)")
+                   help="Default: 50 full_ft / 70 frozen / 100 scratch")
     p.add_argument("--batch_size",      type=int, default=4)
     p.add_argument("--lr",              type=float, default=None,
-                   help="Default: 1e-4 (full_ft) or 1e-3 (frozen)")
+                   help="Default: 1e-4 full_ft / 1e-3 frozen / 1e-3 scratch")
     p.add_argument("--weight_decay",    type=float, default=1e-4)
     p.add_argument("--warmup_epochs",   type=int, default=None,
-                   help="Default: 10 (full_ft) or 5 (frozen)")
+                   help="Default: 10 full_ft / 5 frozen / 10 scratch")
     p.add_argument("--patience",        type=int, default=10,
                    help="Early-stopping patience on val balanced accuracy")
     p.add_argument("--grad_accum_steps", type=int, default=8,
                    help="Micro-batches accumulated before an optimiser step. "
                         "Effective batch = batch_size * grad_accum_steps "
                         "(default 8 -> 32 at batch_size=4).")
-    p.add_argument("--llrd_gamma",      type=float, default=0.70,
+    p.add_argument("--llrd_gamma",      type=float, default=None,
                    help="Layer-wise LR decay for full_ft: each ViT block deeper "
-                        "from the head gets lr *= gamma. 1.0 disables (uniform "
-                        "LR). Reduces to one group for the frozen strategy.")
+                        "from the head gets lr *= gamma. Default 0.70 for "
+                        "full_ft/frozen, 1.0 for scratch (no decay — a "
+                        "random-init net trains all layers at uniform LR).")
     p.add_argument("--num_workers",     type=int, default=2)
     p.add_argument("--max_subjects",    type=int, default=None,
                    help="Cap subjects per split (smoke test)")
@@ -274,12 +279,20 @@ def parse_args():
     p.add_argument("--wandb_run_name",  type=str, default=None)
     args = p.parse_args()
 
+    # Strategy-dependent defaults. scratch trains a random-init ViT-B, which
+    # needs longer and a higher LR than fine-tuning a pretrained net (tunable).
     if args.epochs is None:
-        args.epochs = 50 if args.strategy == "full_ft" else 70
+        args.epochs = {"full_ft": 50, "frozen": 70, "scratch": 100}[args.strategy]
     if args.lr is None:
-        args.lr = 1e-4 if args.strategy == "full_ft" else 1e-3
+        args.lr = {"full_ft": 1e-4, "frozen": 1e-3, "scratch": 1e-3}[args.strategy]
     if args.warmup_epochs is None:
-        args.warmup_epochs = 10 if args.strategy == "full_ft" else 5
+        args.warmup_epochs = {"full_ft": 10, "frozen": 5, "scratch": 10}[args.strategy]
+    if args.llrd_gamma is None:
+        # LLRD is a fine-tuning technique; a from-scratch net uses uniform LR.
+        args.llrd_gamma = 1.0 if args.strategy == "scratch" else 0.70
+    # --pretrained_ckpt is required for full_ft / frozen, ignored for scratch.
+    if args.strategy in ("full_ft", "frozen") and not args.pretrained_ckpt:
+        p.error(f"--pretrained_ckpt is required for strategy '{args.strategy}'")
 
     # Resolve session selection mode
     if args.long is None:
@@ -794,7 +807,10 @@ def main():
     np.random.seed(args.seed)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    out_dir = Path(args.out_dir) / MODEL_SLUG / args.task / f"seed_{args.seed}" / args.strategy
+    # scratch runs land under a distinct model slug so 05/06 aggregators treat
+    # the from-scratch ViT as a separate model from the MAE-pretrained one.
+    model_slug = "ViT_B_scratch" if args.strategy == "scratch" else MODEL_SLUG
+    out_dir = Path(args.out_dir) / model_slug / args.task / f"seed_{args.seed}" / args.strategy
     out_dir.mkdir(parents=True, exist_ok=True)
 
     print("=" * 70)
@@ -918,7 +934,11 @@ def main():
         global_avg_pool=False, pos_embed_type="learnable",
         patch_embed_fun="conv3d",
     )
-    model = load_pretrained_checkpoint(model, args.pretrained_ckpt)
+    if args.strategy == "scratch":
+        print("  Strategy 'scratch': random initialisation — no pretrained "
+              "checkpoint loaded.")
+    else:
+        model = load_pretrained_checkpoint(model, args.pretrained_ckpt)
     model = model.to(device)
 
     if args.strategy == "frozen":
@@ -1098,7 +1118,7 @@ def main():
 
         # ── Save metrics.json (matches clinical pipeline schema) ─────────────
         config = {
-            "model_id":              MODEL_SLUG,
+            "model_id":              model_slug,
             "pretrained_ckpt":       args.pretrained_ckpt,
             "task":                  args.task,
             "task_description":      task_cfg["description"],

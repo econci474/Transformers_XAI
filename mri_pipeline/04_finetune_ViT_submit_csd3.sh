@@ -10,7 +10,7 @@
 #SBATCH --cpus-per-task=3
 #SBATCH --mem=32G
 #SBATCH --time=12:00:00
-#SBATCH --array=0-23%4
+#SBATCH --array=0-35%4
 # =============================================================================
 # 04_finetune_ViT_submit_csd3.sh   --   ViT debugging re-run
 # =============================================================================
@@ -18,15 +18,16 @@
 # ADNI T1w MRIs, with the debugging fixes (balanced-acc model selection, LLRD,
 # gradient accumulation, pre-flight input gate, per-subject eval).
 #
-# 1 model x 4 tasks x 3 seeds x 2 strategies = 24 combinations.
+# 1 model x 4 tasks x 3 seeds x 3 strategies = 36 combinations.
 # Array index decoder: STRAT_IDX -> SEED_IDX -> TASK_IDX (low-to-high stride).
 #
 #   Task     : T1_binary | T1b_binary | T1c_binary | T2_multiclass
 #   Seed     : 0 | 1 | 2
-#   Strategy : full_ft | frozen
+#   Strategy : full_ft | frozen | scratch
+# scratch = random init, no MAE checkpoint -> output slug ViT_B_scratch.
 #
 # Runs offline wandb -> sync to project 'vit_debugging' after the sweep:
-#   wandb sync <OUT_DIR>/ViT_B_mae75/*/seed_*/*/wandb/offline-run-*
+#   wandb sync <OUT_DIR>/ViT_B_*/*/seed_*/*/wandb/offline-run-*
 #
 # SLURM .log/.err and the per-run offline-wandb data both land under the
 # OUTPUT tree, never in the scripts/git directory.
@@ -76,11 +77,11 @@ PY_SESSION_FLAGS="--long all"      # every available session (bl..mAll)
 # -- Combination lookup -------------------------------------------------------
 TASKS=("T1_binary" "T1b_binary" "T1c_binary" "T2_multiclass")
 SEEDS=(0 1 2)
-STRATEGIES=("full_ft" "frozen")
+STRATEGIES=("full_ft" "frozen" "scratch")
 
 N_TASKS=${#TASKS[@]}        # 4
 N_SEEDS=${#SEEDS[@]}        # 3
-N_STRAT=${#STRATEGIES[@]}   # 2
+N_STRAT=${#STRATEGIES[@]}   # 3
 
 # Decode SLURM_ARRAY_TASK_ID -> (task, seed, strategy)
 ID=${SLURM_ARRAY_TASK_ID}
@@ -92,7 +93,12 @@ TASK="${TASKS[$TASK_IDX]}"
 SEED="${SEEDS[$SEED_IDX]}"
 STRATEGY="${STRATEGIES[$STRAT_IDX]}"
 
-MODEL_SLUG="ViT_B_mae75"
+# scratch runs use a distinct model slug (matches 04_supervised_finetuning_ViT.py)
+if [ "${STRATEGY}" = "scratch" ]; then
+    MODEL_SLUG="ViT_B_scratch"
+else
+    MODEL_SLUG="ViT_B_mae75"
+fi
 RUN_DIR="${OUT_DIR}/${MODEL_SLUG}/${TASK}/seed_${SEED}/${STRATEGY}"
 METRICS="${RUN_DIR}/metrics.json"
 
@@ -121,7 +127,7 @@ echo "  Started        : $(date)"
 echo "============================================================"
 
 # -- Pre-flight checks --------------------------------------------------------
-if [ ! -f "${PRETRAINED_CKPT}" ]; then
+if [ "${STRATEGY}" != "scratch" ] && [ ! -f "${PRETRAINED_CKPT}" ]; then
     echo "[ERROR] Pretrained checkpoint not found: ${PRETRAINED_CKPT}"
     exit 1
 fi
@@ -158,7 +164,6 @@ python "${SCRIPT_DIR}/04_supervised_finetuning_ViT.py" \
     --vit_inputs_dir      "${VIT_INPUTS_DIR}" \
     --out_dir             "${OUT_DIR}" \
     --grad_accum_steps    8 \
-    --llrd_gamma          0.70 \
     --wandb \
     --wandb_project       vit_debugging \
     --num_workers         "${SLURM_CPUS_PER_TASK}"
