@@ -3,7 +3,7 @@
 # 03g_prepare_BrainMVP_submit_csd3.sh
 # =============================================================================
 # CPU-only SLURM job: applies BrainMVP preprocessing chain (orientation ->
-# spacing 1mm -> percentile clip [1st,99th] -> [0,1] -> crop foreground ->
+# spacing 1mm -> percentile clip [5th,95th] -> [0,1] -> crop foreground ->
 # resize 128x128x64) to sMRIprep MNI T1w volumes, producing:
 #   brainmvp_inputs/sub-*/ses-*/sub-*_space-BrainMVP128x64_desc-preproc_T1w.nii.gz
 #
