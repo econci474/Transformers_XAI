@@ -92,6 +92,27 @@ SNP_TSV        = os.path.join(PROJECT_ROOT, "bids", "genotype",
 TARGET_SPACING = (1.75, 1.75, 1.75)   # mm
 TARGET_SHAPE   = (128, 128, 128)      # voxels
 
+
+def build_transform() -> mt.Compose:
+    """The preprocessing pipeline applied to every sMRIprep MNI T1w volume.
+
+    Order — Orientation -> Spacing -> NormalizeIntensity -> CropForeground ->
+    Resize — matches the reference repo qasymjomart/ViT_recipe_for_AD
+    (dataloaders/make_dataloaders.py). NormalizeIntensity runs BEFORE Resize
+    intentionally; the final resize slightly perturbs the nonzero z-score
+    (stored volumes sit at mean ~0.03, std ~0.92) but uniformly across every
+    volume. Exposed as a function so unit tests can exercise it directly.
+    """
+    return mt.Compose([
+        mt.LoadImaged(keys=["image"]),
+        mt.EnsureChannelFirstd(keys=["image"]),
+        mt.Orientationd(keys=["image"], axcodes="RAS"),
+        mt.Spacingd(keys=["image"], pixdim=TARGET_SPACING),
+        mt.NormalizeIntensityd(keys=["image"], nonzero=True),
+        mt.CropForegroundd(keys=["image"], source_key="image"),
+        mt.Resized(keys=["image"], spatial_size=TARGET_SHAPE),
+    ])
+
 # ── Argument parsing ───────────────────────────────────────────────────────────
 parser = argparse.ArgumentParser(
     description="Prepare ViT inputs from sMRIprep derivatives.")
@@ -263,18 +284,8 @@ def process_subject(sub: str, ses: str, dry_run: bool = False,
         return record
 
     try:
-        # ── MONAI transform pipeline ─────────────────────────────────────────
-        # This matches the ViT_recipe_for_AD preprocessing exactly:
-        #   Orientation → Spacing → NormalizeIntensity → CropForeground → Resize
-        transform = mt.Compose([
-            mt.LoadImaged(keys=["image"]),
-            mt.EnsureChannelFirstd(keys=["image"]),
-            mt.Orientationd(keys=["image"], axcodes="RAS"),
-            mt.Spacingd(keys=["image"], pixdim=TARGET_SPACING),
-            mt.NormalizeIntensityd(keys=["image"], nonzero=True),
-            mt.CropForegroundd(keys=["image"], source_key="image"),
-            mt.Resized(keys=["image"], spatial_size=TARGET_SHAPE),
-        ])
+        # ── MONAI transform pipeline (see build_transform() above) ───────────
+        transform = build_transform()
 
         data_dict = transform({"image": t1w_path})
         volume = data_dict["image"]  # shape: (1, 128, 128, 128)

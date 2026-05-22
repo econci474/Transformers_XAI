@@ -9,6 +9,7 @@ Tasks (mirroring clinical_pipeline/03_encoder_finetune.py)
 ----------------------------------------------------------
   T1_binary     : CN vs MCI+AD          (binary)
   T1b_binary    : CN+MCI vs AD          (binary)
+  T1c_binary    : CN vs AD              (binary, MCI excluded)
   T2_multiclass : CN / MCI / AD         (3-class)
   T3a_conv3y    : Conversion to AD <=3y (binary, non-AD at baseline)
   T3b_conv5y    : Conversion to AD <=5y (binary, non-AD at baseline)
@@ -44,7 +45,7 @@ Output layout (matches clinical pipeline)
                        "test_diagnostics": {confusion_matrix, per_class
                        precision/recall/sensitivity/specificity/f1/support,
                        labels}}
-    best_model.pt     weights with lowest val_loss
+    best_model.pt     weights with highest val balanced accuracy
     last_checkpoint.pt  atomic per-epoch resume state (model+optim+scaler+
                         counters); auto-resumed on rerun unless --no_resume.
                         Safety net for the 12 h SLURM/Colab wall-time cap.
@@ -88,6 +89,7 @@ from sklearn.utils.class_weight import compute_class_weight
 from torch.utils.data import ConcatDataset, DataLoader
 
 import monai.transforms as mt
+import nibabel as nib
 from monai.data import Dataset
 
 # Vendored ViT_recipe_for_AD subset
@@ -132,6 +134,19 @@ TASK_CONFIG = {
         "filter_non_ad":  False,
         "session_policy": "current",
         "description":    "Binary: CN+MCI vs AD",
+    },
+    "T1c_binary": {
+        # CN vs AD only — the cleanest binary contrast (no ambiguous MCI middle
+        # group). MCI is deliberately absent from label_map, so _resolve_labels
+        # maps MCI scans to None and drops them (see _resolve_labels, which ends
+        # with dropna(subset=["label"])). Cohort ~216 AD + ~507 CN scans.
+        "label_col":      "Label_bl_multi",
+        "num_labels":     2,
+        "task_type":      "binary",
+        "label_map":      {"CN": 0, "AD": 1},
+        "filter_non_ad":  False,
+        "session_policy": "current",
+        "description":    "Binary: CN vs AD (MCI excluded)",
     },
     "T2_multiclass": {
         "label_col":      "Label_bl_multi",
@@ -215,9 +230,18 @@ def parse_args():
     p.add_argument("--lr",              type=float, default=None,
                    help="Default: 1e-4 (full_ft) or 1e-3 (frozen)")
     p.add_argument("--weight_decay",    type=float, default=1e-4)
-    p.add_argument("--warmup_epochs",   type=int, default=5)
+    p.add_argument("--warmup_epochs",   type=int, default=None,
+                   help="Default: 10 (full_ft) or 5 (frozen)")
     p.add_argument("--patience",        type=int, default=10,
-                   help="Early-stopping patience on val_loss")
+                   help="Early-stopping patience on val balanced accuracy")
+    p.add_argument("--grad_accum_steps", type=int, default=8,
+                   help="Micro-batches accumulated before an optimiser step. "
+                        "Effective batch = batch_size * grad_accum_steps "
+                        "(default 8 -> 32 at batch_size=4).")
+    p.add_argument("--llrd_gamma",      type=float, default=0.70,
+                   help="Layer-wise LR decay for full_ft: each ViT block deeper "
+                        "from the head gets lr *= gamma. 1.0 disables (uniform "
+                        "LR). Reduces to one group for the frozen strategy.")
     p.add_argument("--num_workers",     type=int, default=2)
     p.add_argument("--max_subjects",    type=int, default=None,
                    help="Cap subjects per split (smoke test)")
@@ -254,6 +278,8 @@ def parse_args():
         args.epochs = 50 if args.strategy == "full_ft" else 70
     if args.lr is None:
         args.lr = 1e-4 if args.strategy == "full_ft" else 1e-3
+    if args.warmup_epochs is None:
+        args.warmup_epochs = 10 if args.strategy == "full_ft" else 5
 
     # Resolve session selection mode
     if args.long is None:
@@ -345,6 +371,8 @@ def init_wandb(args, task_cfg: dict, extra=None):
         "lr":              args.lr,
         "weight_decay":    args.weight_decay,
         "batch_size":      args.batch_size,
+        "grad_accum_steps": args.grad_accum_steps,
+        "llrd_gamma":      args.llrd_gamma,
         "warmup_epochs":   args.warmup_epochs,
         "patience":        args.patience,
         "drop_path_rate":  args.drop_path_rate,
@@ -616,16 +644,22 @@ def compute_diagnostics(y_true: np.ndarray, preds: np.ndarray,
 
 
 # ── Train / eval loops ────────────────────────────────────────────────────────
-def run_one_epoch(model, loader, criterion, optimizer, scaler, device, train: bool):
+def run_one_epoch(model, loader, criterion, optimizer, scaler, device,
+                  train: bool, grad_accum_steps: int = 1):
     model.train(mode=train)
     total_loss = 0.0
     total_correct = 0
     total_n = 0
     all_logits, all_labels = [], []
 
+    accum = max(1, int(grad_accum_steps)) if train else 1
+    n_batches = len(loader)
+
     ctx = torch.enable_grad() if train else torch.no_grad()
     with ctx:
-        for batch in loader:
+        if train:
+            optimizer.zero_grad(set_to_none=True)
+        for i, batch in enumerate(loader):
             x = batch["image"].to(device, non_blocking=True).float()
             y = batch["label"].to(device, non_blocking=True).long()
 
@@ -634,12 +668,16 @@ def run_one_epoch(model, loader, criterion, optimizer, scaler, device, train: bo
                 loss = criterion(logits, y)
 
             if train:
-                optimizer.zero_grad(set_to_none=True)
-                scaler.scale(loss).backward()
-                scaler.unscale_(optimizer)
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-                scaler.step(optimizer)
-                scaler.update()
+                # Divide by `accum` so accumulated grads average the
+                # micro-batches; step once every `accum` batches (and on the
+                # final batch, to flush any trailing partial group).
+                scaler.scale(loss / accum).backward()
+                if ((i + 1) % accum == 0) or ((i + 1) == n_batches):
+                    scaler.unscale_(optimizer)
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                    scaler.step(optimizer)
+                    scaler.update()
+                    optimizer.zero_grad(set_to_none=True)
 
             total_loss += loss.item() * x.size(0)
             preds = logits.argmax(dim=-1)
@@ -654,13 +692,97 @@ def run_one_epoch(model, loader, criterion, optimizer, scaler, device, train: bo
             np.concatenate(all_labels, axis=0) if all_labels else np.empty((0,)))
 
 
-def lr_at(epoch_idx: int, args) -> float:
-    """Linear warmup for warmup_epochs, then cosine decay to 5e-6."""
-    eta_min = 5e-6
+def lr_multiplier_at(epoch_idx: int, args) -> float:
+    """LR schedule as a multiplier in [0, 1] applied to every param group's base
+    LR: linear warmup for warmup_epochs, then cosine decay to a small floor.
+
+    Returning a multiplier (not an absolute LR) lets layer-wise LR decay work —
+    each param group keeps its own base LR and is scaled by the same schedule.
+    """
+    eta_min_frac = 5e-6 / max(args.lr, 1e-12)  # floor as a fraction of peak LR
     if epoch_idx < args.warmup_epochs:
-        return args.lr * (epoch_idx + 1) / max(args.warmup_epochs, 1)
+        return (epoch_idx + 1) / max(args.warmup_epochs, 1)
     progress = (epoch_idx - args.warmup_epochs) / max(args.epochs - args.warmup_epochs, 1)
-    return eta_min + 0.5 * (args.lr - eta_min) * (1 + np.cos(np.pi * progress))
+    return eta_min_frac + 0.5 * (1.0 - eta_min_frac) * (1 + np.cos(np.pi * progress))
+
+
+def build_param_groups(model, args) -> list:
+    """AdamW parameter groups with layer-wise LR decay (LLRD).
+
+    Each group carries a 'base_lr'; the scheduler scales every group's base_lr by
+    the same [0,1] multiplier each epoch. The classifier head trains at the full
+    --lr; ViT blocks get lr *= llrd_gamma per step away from the head; the patch
+    / position embeddings get the smallest LR. With --llrd_gamma 1.0, or for the
+    frozen strategy (only the head is trainable), this collapses to one group.
+    """
+    depth = len(model.blocks) if hasattr(model, "blocks") else 12
+    max_idx = depth + 1  # 0=patch/pos embeds .. depth=last block .. depth+1=head
+
+    def layer_index(name: str) -> int:
+        if name.startswith(("patch_embed", "pos_embed", "cls_token")):
+            return 0
+        m = re.match(r"blocks\.(\d+)\.", name)
+        if m:
+            return int(m.group(1)) + 1
+        return max_idx  # head, final norm, anything else late
+
+    groups: dict = {}
+    for name, p in model.named_parameters():
+        if not p.requires_grad:
+            continue
+        base_lr = args.lr * (args.llrd_gamma ** (max_idx - layer_index(name)))
+        key = round(base_lr, 12)
+        groups.setdefault(
+            key, {"params": [], "base_lr": base_lr, "lr": base_lr}
+        )["params"].append(p)
+    return list(groups.values())
+
+
+def preflight_check_inputs(splits: dict, sample_k: int = 6) -> None:
+    """Fail fast BEFORE training if the preprocessed inputs look wrong.
+
+    For each split: assert it is non-empty and (train/val) has >=2 classes. Then
+    load a random sample of volumes and assert each — shape (1,128,128,128),
+    all-finite, non-empty brain (>0.8M nonzero voxels), and intensity within
+    generous z-scored bands (nonzero mean in [-0.2,0.2], std in [0.75,1.15]).
+    Bands are loose on purpose: catch gross failures (raw un-normalised
+    intensities, all-zero volumes, NaN, wrong shape), not enforce exact 0/1
+    (real volumes sit near 0.03 / 0.92). Raises RuntimeError on any failure.
+    """
+    import random
+    rng = random.Random(0)
+    expect = (128, 128, 128)
+    for name, df in splits.items():
+        if len(df) == 0:
+            raise RuntimeError(f"[preflight] split '{name}' is empty.")
+        if name in ("train", "val") and df["label"].nunique() < 2:
+            raise RuntimeError(
+                f"[preflight] split '{name}' has <2 classes "
+                f"({sorted(df['label'].unique())}) — cannot train/validate.")
+        paths = df["image_path"].tolist()
+        for p in rng.sample(paths, min(sample_k, len(paths))):
+            if not os.path.isfile(p):
+                raise RuntimeError(f"[preflight] missing volume: {p}")
+            arr = np.asarray(nib.load(p).get_fdata(dtype=np.float32))
+            arr = np.squeeze(arr)
+            if tuple(arr.shape) != expect:
+                raise RuntimeError(
+                    f"[preflight] {p}: shape {arr.shape}, expected {expect}.")
+            if not np.isfinite(arr).all():
+                raise RuntimeError(f"[preflight] {p}: contains NaN/Inf.")
+            nz = arr[arr != 0]
+            if nz.size < 800_000:
+                raise RuntimeError(
+                    f"[preflight] {p}: only {nz.size} nonzero voxels — "
+                    f"brain mask looks empty/wrong.")
+            m, s = float(nz.mean()), float(nz.std())
+            if not (-0.2 <= m <= 0.2 and 0.75 <= s <= 1.15):
+                raise RuntimeError(
+                    f"[preflight] {p}: nonzero mean={m:.3f} std={s:.3f} outside "
+                    f"expected z-scored bands — was NormalizeIntensity applied "
+                    f"in 03_prepare_ViT.py?")
+    print(f"  [preflight] inputs OK — sampled up to {sample_k}/split; "
+          f"shape (1,128,128,128), finite, z-scored.")
 
 
 # ── Main ───────────────────────────────────────────────────────────────────────
@@ -736,6 +858,9 @@ def main():
     if min(len(train_df), len(val_df), len(test_df)) == 0:
         raise RuntimeError("Empty split after filtering — check vit_inputs_dir / master_clinical_csv.")
 
+    # ── Pre-flight: validate the preprocessed inputs before training ─────────
+    preflight_check_inputs({"train": train_df, "val": val_df, "test": test_df})
+
     # Save dataset manifest for the run (which (sub, ses, label, image_path) tuples were used)
     manifest_rows = []
     for split_name, sdf in [("train", train_df), ("val", val_df), ("test", test_df)]:
@@ -804,10 +929,14 @@ def main():
         print(f"  Frozen strategy: {n_train:,} trainable params (head only)")
 
     # ── Optimizer / scheduler / scaler / criterion ───────────────────────────
-    trainable = [p for p in model.parameters() if p.requires_grad]
-    optimizer = torch.optim.AdamW(trainable, lr=args.lr,
+    param_groups = build_param_groups(model, args)
+    optimizer = torch.optim.AdamW(param_groups, lr=args.lr,
                                   weight_decay=args.weight_decay,
                                   betas=(0.9, 0.999))
+    _blr = [g["base_lr"] for g in param_groups]
+    print(f"  Optimizer: AdamW, {len(param_groups)} LR group(s) "
+          f"(LLRD gamma={args.llrd_gamma}); base LR "
+          f"[{min(_blr):.2e}, {max(_blr):.2e}]")
     scaler = torch.cuda.amp.GradScaler(enabled=(device.type == "cuda"))
     criterion = nn.CrossEntropyLoss(weight=class_weights,
                                     label_smoothing=args.label_smoothing)
@@ -820,7 +949,8 @@ def main():
     # ── Resumable per-epoch checkpoint state ─────────────────────────────────
     ckpt_path = out_dir / "last_checkpoint.pt"
     train_log_path = out_dir / "train_log.csv"
-    best_val = float("inf")
+    best_metric = -1.0                     # best val balanced accuracy seen
+    best_val_loss_at_best = float("inf")   # val_loss at that epoch (tie-break)
     best_epoch = -1
     epochs_since_improve = 0
     log_rows = []
@@ -831,26 +961,29 @@ def main():
         model.load_state_dict(ck["model"])
         optimizer.load_state_dict(ck["optimizer"])
         scaler.load_state_dict(ck["scaler"])
-        best_val = ck["best_val"]
+        best_metric = ck.get("best_metric", -1.0)
+        best_val_loss_at_best = ck.get("best_val_loss_at_best", float("inf"))
         best_epoch = ck["best_epoch"]
         epochs_since_improve = ck["epochs_since_improve"]
         log_rows = ck["log_rows"]
         start_epoch = ck["epoch"] + 1  # ck["epoch"] = last completed (0-based)
         print(f"  Resuming from epoch {start_epoch + 1} "
-              f"(last completed epoch {ck['epoch'] + 1}; best_val={best_val:.4f}).")
+              f"(last completed epoch {ck['epoch'] + 1}; "
+              f"best val balanced acc={best_metric:.4f}).")
 
     def _save_checkpoint(ep: int):
         """Atomic per-epoch checkpoint (survives a 12 h SLURM/Colab kill)."""
         state = {
-            "model":                model.state_dict(),
-            "optimizer":            optimizer.state_dict(),
-            "scaler":               scaler.state_dict(),
-            "epoch":                ep,  # 0-based, just completed
-            "best_val":             best_val,
-            "best_epoch":           best_epoch,
-            "epochs_since_improve": epochs_since_improve,
-            "log_rows":             log_rows,
-            "args":                 vars(args),
+            "model":                 model.state_dict(),
+            "optimizer":             optimizer.state_dict(),
+            "scaler":                scaler.state_dict(),
+            "epoch":                 ep,  # 0-based, just completed
+            "best_metric":           best_metric,
+            "best_val_loss_at_best": best_val_loss_at_best,
+            "best_epoch":            best_epoch,
+            "epochs_since_improve":  epochs_since_improve,
+            "log_rows":              log_rows,
+            "args":                  vars(args),
         }
         tmp = ckpt_path.with_suffix(".pt.tmp")
         torch.save(state, tmp)
@@ -859,24 +992,40 @@ def main():
     try:
         # ── Training loop ────────────────────────────────────────────────────
         for epoch in range(start_epoch, args.epochs):
-            cur_lr = lr_at(epoch, args)
+            lr_mult = lr_multiplier_at(epoch, args)
             for g in optimizer.param_groups:
-                g["lr"] = cur_lr
+                g["lr"] = g["base_lr"] * lr_mult
+            cur_lr = args.lr * lr_mult  # head-group LR, for logging
 
             tr_loss, tr_acc, _, _ = run_one_epoch(
-                model, train_loader, criterion, optimizer, scaler, device, train=True)
-            va_loss, va_acc, _, _ = run_one_epoch(
-                model, val_loader, criterion, optimizer, scaler, device, train=False)
+                model, train_loader, criterion, optimizer, scaler, device,
+                train=True, grad_accum_steps=args.grad_accum_steps)
+            va_loss, va_acc, va_logits, va_labels = run_one_epoch(
+                model, val_loader, criterion, optimizer, scaler, device,
+                train=False)
+
+            # Balanced accuracy on val — the metric that selects the best
+            # checkpoint. val_loss alone, under class imbalance + warmup,
+            # selects an untrained epoch-1 model (see the debug plan).
+            va_bacc = float(balanced_accuracy_score(
+                va_labels, va_logits.argmax(axis=-1)))
 
             log_rows.append({"epoch": epoch + 1, "lr": cur_lr,
                              "train_loss": tr_loss, "train_acc": tr_acc,
-                             "val_loss": va_loss, "val_acc": va_acc})
+                             "val_loss": va_loss, "val_acc": va_acc,
+                             "val_bacc": va_bacc})
             print(f"  [epoch {epoch+1:>3}/{args.epochs}] "
                   f"lr={cur_lr:.2e}  train_loss={tr_loss:.4f}  train_acc={tr_acc:.4f}  "
-                  f"val_loss={va_loss:.4f}  val_acc={va_acc:.4f}")
+                  f"val_loss={va_loss:.4f}  val_acc={va_acc:.4f}  val_bacc={va_bacc:.4f}")
 
-            if va_loss < best_val:
-                best_val = va_loss
+            # Selection: maximise val balanced accuracy, tie-break on lower
+            # val_loss (ties at 0.5 are common when a model collapses).
+            improved = (va_bacc > best_metric + 1e-6) or (
+                abs(va_bacc - best_metric) <= 1e-6
+                and va_loss < best_val_loss_at_best)
+            if improved:
+                best_metric = va_bacc
+                best_val_loss_at_best = va_loss
                 best_epoch = epoch + 1
                 epochs_since_improve = 0
                 torch.save({"net": model.state_dict(), "epoch": best_epoch},
@@ -893,11 +1042,12 @@ def main():
                 wandb.log({"epoch": epoch + 1, "lr": cur_lr,
                            "train_loss": tr_loss, "train_acc": tr_acc,
                            "val_loss": va_loss, "val_acc": va_acc,
-                           "best_val_loss": best_val})
+                           "val_bacc": va_bacc,
+                           "best_val_balanced_acc": best_metric})
 
             if epochs_since_improve >= args.patience:
                 print(f"  Early stopping at epoch {epoch+1} "
-                      f"(no val improvement for {args.patience}).")
+                      f"(no val balanced-acc improvement for {args.patience}).")
                 break
 
         pd.DataFrame(log_rows).to_csv(train_log_path, index=False)
@@ -909,15 +1059,19 @@ def main():
             model, test_loader, criterion, optimizer, scaler, device, train=False)
         test_metrics, test_preds, test_probs = compute_test_metrics(
             test_labels, test_logits, task_cfg["task_type"])
-        print(f"  Test metrics: {test_metrics}")
+        print(f"  Test metrics (image-level): {test_metrics}")
 
         # Confusion matrix + per-class P/R/F1/sensitivity/specificity/support
         label_names = class_names_for(task_cfg)
         test_diagnostics = compute_diagnostics(
             test_labels, test_preds, num_labels, label_names)
 
-        # Per-sample predictions (rebuilds any confusion matrix / ROC later)
+        # Per-sample predictions. test_loader is shuffle=False / batch_size=1, so
+        # row i of test_logits aligns with row i of test_df — attach the IDs.
+        n_te = len(test_labels)
         pred_df = pd.DataFrame({
+            "Patient_ID": test_df["Patient_ID"].values[:n_te],
+            "bids_ses":   test_df["bids_ses"].values[:n_te],
             "y_true": test_labels.astype(int),
             "y_pred": test_preds.astype(int),
         })
@@ -925,53 +1079,82 @@ def main():
             pred_df[f"prob_{c}"] = test_probs[:, c]
         pred_df.to_csv(out_dir / "test_predictions.csv", index=False)
 
+        # ── Per-subject evaluation ────────────────────────────────────────────
+        # In --long mode a subject contributes several scans; aggregate to one
+        # prediction per Patient_ID by mean predicted probability. Steadier and
+        # more honest than the image-level metric (test images are correlated).
+        prob_cols = [f"prob_{c}" for c in range(test_probs.shape[1])]
+        subj = pred_df.groupby("Patient_ID").agg(
+            {**{pc: "mean" for pc in prob_cols}, "y_true": "first"})
+        subj_probs = subj[prob_cols].to_numpy()
+        # compute_test_metrics softmaxes its input; log(probs) round-trips back
+        # to the (already mean-aggregated) probabilities.
+        subj_logits = np.log(np.clip(subj_probs, 1e-8, 1.0))
+        test_metrics_subject, _, _ = compute_test_metrics(
+            subj["y_true"].to_numpy().astype(int), subj_logits,
+            task_cfg["task_type"])
+        print(f"  Test metrics (subject-level, n={len(subj)}): "
+              f"{test_metrics_subject}")
+
         # ── Save metrics.json (matches clinical pipeline schema) ─────────────
         config = {
-            "model_id":         MODEL_SLUG,
-            "pretrained_ckpt":  args.pretrained_ckpt,
-            "task":             args.task,
-            "task_description": task_cfg["description"],
-            "session":          cohort_label(args, task_cfg),
-            "long_mode":        args.long_mode,
-            "max_months":       args.max_months,
-            "session_policy":   task_cfg["session_policy"],
-            "seed":             args.seed,
-            "strategy":         args.strategy,
-            "augment":          args.augment,
-            "aug_copies":       args.aug_copies,
-            "epochs":           args.epochs,
-            "best_epoch":       best_epoch,
-            "lr":               args.lr,
-            "weight_decay":     args.weight_decay,
-            "batch_size":       args.batch_size,
-            "warmup_epochs":    args.warmup_epochs,
-            "patience":         args.patience,
-            "drop_path_rate":   args.drop_path_rate,
-            "attn_dropout":     args.attn_dropout,
-            "label_smoothing":  args.label_smoothing,
-            "n_train":          int(len(train_df)),
-            "n_val":            int(len(val_df)),
-            "n_test":           int(len(test_df)),
-            "class_weights":    {i: round(float(w), 4) for i, w in enumerate(cw.tolist())},
-            "timestamp":        datetime.now().isoformat(),
+            "model_id":              MODEL_SLUG,
+            "pretrained_ckpt":       args.pretrained_ckpt,
+            "task":                  args.task,
+            "task_description":      task_cfg["description"],
+            "session":               cohort_label(args, task_cfg),
+            "long_mode":             args.long_mode,
+            "max_months":            args.max_months,
+            "session_policy":        task_cfg["session_policy"],
+            "seed":                  args.seed,
+            "strategy":              args.strategy,
+            "augment":               args.augment,
+            "aug_copies":            args.aug_copies,
+            "epochs":                args.epochs,
+            "best_epoch":            best_epoch,
+            "best_val_balanced_acc": round(float(best_metric), 4),
+            "lr":                    args.lr,
+            "weight_decay":          args.weight_decay,
+            "batch_size":            args.batch_size,
+            "grad_accum_steps":      args.grad_accum_steps,
+            "effective_batch_size":  args.batch_size * args.grad_accum_steps,
+            "llrd_gamma":            args.llrd_gamma,
+            "warmup_epochs":         args.warmup_epochs,
+            "patience":              args.patience,
+            "drop_path_rate":        args.drop_path_rate,
+            "attn_dropout":          args.attn_dropout,
+            "label_smoothing":       args.label_smoothing,
+            "n_train":               int(len(train_df)),
+            "n_val":                 int(len(val_df)),
+            "n_test":                int(len(test_df)),
+            "n_test_subjects":       int(len(subj)),
+            "class_weights":         {i: round(float(w), 4) for i, w in enumerate(cw.tolist())},
+            "timestamp":             datetime.now().isoformat(),
         }
         with open(out_dir / "metrics.json", "w") as f:
             json.dump({"config": config, "test_metrics": test_metrics,
+                       "test_metrics_subject": test_metrics_subject,
                        "test_diagnostics": test_diagnostics}, f, indent=2)
 
         if wb is not None:
             import wandb
             wandb.log({f"test/{k}": v for k, v in test_metrics.items()
                        if isinstance(v, (int, float))})
+            wandb.log({f"test_subject/{k}": v
+                       for k, v in test_metrics_subject.items()
+                       if isinstance(v, (int, float))})
             wandb.log({"test/confusion_matrix": wandb.plot.confusion_matrix(
                 y_true=test_labels.astype(int).tolist(),
                 preds=test_preds.astype(int).tolist(),
                 class_names=label_names)})
-            wandb.run.summary["best_val_loss"] = best_val
+            wandb.run.summary["best_val_balanced_acc"] = best_metric
             wandb.run.summary["best_epoch"] = best_epoch
             for k, v in test_metrics.items():
                 if isinstance(v, (int, float)):
                     wandb.run.summary[f"test_{k}"] = v
+            for k, v in test_metrics_subject.items():
+                if isinstance(v, (int, float)):
+                    wandb.run.summary[f"test_subject_{k}"] = v
             wandb.run.summary["confusion_matrix"] = test_diagnostics["confusion_matrix"]
             wandb.run.summary["per_class"] = test_diagnostics["per_class"]
 

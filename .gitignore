@@ -32,3 +32,4 @@ classification_results/
 
 #Wandb
 wandb_api.txt
+wandb/
