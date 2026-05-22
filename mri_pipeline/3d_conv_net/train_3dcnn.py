@@ -4,15 +4,20 @@ train_3dcnn.py
 Train a Spasov-style 3D CNN baseline (vanilla `MRI3DCNN` or separable
 `MRI3DSeparableCNN`) on ADNI MRI for the diagnostic classification tasks.
 
-Tasks (same definitions as the ViT pipeline, by-visit diagnosis, all sessions)
------------------------------------------------------------------------------
-  T1_binary     CN vs MCI+AD        (binary)
-  T1b_binary    CN+MCI vs AD        (binary)
-  T1c_binary    CN vs AD            (binary, MCI scans dropped)
-  T2_multiclass CN / MCI / AD       (3-class)
+Tasks
+-----
+  T1_binary     CN vs MCI+AD   (binary,  by-visit dx, all sessions)
+  T1b_binary    CN+MCI vs AD   (binary,  by-visit dx, all sessions)
+  T1c_binary    CN vs AD       (binary,  by-visit dx, MCI dropped)
+  T1d_binary    pMCI vs sMCI   (binary,  MCI->AD conversion; one scan per
+                subject -- earliest session. Spasov's headline task;
+                exploratory, CNN-only.)
+  T2_multiclass CN / MCI / AD  (3-class, by-visit dx, all sessions)
 
-Every scan is labelled by the diagnosis recorded at the time of that scan
-(baseline scans use `Label_bl_multi`, follow-ups use `Label_visit_diag`).
+For T1/T1b/T1c/T2 each scan is labelled by the diagnosis at the time of that
+scan (bl rows use `Label_bl_multi`, follow-ups `Label_visit_diag`). For T1d
+the label is the subject-level pMCI/sMCI conversion flag, and only the
+earliest available scan per subject is used.
 A non-foundation, non-transformer baseline for the thesis comparison.
 
 Inputs
@@ -97,24 +102,41 @@ from bidsification.exclusions import is_excluded_subject
 # A diagnosis absent from label_map (e.g. MCI under T1c) -> the scan is dropped.
 TASK_CONFIG = {
     "T1_binary": {
+        "label_source": "visit_dx",
         "label_map":   {"CN": 0, "MCI": 1, "AD": 1},
         "num_labels":  2,
         "task_type":   "binary",
         "description": "Binary: CN vs MCI+AD",
     },
     "T1b_binary": {
+        "label_source": "visit_dx",
         "label_map":   {"CN": 0, "MCI": 0, "AD": 1},
         "num_labels":  2,
         "task_type":   "binary",
         "description": "Binary: CN+MCI vs AD",
     },
     "T1c_binary": {
+        "label_source": "visit_dx",
         "label_map":   {"CN": 0, "AD": 1},          # MCI dropped
         "num_labels":  2,
         "task_type":   "binary",
         "description": "Binary: CN vs AD (MCI excluded)",
     },
+    "T1d_binary": {
+        # Conversion task (Spasov's headline): does an MCI subject progress to
+        # AD? Label from the subject-level pMCI/sMCI flags. Only the earliest
+        # available scan per subject is used (ses-bl is nearly absent in this
+        # cohort, so the earliest scan is the closest analogue to Spasov's
+        # baseline-only setup, and keeps the task leakage-controlled).
+        "label_source": "conversion",
+        "pos_col":     "pMCI",
+        "neg_col":     "sMCI",
+        "num_labels":  2,
+        "task_type":   "binary",
+        "description": "Binary: pMCI vs sMCI (MCI->AD conversion, earliest scan/subject)",
+    },
     "T2_multiclass": {
+        "label_source": "visit_dx",
         "label_map":   {"CN": 0, "MCI": 1, "AD": 2},
         "num_labels":  3,
         "task_type":   "multiclass",
@@ -125,7 +147,10 @@ TASK_CONFIG = {
 
 def class_names_for(task_cfg: dict) -> list:
     """Per-index human-readable class names. label_map may be many-to-one
-    (e.g. T1_binary CN->0, MCI->1, AD->1) -> 'MCI+AD'."""
+    (e.g. T1_binary CN->0, MCI->1, AD->1) -> 'MCI+AD'. For a conversion task
+    the names are [neg_col, pos_col], e.g. ['sMCI', 'pMCI']."""
+    if task_cfg["label_source"] == "conversion":
+        return [task_cfg["neg_col"], task_cfg["pos_col"]]
     n, lm = task_cfg["num_labels"], task_cfg["label_map"]
     names = []
     for i in range(n):
@@ -156,6 +181,20 @@ def bids_sub_to_ptid(bids_sub: str):
     return f"{m.group(1)}_S_{m.group(2)}" if m else None
 
 
+def session_to_months(ses_label: str):
+    """'bl' -> 0, 'm24' -> 24. None for unparseable labels (used to pick the
+    earliest scan per subject for the conversion task)."""
+    if ses_label == "bl":
+        return 0
+    m = re.match(r"^m(\d+)$", str(ses_label))
+    return int(m.group(1)) if m else None
+
+
+def _is_one(v) -> bool:
+    """True if a (possibly string) 0/1 flag value represents 1."""
+    return str(v).strip() in ("1", "1.0", "True", "true")
+
+
 def cnn_image_path(patient_id: str, viscode: str, cnn_dir: Path) -> str:
     sub = "sub-" + patient_id.replace("_", "")
     ses = f"ses-{viscode}"
@@ -174,9 +213,19 @@ def load_matched_labels(csv_path: str) -> pd.DataFrame:
 def load_split(split_csv: Path, matched_df: pd.DataFrame, cnn_dir: Path,
                task_cfg: dict) -> tuple[pd.DataFrame, int]:
     """Build one split's labelled scan list: intersect the subject-level split
-    CSV with the matched-labels master, resolve the by-visit label via the
-    task's label_map (scans whose diagnosis is unmapped are dropped), and
-    resolve the cnn_inputs NIfTI path. Returns (df, n_missing)."""
+    CSV with the matched-labels master, resolve the label, resolve the
+    cnn_inputs NIfTI path. Returns (df, n_missing).
+
+    label_source 'visit_dx'   -> by-visit CN/MCI/AD label via label_map; scans
+                                 whose diagnosis is unmapped are dropped; all
+                                 sessions kept.
+    label_source 'conversion' -> subject-level pMCI/sMCI label; only the
+                                 EARLIEST available scan per subject is kept
+                                 (ses-bl is nearly absent in this cohort, so
+                                 the earliest scan is the closest analogue to
+                                 Spasov's baseline-only and keeps the task
+                                 leakage-controlled).
+    """
     subjects = pd.read_csv(split_csv, usecols=["Patient_ID"])["Patient_ID"].unique()
     df = matched_df[matched_df["Patient_ID"].isin(subjects)].copy()
 
@@ -185,16 +234,20 @@ def load_split(split_csv: Path, matched_df: pd.DataFrame, cnn_dir: Path,
     df = df[~df["Patient_ID"].apply(
         lambda p: is_excluded_subject(p, include_diagnostic_reversion=True))]
 
-    # By-visit label: bl rows use Label_bl_multi, follow-ups use Label_visit_diag.
-    df = df.dropna(subset=["Label_bl_multi", "Label_visit_diag"], how="any").copy()
-    label_map = task_cfg["label_map"]
+    if task_cfg["label_source"] == "conversion":
+        pos, neg = task_cfg["pos_col"], task_cfg["neg_col"]
+        df = df.dropna(subset=[pos, neg], how="any").copy()
+        df["label"] = df.apply(
+            lambda r: 1 if _is_one(r[pos]) else (0 if _is_one(r[neg]) else None),
+            axis=1)
+    else:   # visit_dx: bl rows use Label_bl_multi, follow-ups Label_visit_diag
+        df = df.dropna(subset=["Label_bl_multi", "Label_visit_diag"],
+                       how="any").copy()
+        label_map = task_cfg["label_map"]
+        df["label"] = df.apply(
+            lambda r: label_map.get(r["Label_bl_multi"] if r["bids_ses"] == "bl"
+                                    else r["Label_visit_diag"]), axis=1)
 
-    def _label(row):
-        dx = (row["Label_bl_multi"] if row["bids_ses"] == "bl"
-              else row["Label_visit_diag"])
-        return label_map.get(dx)        # unmapped diagnosis -> None -> dropped
-
-    df["label"] = df.apply(_label, axis=1)
     df = df.dropna(subset=["label"]).copy()
     df["label"] = df["label"].astype(int)
 
@@ -203,6 +256,15 @@ def load_split(split_csv: Path, matched_df: pd.DataFrame, cnn_dir: Path,
     have = df["image_path"].apply(os.path.isfile)
     n_missing = int((~have).sum())
     df = df[have].reset_index(drop=True)
+
+    if task_cfg["label_source"] == "conversion":
+        # One scan per subject — the earliest available session.
+        df["_months"] = df["bids_ses"].map(session_to_months)
+        df = df.dropna(subset=["_months"])
+        df = (df.sort_values(["Patient_ID", "_months"])
+                .groupby("Patient_ID", as_index=False).first()
+                .drop(columns="_months"))
+
     return df[["Patient_ID", "bids_ses", "label", "image_path"]], n_missing
 
 

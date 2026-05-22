@@ -10,16 +10,17 @@
 #SBATCH --cpus-per-task=3
 #SBATCH --mem=32G
 #SBATCH --time=08:00:00
-#SBATCH --array=0-23%4
+#SBATCH --array=0-29%4
 # =============================================================================
 # train_3dcnn_submit_csd3.sh   --   Spasov 3D CNN baseline sweep
 # =============================================================================
 # SLURM array job: trains the 3D CNN baselines on all 4 diagnostic tasks.
 #
-# 4 tasks x 2 models x 3 seeds = 24 combinations.
+# 5 tasks x 2 models x 3 seeds = 30 combinations.
 # Array index decoder: SEED_IDX -> MODEL_IDX -> TASK_IDX (low-to-high stride).
 #
-#   Task  : T1_binary | T1b_binary | T1c_binary | T2_multiclass
+#   Task  : T1_binary | T1b_binary | T1c_binary | T1d_binary | T2_multiclass
+#          (T1d = pMCI vs sMCI conversion, exploratory)
 #   Model : vanilla (MRI3DCNN) | separable (MRI3DSeparableCNN)
 #   Seed  : 0 | 1 | 2
 #
@@ -58,10 +59,10 @@ DATA_DIR="/home/ec474/rds/hpc-work/ADNI_CL/no_cdr_stratified_post_exclusion/tabu
 OUT_DIR="/home/ec474/rds/hpc-work/ADNI_MRI/cnn3d_outputs"
 
 # -- Combination lookup -------------------------------------------------------
-TASKS=("T1_binary" "T1b_binary" "T1c_binary" "T2_multiclass")
+TASKS=("T1_binary" "T1b_binary" "T1c_binary" "T1d_binary" "T2_multiclass")
 MODELS=("vanilla" "separable")
 SEEDS=(0 1 2)
-N_TASKS=${#TASKS[@]}      # 4
+N_TASKS=${#TASKS[@]}      # 5
 N_MODELS=${#MODELS[@]}    # 2
 N_SEEDS=${#SEEDS[@]}      # 3
 
