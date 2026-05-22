@@ -2,58 +2,58 @@
 train_3dcnn.py
 ==============
 Train a Spasov-style 3D CNN baseline (vanilla `MRI3DCNN` or separable
-`MRI3DSeparableCNN`) on ADNI MRI for the CN-vs-AD classification task.
+`MRI3DSeparableCNN`) on ADNI MRI for the diagnostic classification tasks.
 
-Task
-----
-CN vs AD, **by-visit diagnosis**, **all sessions** (the same definition as the
-ViT pipeline's `T1c_binary`): every scan is labelled by the diagnosis recorded
-at the time of that scan (baseline scans use `Label_bl_multi`, follow-up scans
-use `Label_visit_diag`). MCI scans are dropped. Positive class = AD (label 1).
+Tasks (same definitions as the ViT pipeline, by-visit diagnosis, all sessions)
+-----------------------------------------------------------------------------
+  T1_binary     CN vs MCI+AD        (binary)
+  T1b_binary    CN+MCI vs AD        (binary)
+  T1c_binary    CN vs AD            (binary, MCI scans dropped)
+  T2_multiclass CN / MCI / AD       (3-class)
 
-This is a non-foundation, non-transformer baseline for the thesis comparison.
+Every scan is labelled by the diagnosis recorded at the time of that scan
+(baseline scans use `Label_bl_multi`, follow-ups use `Label_visit_diag`).
+A non-foundation, non-transformer baseline for the thesis comparison.
 
 Inputs
 ------
   --cnn_inputs_dir     Per-(sub, ses) z-scored MNI volumes from
-                       00_prepare_CNN_inputs.py (193x229x193, 1 mm, RAS):
-                       {cnn_inputs_dir}/sub-XYZ/ses-{ses}/sub-XYZ_ses-{ses}_space-CNN193_desc-preproc_T1w.nii.gz
+                       00_prepare_CNN_inputs.py (193x229x193, 1 mm, RAS).
   --matched_labels_csv MRI<->clinical matched labels CSV (per (bids_sub,
                        bids_ses) with Label_bl_multi / Label_visit_diag).
   --data_dir           Post-exclusion clinical splits root:
-                       {data_dir}/seed_{seed}/{train,val,test}.csv. Used for
-                       SUBJECT PARTITIONING ONLY (which Patient_IDs go where) —
-                       splits are subject-level so all visits of a subject stay
-                       in one split. Reused from the clinical pipeline so the
-                       test subjects stay consistent across modalities.
+                       {data_dir}/seed_{seed}/{train,val,test}.csv. Subject
+                       partitioning only (subject-level — all visits of a
+                       subject stay in one split). Reused from the clinical
+                       pipeline so test subjects stay consistent across
+                       modalities.
 
 Model
 -----
   --model vanilla   -> MRI3DCNN          (3DCNN.py,  ~0.5 M params)
   --model separable -> MRI3DSeparableCNN (3DSCNN.py, ~0.03 M params)
-Both are loaded via importlib because their filenames start with a digit.
-n_outputs=1 (single logit) + BCEWithLogitsLoss with pos_weight for the
-CN/AD class imbalance.
+Loaded via importlib (filenames start with a digit). The classifier head is
+sized `n_outputs = num_labels` (2 or 3) and trained with CrossEntropyLoss
+(class-weighted for the CN/MCI/AD imbalance) — uniform across binary and
+3-class tasks, matching 04_supervised_finetuning_ViT.py.
 
 Method (mirrors mri_pipeline/04_supervised_finetuning_ViT.py)
 -------------------------------------------------------------
 - Best checkpoint / early stopping on **val balanced accuracy** (tie-break on
-  lower val_loss) — NOT val_loss alone.
+  lower val_loss).
 - Resumable per-epoch checkpoint (survives the 12 h SLURM/Colab cap).
-- Per-subject evaluation (mean predicted probability per Patient_ID) alongside
-  the image-level metrics.
-- metrics.json / train_log.csv schema matches the ViT pipeline so the 05/06
-  aggregators can be reused.
+- Per-subject evaluation (mean predicted probability per Patient_ID).
+- metrics.json / train_log.csv schema matches the ViT pipeline.
 
 Output layout
 -------------
-  {out_dir}/Spasov3DCNN_{model}/T1c_binary/seed_{seed}/
+  {out_dir}/Spasov3DCNN_{model}/{task}/seed_{seed}/
     best_model.pt  last_checkpoint.pt  train_log.csv
     test_predictions.csv  dataset_manifest.csv  metrics.json
 
 Smoke test
 ----------
-  python train_3dcnn.py --model vanilla --seed 0 \
+  python train_3dcnn.py --model vanilla --task T1c_binary --seed 0 \
       --cnn_inputs_dir ... --matched_labels_csv ... --data_dir ... \
       --out_dir ... --max_subjects 30 --epochs 3
 """
@@ -79,6 +79,7 @@ from sklearn.metrics import (
     confusion_matrix, f1_score, precision_recall_fscore_support,
     precision_score, recall_score, roc_auc_score,
 )
+from sklearn.utils.class_weight import compute_class_weight
 from torch.utils.data import DataLoader
 
 import monai.transforms as mt
@@ -91,9 +92,46 @@ REPO_ROOT = THIS_DIR.parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 from bidsification.exclusions import is_excluded_subject
 
-LABEL_MAP = {"CN": 0, "AD": 1}                      # MCI absent -> dropped
-CLASS_NAMES = ["CN", "AD"]
-TASK = "T1c_binary"
+# ── Task definitions (the 4 diagnostic tasks; same as the ViT pipeline) ───────
+# By-visit diagnosis: bl rows use Label_bl_multi, follow-ups use Label_visit_diag.
+# A diagnosis absent from label_map (e.g. MCI under T1c) -> the scan is dropped.
+TASK_CONFIG = {
+    "T1_binary": {
+        "label_map":   {"CN": 0, "MCI": 1, "AD": 1},
+        "num_labels":  2,
+        "task_type":   "binary",
+        "description": "Binary: CN vs MCI+AD",
+    },
+    "T1b_binary": {
+        "label_map":   {"CN": 0, "MCI": 0, "AD": 1},
+        "num_labels":  2,
+        "task_type":   "binary",
+        "description": "Binary: CN+MCI vs AD",
+    },
+    "T1c_binary": {
+        "label_map":   {"CN": 0, "AD": 1},          # MCI dropped
+        "num_labels":  2,
+        "task_type":   "binary",
+        "description": "Binary: CN vs AD (MCI excluded)",
+    },
+    "T2_multiclass": {
+        "label_map":   {"CN": 0, "MCI": 1, "AD": 2},
+        "num_labels":  3,
+        "task_type":   "multiclass",
+        "description": "Multiclass: CN / MCI / AD",
+    },
+}
+
+
+def class_names_for(task_cfg: dict) -> list:
+    """Per-index human-readable class names. label_map may be many-to-one
+    (e.g. T1_binary CN->0, MCI->1, AD->1) -> 'MCI+AD'."""
+    n, lm = task_cfg["num_labels"], task_cfg["label_map"]
+    names = []
+    for i in range(n):
+        members = [k for k, v in lm.items() if v == i]
+        names.append("+".join(members) if members else f"class_{i}")
+    return names
 
 
 # ── Model loading (filenames start with a digit -> importlib) ─────────────────
@@ -133,29 +171,31 @@ def load_matched_labels(csv_path: str) -> pd.DataFrame:
     return df.dropna(subset=["Patient_ID"])
 
 
-def load_split(split_csv: Path, matched_df: pd.DataFrame,
-               cnn_dir: Path) -> tuple[pd.DataFrame, int]:
+def load_split(split_csv: Path, matched_df: pd.DataFrame, cnn_dir: Path,
+               task_cfg: dict) -> tuple[pd.DataFrame, int]:
     """Build one split's labelled scan list: intersect the subject-level split
-    CSV with the matched-labels master, resolve the by-visit CN/AD label (MCI
-    dropped), and resolve the cnn_inputs NIfTI path. Returns (df, n_missing)."""
+    CSV with the matched-labels master, resolve the by-visit label via the
+    task's label_map (scans whose diagnosis is unmapped are dropped), and
+    resolve the cnn_inputs NIfTI path. Returns (df, n_missing)."""
     subjects = pd.read_csv(split_csv, usecols=["Patient_ID"])["Patient_ID"].unique()
     df = matched_df[matched_df["Patient_ID"].isin(subjects)].copy()
 
-    # Subject-level exclusions (defensive — the post-exclusion splits already
-    # drop these, but a non-post-exclusion split CSV would not).
+    # Subject-level exclusions (defensive — post-exclusion splits already drop
+    # these, but a non-post-exclusion split CSV would not).
     df = df[~df["Patient_ID"].apply(
         lambda p: is_excluded_subject(p, include_diagnostic_reversion=True))]
 
     # By-visit label: bl rows use Label_bl_multi, follow-ups use Label_visit_diag.
     df = df.dropna(subset=["Label_bl_multi", "Label_visit_diag"], how="any").copy()
+    label_map = task_cfg["label_map"]
 
     def _label(row):
         dx = (row["Label_bl_multi"] if row["bids_ses"] == "bl"
               else row["Label_visit_diag"])
-        return LABEL_MAP.get(dx)        # CN->0, AD->1, MCI/other -> None
+        return label_map.get(dx)        # unmapped diagnosis -> None -> dropped
 
     df["label"] = df.apply(_label, axis=1)
-    df = df.dropna(subset=["label"]).copy()      # drop MCI / unmapped
+    df = df.dropna(subset=["label"]).copy()
     df["label"] = df["label"].astype(int)
 
     df["image_path"] = df.apply(
@@ -195,34 +235,48 @@ def build_dataset(df: pd.DataFrame, train: bool) -> Dataset:
                    transform=_train_transform() if train else _eval_transform())
 
 
-# ── Metrics ───────────────────────────────────────────────────────────────────
-def compute_binary_metrics(y_true: np.ndarray, logits: np.ndarray):
-    """Binary metrics from single-logit outputs. Returns (metrics, preds, probs)."""
-    logits = np.asarray(logits, dtype=np.float64).reshape(-1)
-    probs = 1.0 / (1.0 + np.exp(-logits))           # sigmoid
-    preds = (probs >= 0.5).astype(int)
+# ── Metrics (mirror 04_supervised_finetuning_ViT.py) ──────────────────────────
+def compute_test_metrics(y_true: np.ndarray, logits: np.ndarray, task_type: str):
+    """Returns (scalar_metrics_dict, preds, probs). logits: [N, num_labels]."""
+    probs = torch.softmax(torch.from_numpy(np.asarray(logits, dtype=np.float64)),
+                          dim=-1).numpy()
+    preds = probs.argmax(axis=-1)
     y_true = np.asarray(y_true).astype(int)
-    multi_class = len(np.unique(y_true)) > 1
+    multi = len(np.unique(y_true)) > 1
+
     out = {
-        "accuracy":     accuracy_score(y_true, preds),
-        "balanced_acc": balanced_accuracy_score(y_true, preds),
-        "precision":    precision_score(y_true, preds, zero_division=0),
-        "recall":       recall_score(y_true, preds, zero_division=0),
-        # sensitivity = TPR (class 1 = AD); specificity = TNR (class 0 = CN).
-        "sensitivity":  recall_score(y_true, preds, pos_label=1, zero_division=0),
-        "specificity":  recall_score(y_true, preds, pos_label=0, zero_division=0),
-        "f1":           f1_score(y_true, preds, zero_division=0),
-        "auc_roc":      roc_auc_score(y_true, probs) if multi_class else float("nan"),
-        "auc_pr":       average_precision_score(y_true, probs) if multi_class else float("nan"),
+        "accuracy":     float(accuracy_score(y_true, preds)),
+        "balanced_acc": float(balanced_accuracy_score(y_true, preds)),
     }
-    out = {k: (round(float(v), 4) if not (isinstance(v, float) and np.isnan(v))
-               else float("nan")) for k, v in out.items()}
-    return out, preds, probs
+    if task_type == "binary":
+        positive = probs[:, 1]
+        out.update({
+            "precision":   float(precision_score(y_true, preds, zero_division=0)),
+            "recall":      float(recall_score(y_true, preds, zero_division=0)),
+            "sensitivity": float(recall_score(y_true, preds, pos_label=1, zero_division=0)),
+            "specificity": float(recall_score(y_true, preds, pos_label=0, zero_division=0)),
+            "f1":          float(f1_score(y_true, preds, zero_division=0)),
+            "auc_roc":     float(roc_auc_score(y_true, positive)) if multi else float("nan"),
+            "auc_pr":      float(average_precision_score(y_true, positive)) if multi else float("nan"),
+        })
+    else:
+        out.update({
+            "precision_macro": float(precision_score(y_true, preds, average="macro", zero_division=0)),
+            "recall_macro":    float(recall_score(y_true, preds, average="macro", zero_division=0)),
+            "macro_f1":        float(f1_score(y_true, preds, average="macro", zero_division=0)),
+            "auc_roc_ovr":     float(roc_auc_score(y_true, probs, multi_class="ovr", average="macro")) if multi else float("nan"),
+            "auc_pr_macro":    float(average_precision_score(
+                np.eye(probs.shape[1])[y_true], probs, average="macro")) if multi else float("nan"),
+        })
+    metrics = {k: (round(v, 4) if isinstance(v, float) and not np.isnan(v) else v)
+               for k, v in out.items()}
+    return metrics, preds, probs
 
 
-def compute_diagnostics(y_true: np.ndarray, preds: np.ndarray) -> dict:
-    """Confusion matrix + per-class P/R/F1/support (string keys, wandb-safe)."""
-    labels = [0, 1]
+def compute_diagnostics(y_true: np.ndarray, preds: np.ndarray,
+                        num_labels: int, label_names: list) -> dict:
+    """Confusion matrix + per-class P/R/F1/support. String keys (wandb-safe)."""
+    labels = list(range(num_labels))
     cm = confusion_matrix(y_true, preds, labels=labels)
     pr, rc, f1, sup = precision_recall_fscore_support(
         y_true, preds, labels=labels, zero_division=0)
@@ -236,7 +290,7 @@ def compute_diagnostics(y_true: np.ndarray, preds: np.ndarray) -> dict:
         return tn / (tn + fp) if (tn + fp) > 0 else 0.0
 
     per_class = {
-        CLASS_NAMES[i]: {
+        label_names[i]: {
             "precision":   round(float(pr[i]), 4),
             "recall":      round(float(rc[i]), 4),
             "sensitivity": round(float(rc[i]), 4),
@@ -246,7 +300,7 @@ def compute_diagnostics(y_true: np.ndarray, preds: np.ndarray) -> dict:
         }
         for i in labels
     }
-    return {"labels": {str(i): CLASS_NAMES[i] for i in labels},
+    return {"labels": {str(i): label_names[i] for i in labels},
             "confusion_matrix": cm.tolist(),     # rows = true, cols = pred
             "per_class": per_class}
 
@@ -263,11 +317,11 @@ def run_one_epoch(model, loader, criterion, optimizer, scaler, device,
     with ctx:
         for batch in loader:
             x = batch["image"].to(device, non_blocking=True).float()
-            y = batch["label"].to(device, non_blocking=True).float()  # [B]
+            y = batch["label"].to(device, non_blocking=True).long()   # [B]
 
             with torch.cuda.amp.autocast(enabled=(device.type == "cuda")):
-                logits = model(x)                       # [B, 1]
-                loss = criterion(logits, y.view(-1, 1))
+                logits = model(x)                       # [B, num_labels]
+                loss = criterion(logits, y)
 
             if train:
                 optimizer.zero_grad(set_to_none=True)
@@ -277,16 +331,16 @@ def run_one_epoch(model, loader, criterion, optimizer, scaler, device,
                 scaler.step(optimizer)
                 scaler.update()
 
-            preds = (torch.sigmoid(logits.detach()) >= 0.5).long().view(-1)
+            preds = logits.detach().argmax(dim=-1)
             total_loss += loss.item() * x.size(0)
-            total_correct += (preds == y.long()).sum().item()
+            total_correct += (preds == y).sum().item()
             total_n += x.size(0)
-            all_logits.append(logits.detach().float().cpu().numpy().reshape(-1))
-            all_labels.append(y.detach().cpu().numpy().reshape(-1))
+            all_logits.append(logits.detach().float().cpu().numpy())
+            all_labels.append(y.detach().cpu().numpy())
 
     return (total_loss / max(total_n, 1),
             total_correct / max(total_n, 1),
-            np.concatenate(all_logits) if all_logits else np.empty((0,)),
+            np.concatenate(all_logits, axis=0) if all_logits else np.empty((0,)),
             np.concatenate(all_labels) if all_labels else np.empty((0,)))
 
 
@@ -304,6 +358,7 @@ def lr_at(epoch_idx: int, args) -> float:
 def parse_args():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--model", required=True, choices=["vanilla", "separable"])
+    p.add_argument("--task", required=True, choices=list(TASK_CONFIG.keys()))
     p.add_argument("--seed", type=int, required=True, choices=[0, 1, 2])
     p.add_argument("--cnn_inputs_dir", required=True,
                    help="Per-(sub,ses) volumes from 00_prepare_CNN_inputs.py.")
@@ -320,6 +375,7 @@ def parse_args():
     p.add_argument("--patience", type=int, default=15,
                    help="Early-stopping patience on val balanced accuracy.")
     p.add_argument("--dropout", type=float, default=0.1)
+    p.add_argument("--label_smoothing", type=float, default=0.0)
     p.add_argument("--num_workers", type=int, default=2)
     p.add_argument("--max_subjects", type=int, default=None,
                    help="Cap rows per split (smoke test).")
@@ -334,16 +390,20 @@ def parse_args():
 # ── Main ───────────────────────────────────────────────────────────────────────
 def main():
     args = parse_args()
+    task_cfg = TASK_CONFIG[args.task]
+    num_labels = task_cfg["num_labels"]
+    label_names = class_names_for(task_cfg)
+
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model_slug = f"Spasov3DCNN_{args.model}"
-    out_dir = Path(args.out_dir) / model_slug / TASK / f"seed_{args.seed}"
+    out_dir = Path(args.out_dir) / model_slug / args.task / f"seed_{args.seed}"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     print("=" * 70)
-    print(f"  train_3dcnn — {args.model} | {TASK} | seed={args.seed}")
+    print(f"  train_3dcnn — {args.model} | {args.task} | seed={args.seed}")
     print(f"  Device: {device}   Output: {out_dir}")
     print("=" * 70)
 
@@ -355,9 +415,9 @@ def main():
 
     seed_dir = Path(args.data_dir) / f"seed_{args.seed}"
     cnn_dir = Path(args.cnn_inputs_dir)
-    train_df, n_miss_tr = load_split(seed_dir / "train.csv", matched_df, cnn_dir)
-    val_df,   n_miss_va = load_split(seed_dir / "val.csv",   matched_df, cnn_dir)
-    test_df,  n_miss_te = load_split(seed_dir / "test.csv",  matched_df, cnn_dir)
+    train_df, n_miss_tr = load_split(seed_dir / "train.csv", matched_df, cnn_dir, task_cfg)
+    val_df,   n_miss_va = load_split(seed_dir / "val.csv",   matched_df, cnn_dir, task_cfg)
+    test_df,  n_miss_te = load_split(seed_dir / "test.csv",  matched_df, cnn_dir, task_cfg)
 
     if args.max_subjects:
         train_df = train_df.head(args.max_subjects)
@@ -370,14 +430,13 @@ def main():
           f"val: {val_df['Patient_ID'].nunique()}, "
           f"test: {test_df['Patient_ID'].nunique()}")
     for name, df in [("train", train_df), ("val", val_df), ("test", test_df)]:
-        vc = df["label"].value_counts().to_dict()
-        print(f"           {name} class balance (CN=0, AD=1): {vc}")
+        print(f"           {name} class balance: {df['label'].value_counts().sort_index().to_dict()}")
     if min(len(train_df), len(val_df), len(test_df)) == 0:
         raise RuntimeError("Empty split — check cnn_inputs_dir / matched_labels_csv.")
     if train_df["label"].nunique() < 2 or val_df["label"].nunique() < 2:
         raise RuntimeError("train/val split has <2 classes — cannot train.")
 
-    # Dataset manifest (which scans went into each split).
+    # Dataset manifest.
     manifest = pd.concat(
         [d.assign(split=s) for s, d in
          [("train", train_df), ("val", val_df), ("test", test_df)]],
@@ -399,18 +458,24 @@ def main():
 
     # ── Model / loss / optimizer ──────────────────────────────────────────────
     ModelCls = load_model_class(args.model)
-    model = ModelCls(in_channels=1, n_outputs=1, dropout=args.dropout).to(device)
+    model = ModelCls(in_channels=1, n_outputs=num_labels,
+                     dropout=args.dropout).to(device)
     n_params = sum(p.numel() for p in model.parameters())
-    print(f"  Model: {ModelCls.__name__}  ({n_params:,} parameters)")
+    print(f"  Model: {ModelCls.__name__}  n_outputs={num_labels}  "
+          f"({n_params:,} parameters)")
 
-    # pos_weight upweights the positive (AD) class for the CN/AD imbalance.
-    n_pos = int((train_df["label"] == 1).sum())
-    n_neg = int((train_df["label"] == 0).sum())
-    pos_weight = torch.tensor([n_neg / max(n_pos, 1)], dtype=torch.float,
-                              device=device)
-    print(f"  Class counts (train): CN={n_neg}  AD={n_pos}  "
-          f"pos_weight={pos_weight.item():.3f}")
-    criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+    # Balanced class weights from the train split (padded to num_labels so the
+    # weight tensor always matches the head — a small split may miss a class).
+    classes_present = np.unique(train_df["label"].values).astype(int)
+    cw_present = compute_class_weight("balanced", classes=classes_present,
+                                      y=train_df["label"].values)
+    cw = np.ones(num_labels, dtype=np.float32)
+    for c, w in zip(classes_present, cw_present):
+        cw[int(c)] = float(w)
+    class_weights = torch.tensor(cw, dtype=torch.float, device=device)
+    print(f"  Class weights: {dict(enumerate(cw.round(3).tolist()))}")
+    criterion = nn.CrossEntropyLoss(weight=class_weights,
+                                    label_smoothing=args.label_smoothing)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr,
                                   weight_decay=args.weight_decay)
     scaler = torch.cuda.amp.GradScaler(enabled=(device.type == "cuda"))
@@ -421,10 +486,11 @@ def main():
         try:
             import wandb
             wb = wandb.init(project=args.wandb_project,
-                            name=f"{model_slug}-{TASK}-s{args.seed}",
+                            name=f"{model_slug}-{args.task}-s{args.seed}",
                             config={"model": args.model, "seed": args.seed,
-                                    "task": TASK, "epochs": args.epochs,
-                                    "lr": args.lr, "batch_size": args.batch_size,
+                                    "task": args.task, "num_labels": num_labels,
+                                    "epochs": args.epochs, "lr": args.lr,
+                                    "batch_size": args.batch_size,
                                     "n_params": n_params}, reinit=True)
         except ImportError:
             print("  [WARN] --wandb set but wandb not installed; local-only.")
@@ -478,8 +544,7 @@ def main():
             va_loss, va_acc, va_logits, va_labels = run_one_epoch(
                 model, val_loader, criterion, optimizer, scaler, device, False)
             va_bacc = float(balanced_accuracy_score(
-                va_labels.astype(int),
-                (1.0 / (1.0 + np.exp(-va_logits)) >= 0.5).astype(int)))
+                va_labels.astype(int), va_logits.argmax(axis=-1)))
 
             log_rows.append({"epoch": epoch + 1, "lr": cur_lr,
                              "train_loss": tr_loss, "train_acc": tr_acc,
@@ -527,11 +592,11 @@ def main():
         model.load_state_dict(best_state["net"])
         _, _, test_logits, test_labels = run_one_epoch(
             model, test_loader, criterion, optimizer, scaler, device, False)
-        test_metrics, test_preds, test_probs = compute_binary_metrics(
-            test_labels, test_logits)
+        test_metrics, test_preds, test_probs = compute_test_metrics(
+            test_labels, test_logits, task_cfg["task_type"])
         print(f"  Test metrics (image-level): {test_metrics}")
         test_diagnostics = compute_diagnostics(
-            test_labels.astype(int), test_preds)
+            test_labels.astype(int), test_preds, num_labels, label_names)
 
         # Per-sample predictions (test_loader: shuffle=False, batch_size=1, so
         # row i aligns with test_df row i).
@@ -541,17 +606,22 @@ def main():
             "bids_ses":   test_df["bids_ses"].values[:n_te],
             "y_true": test_labels.astype(int),
             "y_pred": test_preds.astype(int),
-            "prob_AD": test_probs,
         })
+        for c in range(num_labels):
+            pred_df[f"prob_{c}"] = test_probs[:, c]
         pred_df.to_csv(out_dir / "test_predictions.csv", index=False)
 
-        # ── Per-subject evaluation (mean AD probability per Patient_ID) ────────
+        # ── Per-subject evaluation (mean class probability per Patient_ID) ────
+        prob_cols = [f"prob_{c}" for c in range(num_labels)]
         subj = pred_df.groupby("Patient_ID").agg(
-            prob_AD=("prob_AD", "mean"), y_true=("y_true", "first"))
-        subj_logits = np.log(np.clip(subj["prob_AD"].to_numpy(), 1e-8, 1 - 1e-8)
-                             / np.clip(1 - subj["prob_AD"].to_numpy(), 1e-8, 1.0))
-        test_metrics_subject, _, _ = compute_binary_metrics(
-            subj["y_true"].to_numpy(), subj_logits)
+            {**{pc: "mean" for pc in prob_cols}, "y_true": "first"})
+        subj_probs = subj[prob_cols].to_numpy()
+        # compute_test_metrics softmaxes its input; log(probs) round-trips back
+        # to the (already mean-aggregated) probabilities.
+        subj_logits = np.log(np.clip(subj_probs, 1e-8, 1.0))
+        test_metrics_subject, _, _ = compute_test_metrics(
+            subj["y_true"].to_numpy().astype(int), subj_logits,
+            task_cfg["task_type"])
         print(f"  Test metrics (subject-level, n={len(subj)}): "
               f"{test_metrics_subject}")
 
@@ -559,8 +629,9 @@ def main():
         config = {
             "model_id":              model_slug,
             "model_kind":            args.model,
-            "task":                  TASK,
-            "task_description":      "Binary: CN vs AD (MCI excluded), by-visit",
+            "task":                  args.task,
+            "task_description":      task_cfg["description"],
+            "num_labels":            num_labels,
             "seed":                  args.seed,
             "n_params":              int(n_params),
             "epochs":                args.epochs,
@@ -572,7 +643,8 @@ def main():
             "warmup_epochs":         args.warmup_epochs,
             "patience":              args.patience,
             "dropout":               args.dropout,
-            "pos_weight":            round(float(pos_weight.item()), 4),
+            "label_smoothing":       args.label_smoothing,
+            "class_weights":         {i: round(float(w), 4) for i, w in enumerate(cw.tolist())},
             "n_train":               int(len(train_df)),
             "n_val":                 int(len(val_df)),
             "n_test":                int(len(test_df)),

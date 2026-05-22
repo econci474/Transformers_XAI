@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH -A LIO-CHARM-SL2-CPU
+#SBATCH -A COMPUTERLAB-SL3-CPU
 #SBATCH --job-name=cnn_prep
 #SBATCH --output=/home/ec474/rds/hpc-work/ADNI_SMRIPREP/derivatives/cnn_inputs/slurm_logs/cnn_prep_%j.log
 #SBATCH --error=/home/ec474/rds/hpc-work/ADNI_SMRIPREP/derivatives/cnn_inputs/slurm_logs/cnn_prep_%j.err
@@ -23,8 +23,9 @@
 #   2. sMRIprep tree at ${SMRIPREP_DIR}.
 #   3. mkdir -p /home/ec474/rds/hpc-work/ADNI_SMRIPREP/derivatives/cnn_inputs/slurm_logs
 #      (the #SBATCH --output dir must exist BEFORE submitting).
-#   4. Verify the account — LIO-CHARM-SL2-CPU is the CPU SL2 allocation;
-#      adjust -A above if yours differs.
+#   4. Account: COMPUTERLAB-SL3-CPU. This is a CPU job, so it cannot run on
+#      LIO-CHARM (GPU-only); COMPUTERLAB-SL3-CPU is the CPU allocation with
+#      hours available.
 #
 # Submit:  sbatch mri_pipeline/3d_conv_net/00_prepare_CNN_submit_csd3.sh
 # Resume:  re-running skips (sub, ses) pairs already in the manifest.

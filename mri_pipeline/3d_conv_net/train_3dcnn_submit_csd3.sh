@@ -10,15 +10,16 @@
 #SBATCH --cpus-per-task=3
 #SBATCH --mem=32G
 #SBATCH --time=08:00:00
-#SBATCH --array=0-5%4
+#SBATCH --array=0-23%4
 # =============================================================================
 # train_3dcnn_submit_csd3.sh   --   Spasov 3D CNN baseline sweep
 # =============================================================================
-# SLURM array job: trains the 3D CNN baselines on CN-vs-AD (T1c_binary).
+# SLURM array job: trains the 3D CNN baselines on all 4 diagnostic tasks.
 #
-# 2 models x 3 seeds = 6 combinations.
-# Array index decoder: SEED_IDX -> MODEL_IDX (low-to-high stride).
+# 4 tasks x 2 models x 3 seeds = 24 combinations.
+# Array index decoder: SEED_IDX -> MODEL_IDX -> TASK_IDX (low-to-high stride).
 #
+#   Task  : T1_binary | T1b_binary | T1c_binary | T2_multiclass
 #   Model : vanilla (MRI3DCNN) | separable (MRI3DSeparableCNN)
 #   Seed  : 0 | 1 | 2
 #
@@ -29,7 +30,7 @@
 # never in the scripts/git directory.
 #
 # Pre-flight (run once before submitting):
-#   1. mri conda env available; pretrained data uploaded.
+#   1. mri conda env available.
 #   2. CNN inputs at ${CNN_INPUTS_DIR} (produced by 00_prepare_CNN_submit_csd3.sh).
 #   3. Post-exclusion matched labels CSV + clinical splits at the paths below.
 #   4. mkdir -p /home/ec474/rds/hpc-work/ADNI_MRI/cnn3d_outputs/slurm_logs
@@ -57,20 +58,24 @@ DATA_DIR="/home/ec474/rds/hpc-work/ADNI_CL/no_cdr_stratified_post_exclusion/tabu
 OUT_DIR="/home/ec474/rds/hpc-work/ADNI_MRI/cnn3d_outputs"
 
 # -- Combination lookup -------------------------------------------------------
+TASKS=("T1_binary" "T1b_binary" "T1c_binary" "T2_multiclass")
 MODELS=("vanilla" "separable")
 SEEDS=(0 1 2)
-N_MODELS=${#MODELS[@]}   # 2
-N_SEEDS=${#SEEDS[@]}     # 3
+N_TASKS=${#TASKS[@]}      # 4
+N_MODELS=${#MODELS[@]}    # 2
+N_SEEDS=${#SEEDS[@]}      # 3
 
-# Decode SLURM_ARRAY_TASK_ID -> (model, seed)
+# Decode SLURM_ARRAY_TASK_ID -> (task, model, seed)
 ID=${SLURM_ARRAY_TASK_ID}
 SEED_IDX=$(( ID % N_SEEDS ));    ID=$(( ID / N_SEEDS ))
-MODEL_IDX=$(( ID % N_MODELS ))
+MODEL_IDX=$(( ID % N_MODELS ));  ID=$(( ID / N_MODELS ))
+TASK_IDX=$(( ID % N_TASKS ))
 
+TASK="${TASKS[$TASK_IDX]}"
 MODEL="${MODELS[$MODEL_IDX]}"
 SEED="${SEEDS[$SEED_IDX]}"
 
-RUN_DIR="${OUT_DIR}/Spasov3DCNN_${MODEL}/T1c_binary/seed_${SEED}"
+RUN_DIR="${OUT_DIR}/Spasov3DCNN_${MODEL}/${TASK}/seed_${SEED}"
 METRICS="${RUN_DIR}/metrics.json"
 
 mkdir -p "${OUT_DIR}/slurm_logs"
@@ -82,9 +87,10 @@ export WANDB_DIR="${RUN_DIR}"
 echo "============================================================"
 echo "  Spasov 3D CNN -- array sweep"
 echo "  Job ID      : $SLURM_JOB_ID"
-echo "  Array ID    : $SLURM_ARRAY_TASK_ID  (of 0-$((N_MODELS*N_SEEDS-1)))"
+echo "  Array ID    : $SLURM_ARRAY_TASK_ID  (of 0-$((N_TASKS*N_MODELS*N_SEEDS-1)))"
 echo "  Node        : $SLURMD_NODENAME"
 echo "  GPU         : $(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1)"
+echo "  Task        : ${TASK}"
 echo "  Model       : ${MODEL}"
 echo "  Seed        : ${SEED}"
 echo "  Output dir  : ${RUN_DIR}"
@@ -115,6 +121,7 @@ fi
 
 python "${SCRIPT_DIR}/train_3dcnn.py" \
     --model               "${MODEL}" \
+    --task                "${TASK}" \
     --seed                "${SEED}" \
     --cnn_inputs_dir      "${CNN_INPUTS_DIR}" \
     --matched_labels_csv  "${MATCHED_LABELS_CSV}" \
