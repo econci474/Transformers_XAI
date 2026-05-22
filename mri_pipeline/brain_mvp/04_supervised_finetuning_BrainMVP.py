@@ -71,7 +71,9 @@ compute_test_metrics = _vit.compute_test_metrics
 compute_diagnostics = _vit.compute_diagnostics
 run_one_epoch = _vit.run_one_epoch
 lr_multiplier_at = _vit.lr_multiplier_at
-init_wandb = _vit.init_wandb
+# init_wandb is NOT imported from _vit: the ViT version references ViT-only
+# argparse args (grad_accum_steps, llrd_gamma, drop_path_rate, attn_dropout).
+# A local init_wandb is defined below, using only this script's own args.
 
 # ── BrainMVP spatial crop dimensions ──────────────────────────────────────────
 BMVP_CROP = (96, 96, 64)   # paper Appendix I: classification ROI
@@ -82,6 +84,49 @@ from brain_mvp.uniformer_blocks import uniformer_small
 warnings.filterwarnings("ignore")
 
 MODEL_SLUG = "BrainMVP_uniformer"
+
+
+def init_wandb(args, task_cfg, extra=None):
+    """Start a wandb run if --wandb is set; otherwise return None (full no-op).
+
+    Local to the BrainMVP pipeline — the wandb config dict uses only this
+    script's own argparse args, so it cannot break when the ViT script's args
+    change (see project_brainmvp_imports_vit_symbols). Honours WANDB_MODE /
+    WANDB_DIR from the environment; degrades to local-only if wandb is absent.
+    """
+    if not args.wandb:
+        return None
+    try:
+        import wandb
+    except ImportError:
+        print("  [WARN] --wandb set but wandb not installed; continuing local-only.")
+        return None
+    name = args.wandb_run_name or (
+        f"{args.task}-s{args.seed}-{args.strategy}-{args.augment}")
+    cfg = {
+        "task":            args.task,
+        "seed":            args.seed,
+        "strategy":        args.strategy,
+        "augment":         args.augment,
+        "aug_copies":      args.aug_copies,
+        "epochs":          args.epochs,
+        "lr":              args.lr,
+        "weight_decay":    args.weight_decay,
+        "batch_size":      args.batch_size,
+        "warmup_epochs":   args.warmup_epochs,
+        "patience":        args.patience,
+        "drop_rate":       args.drop_rate,
+        "label_smoothing": args.label_smoothing,
+        "long_mode":       args.long_mode,
+        "max_months":      args.max_months,
+        "session_policy":  task_cfg["session_policy"],
+        "num_labels":      task_cfg["num_labels"],
+        "pretrained_ckpt": args.pretrained_ckpt,
+    }
+    if extra:
+        cfg.update(extra)
+    return wandb.init(project=args.wandb_project, entity=args.wandb_entity,
+                      name=name, config=cfg, reinit=True)
 
 
 # ── BrainMVP-specific transforms ──────────────────────────────────────────────

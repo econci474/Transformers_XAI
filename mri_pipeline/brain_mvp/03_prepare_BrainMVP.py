@@ -10,7 +10,7 @@ specified by the BrainMVP paper (CVPR 2025 Highlight, Appendix I
   3. Reorient to RAS                            → (safety check)
   4. Resample to 1.0 × 1.0 × 1.0 mm            → isometric bilinear
   5. Skull stripping (already done by sMRIprep)  → no-op
-  6. Percentile clip [1st, 99th]                → remove outlier voxels
+  6. Percentile clip [5th, 95th]                → remove outlier voxels
   7. Rescale to [0, 1]                          → linear rescale
   8. Crop foreground                            → remove zero-padding
   9. Resize to 128 × 128 × 64                  → classification base size
@@ -71,7 +71,7 @@ TARGET_SHAPE   = (128, 128, 64)      # voxels — BrainMVP classification spec
 
 # ── Argument parsing ──────────────────────────────────────────────────────────
 parser = argparse.ArgumentParser(
-    description="Prepare BrainMVP inputs (96³ @ 1mm) from sMRIprep derivatives.")
+    description="Prepare BrainMVP inputs (128x128x64) from sMRIprep derivatives.")
 parser.add_argument("--dry-run",   action="store_true")
 parser.add_argument("--overwrite", action="store_true")
 parser.add_argument("--n-workers", type=int, default=1)
@@ -152,7 +152,7 @@ def process_subject(sub: str, ses: str, dry_run: bool = False,
                     overwrite: bool = False) -> dict:
     """
     BrainMVP preprocessing for one (subject, session) pair:
-      RAS → 1mm isometric → percentile clip [1st, 99th] → [0,1] → crop → 96³
+      RAS → 1mm isometric → percentile clip [5th, 95th] → [0,1] → crop → 128x128x64
     """
     sub_label = f"sub-{sub}"
     ses_label = f"ses-{ses}"
@@ -162,7 +162,7 @@ def process_subject(sub: str, ses: str, dry_run: bool = False,
         "t1w_path": "", "output_path": "",
         "input_shape": "", "input_spacing": "", "input_orient": "",
         "output_shape": str(TARGET_SHAPE), "output_spacing": str(TARGET_SPACING),
-        "brain_voxels": "", "pct_1": "", "pct_99": "",
+        "brain_voxels": "", "pct_5": "", "pct_95": "",
         "status": "unknown", "error": "",
         "timestamp": datetime.datetime.now().isoformat(),
     }
@@ -208,23 +208,23 @@ def process_subject(sub: str, ses: str, dry_run: bool = False,
         data_dict = initial_transform({"image": t1w_path})
         volume = data_dict["image"]
 
-        # ── Step 5: Percentile clip [1st, 99th] ──────────────────────────────
+        # ── Step 5: Percentile clip [5th, 95th] ──────────────────────────────
         vol_np = volume.numpy().squeeze()
         nonzero = vol_np[vol_np > 0]
         if len(nonzero) > 0:
-            pct_1 = float(np.percentile(nonzero, 1))
-            pct_99 = float(np.percentile(nonzero, 99))
+            pct_5 = float(np.percentile(nonzero, 5))
+            pct_95 = float(np.percentile(nonzero, 95))
         else:
-            pct_1, pct_99 = 0.0, 1.0
-        record["pct_1"] = round(pct_1, 4)
-        record["pct_99"] = round(pct_99, 4)
+            pct_5, pct_95 = 0.0, 1.0
+        record["pct_5"] = round(pct_5, 4)
+        record["pct_95"] = round(pct_95, 4)
 
-        vol_np = np.clip(vol_np, pct_1, pct_99)
+        vol_np = np.clip(vol_np, pct_5, pct_95)
 
         # ── Step 6: Rescale to [0, 1] ─────────────────────────────────────────
-        denom = pct_99 - pct_1
+        denom = pct_95 - pct_5
         if denom > 0:
-            vol_np = (vol_np - pct_1) / denom
+            vol_np = (vol_np - pct_5) / denom
         else:
             vol_np = np.zeros_like(vol_np)
 
@@ -236,7 +236,7 @@ def process_subject(sub: str, ses: str, dry_run: bool = False,
             mt.Resized(keys=["image"], spatial_size=TARGET_SHAPE),
         ])
         result = crop_resize({"image": vol_tensor})
-        final_vol = result["image"].numpy().squeeze()  # (96, 96, 96)
+        final_vol = result["image"].numpy().squeeze()  # (128, 128, 64)
 
         # ── Record stats ─────────────────────────────────────────────────────
         brain_mask = final_vol > 1e-6
@@ -331,7 +331,7 @@ def main():
     print(f"  Mode          : {mode_str}")
     print(f"  Target spacing: {TARGET_SPACING} mm (isometric 1mm)")
     print(f"  Target shape  : {TARGET_SHAPE}")
-    print(f"  Normalization : Percentile clip [1st, 99th] → [0, 1]")
+    print(f"  Normalization : Percentile clip [5th, 95th] → [0, 1]")
     print(f"  Dry run       : {DRY_RUN}")
     print(f"  Overwrite     : {OVERWRITE}")
     print(f"  Workers       : {N_WORKERS}")
@@ -373,7 +373,7 @@ def main():
         label = f"sub-{rec['bids_sub']}_ses-{rec.get('bids_ses', '')}"
         if s == "ok":
             print(f"  [OK]      {label}  brain={rec['brain_voxels']}  "
-                  f"pct=[{rec['pct_1']}, {rec['pct_99']}]")
+                  f"pct=[{rec['pct_5']}, {rec['pct_95']}]")
         elif s.startswith("sk"):
             print(f"  [SKIP]    {label}")
         elif s == "missing_input":
@@ -401,7 +401,7 @@ def main():
                         "input_shape": "", "input_spacing": "", "input_orient": "",
                         "output_shape": str(TARGET_SHAPE),
                         "output_spacing": str(TARGET_SPACING),
-                        "brain_voxels": "", "pct_1": "", "pct_99": "",
+                        "brain_voxels": "", "pct_5": "", "pct_95": "",
                         "timestamp": datetime.datetime.now().isoformat(),
                     }
                 handle_record(rec)
@@ -418,7 +418,7 @@ def main():
         "t1w_path", "output_path",
         "input_shape", "input_spacing", "input_orient",
         "output_shape", "output_spacing",
-        "brain_voxels", "pct_1", "pct_99",
+        "brain_voxels", "pct_5", "pct_95",
         "error", "timestamp",
     ]
     present = [c for c in manifest_cols if c in manifest_df.columns]
