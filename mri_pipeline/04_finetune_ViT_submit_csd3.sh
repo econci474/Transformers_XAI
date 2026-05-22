@@ -63,10 +63,11 @@ export WANDB_MODE=offline
 # -- Hardcoded paths (BASH_SOURCE unreliable: SLURM copies .sh to spool dir) --
 SCRIPT_DIR="/home/ec474/rds/hpc-work/Transformers_XAI/mri_pipeline"
 PRETRAINED_CKPT="/home/ec474/rds/hpc-work/ViT_pretrained/ViT_B_pretrained_noaug_mae75_BRATS2023_IXI_OASIS3_seed_8456_999_077000.pth.tar"
-# POST-EXCLUSION splits + matched labels (adjust to the real HPC paths once the
-# no_cdr_stratified_post_exclusion artifacts are uploaded):
+# Post-exclusion matched labels: the file placed in the HPC ADNI_MRI directory.
+# DATA_DIR (the post-exclusion split tree) is still a placeholder — confirm it
+# exists on HPC / upload it; the pre-flight check below fails loudly if wrong.
 DATA_DIR="/home/ec474/rds/hpc-work/ADNI_CL/no_cdr_stratified_post_exclusion/baseline"
-MATCHED_LABELS_CSV="/home/ec474/rds/hpc-work/ADNI_SMRIPREP/derivatives/mri_clinical_matched/VISCODE_2_aligned_extended_post_exclusion/master_mri_clinical_matched_viscode2_extended.csv"
+MATCHED_LABELS_CSV="/home/ec474/rds/hpc-work/ADNI_MRI/master_mri_clinical_matched_viscode2_extended_post_exclusion.csv"
 VIT_INPUTS_DIR="/home/ec474/rds/hpc-work/ADNI_SMRIPREP/derivatives/vit_inputs"
 OUT_DIR="/home/ec474/rds/hpc-work/ADNI_MRI/vit_outputs_debug"
 

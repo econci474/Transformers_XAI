@@ -14,6 +14,7 @@ they run anywhere the `mri` conda env is installed (no GPU required).
 Run:  conda run -n mri pytest mri_pipeline/tests/test_vit_preprocessing.py -v
 """
 import importlib.util
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -26,10 +27,22 @@ MRI_DIR = Path(__file__).resolve().parents[1]   # .../mri_pipeline
 
 def _load_script(filename: str, modname: str):
     """Import a digit-prefixed pipeline script (e.g. 03_prepare_ViT.py) by path
-    -- a plain `import 03_prepare_ViT` is not valid Python."""
-    spec = importlib.util.spec_from_file_location(modname, MRI_DIR / filename)
+    -- a plain `import 03_prepare_ViT` is not valid Python.
+
+    `sys.argv` is reset to just the script path during the import: 03_prepare_ViT.py
+    runs `argparse.parse_args()` at module level, which would otherwise consume
+    pytest's own CLI args and `SystemExit`. With no args the parser falls back to
+    all defaults, so the import succeeds.
+    """
+    path = MRI_DIR / filename
+    spec = importlib.util.spec_from_file_location(modname, path)
     mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
+    saved_argv = sys.argv
+    sys.argv = [str(path)]
+    try:
+        spec.loader.exec_module(mod)
+    finally:
+        sys.argv = saved_argv
     return mod
 
 
