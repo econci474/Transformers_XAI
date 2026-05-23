@@ -7,7 +7,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --gres=gpu:1
-#SBATCH --cpus-per-task=3
+#SBATCH --cpus-per-task=8
 #SBATCH --mem=48G
 #SBATCH --time=12:00:00
 #SBATCH --array=0-23%4
@@ -155,7 +155,7 @@ python "${SCRIPT_DIR}/04_supervised_finetuning_BrainMVP.py" \
     --data_dir            "${DATA_DIR}" \
     --brainmvp_inputs_dir "${BRAINMVP_INPUTS_DIR}" \
     --out_dir             "${OUT_DIR}" \
-    --num_workers         0
+    --num_workers         "${SLURM_CPUS_PER_TASK}"
 
 EXIT_CODE=$?
 
