@@ -522,6 +522,15 @@ def main():
     ModelCls = load_model_class(args.model)
     model = ModelCls(in_channels=1, n_outputs=num_labels,
                      dropout=args.dropout).to(device)
+    # Materialise LazyLinear head with one dummy forward (eval+no_grad so
+    # BatchNorm running stats are untouched). Without this, .numel() and
+    # AdamW(model.parameters()) both fail on the UninitializedParameter.
+    sample = build_dataset(train_df.head(1), train=False)[0]
+    sample_vol = sample["image"]                          # (1, D, H, W)
+    model.eval()
+    with torch.no_grad():
+        model(sample_vol.unsqueeze(0).to(device).float())  # (1, 1, D, H, W)
+    model.train()
     n_params = sum(p.numel() for p in model.parameters())
     print(f"  Model: {ModelCls.__name__}  n_outputs={num_labels}  "
           f"({n_params:,} parameters)")
