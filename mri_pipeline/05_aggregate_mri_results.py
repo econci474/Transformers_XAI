@@ -48,6 +48,7 @@ MODEL_TREES = [
     ("ViT-MAE75",   "vit_outputs_debug/ViT_B_mae75/*/seed_*/*/metrics.json"),
     ("ViT-scratch", "vit_baseline/ViT_B_scratch/*/seed_*/*/metrics.json"),
     ("Spasov-CNN",  "cnn3d_outputs/Spasov3DCNN_*/*/seed_*/metrics.json"),
+    ("AG-MS3D",     "agms3d_outputs/AGMS3DCNN/*/seed_*/metrics.json"),
     ("BrainMVP",    "brainmvp_debug/aug_*/BrainMVP_uniformer/*/seed_*/*/metrics.json"),
 ]
 
