@@ -9,7 +9,7 @@
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=3
 #SBATCH --mem=32G
-#SBATCH --time=08:00:00
+#SBATCH --time=12:00:00
 #SBATCH --array=0-29%4
 # =============================================================================
 # train_3dcnn_submit_csd3.sh   --   Spasov 3D CNN baseline sweep
