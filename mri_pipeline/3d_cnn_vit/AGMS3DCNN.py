@@ -117,12 +117,22 @@ class SeparableConv3d(nn.Module):
 #                                Pathway block
 # =============================================================================
 class SepBlock3D(nn.Module):
-    """One pathway block: SeparableConv3d -> BN -> ELU -> Dropout3d.
+    """One pathway block, implementing the paper's residual formulation.
 
-    Identity residual when in_channels == out_channels and stride == 1
-    (mirrors the paper's "residual connections within pathways"). Otherwise
-    no skip (we don't add a 1x1x1 projection branch - keeps the param count
-    lean and matches the separable-conv ethos)."""
+        Eq. (1):  F_block = ReLU( BN( Conv( F_in ) ) )      -- block transform
+        Eq. (3):  F_l = F_{l-1} + Conv3D( F_{l-1} )         -- residual sum
+
+    Combined (and using ELU in place of ReLU per user preference, matching
+    the Spasov 3DSCNN template):
+
+        F_out = Dropout3d( F_in_proj + ELU( BN( SepConv( F_in ) ) ) )
+
+    Every block has a residual (the paper's "residual connections within
+    each pathway" applies pathway-wide). When the block changes shape
+    (channel count differs from stride>1 spatial downsampling), the
+    shortcut uses a 1x1x1 projection conv with matching stride to align
+    the input to the output's shape -- the standard ResNet trick. When
+    shape is preserved, the shortcut is the identity."""
 
     def __init__(self, in_channels, out_channels, kernel_size=3,
                  stride=1, dropout=DEFAULT_DROPOUT):
@@ -133,12 +143,22 @@ class SepBlock3D(nn.Module):
         self.norm = nn.BatchNorm3d(out_channels)
         self.act = nn.ELU(inplace=True)
         self.drop = nn.Dropout3d(p=dropout)
-        self.use_residual = (in_channels == out_channels and stride == 1)
+
+        # Residual shortcut: identity if shape preserved, else 1x1x1
+        # projection with matching stride (paper Eq. 3 implies every block).
+        if in_channels == out_channels and stride == 1:
+            self.shortcut = nn.Identity()
+        else:
+            self.shortcut = nn.Sequential(
+                nn.Conv3d(in_channels, out_channels, kernel_size=1,
+                          stride=stride, bias=False),
+                nn.BatchNorm3d(out_channels),
+            )
 
     def forward(self, x):
-        y = self.drop(self.act(self.norm(self.conv(x))))
-        if self.use_residual:
-            y = y + x
+        y = self.act(self.norm(self.conv(x)))
+        y = y + self.shortcut(x)              # paper Eq. (3): residual sum
+        y = self.drop(y)                      # dropout after the sum
         return y
 
 
@@ -231,14 +251,20 @@ class AGMS3DCNN(nn.Module):
         self.attn = SpatialAttention3D(kernel_size=7)
         self.gap = nn.AdaptiveAvgPool3d(1)
 
-        # LazyLinear head adapts to whatever channel count the pathway emits;
-        # initialised on the first forward (the training script does one
+        # Classification head per paper: GAP -> FC(1024) -> FC(256) -> FC(n_outputs).
+        # LazyLinear adapts to whatever channel count the pathway emits
+        # (initialised on the first forward; the training script does one
         # eval+no_grad() dummy forward before the optimiser is built).
+        # NOTE on capacity: the paper's 1024 -> 256 head adds ~393k params vs
+        # a 256 -> 128 head. With ~600 train subjects this may overfit; if
+        # validation balanced-acc plateaus low / train-val gap blows up,
+        # consider reducing the head to LazyLinear(256) -> Linear(128) ->
+        # Linear(n_outputs) and noting the deviation in the writeup.
         self.head = nn.Sequential(
             nn.Flatten(),
-            nn.LazyLinear(256), nn.ReLU(inplace=True), nn.Dropout(p=dropout),
-            nn.Linear(256, 128), nn.ReLU(inplace=True), nn.Dropout(p=dropout),
-            nn.Linear(128, n_outputs),
+            nn.LazyLinear(1024), nn.ELU(inplace=True), nn.Dropout(p=dropout),
+            nn.Linear(1024, 256), nn.ELU(inplace=True), nn.Dropout(p=dropout),
+            nn.Linear(256, n_outputs),
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
