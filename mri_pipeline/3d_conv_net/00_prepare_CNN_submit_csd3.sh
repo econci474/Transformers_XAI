@@ -38,7 +38,7 @@ conda activate mri
 
 # -- Hardcoded paths (BASH_SOURCE unreliable: SLURM copies .sh to spool dir) --
 SCRIPT_DIR="/home/ec474/rds/hpc-work/Transformers_XAI/mri_pipeline/3d_conv_net"
-SMRIPREP_DIR="/home/ec474/rds/hpc-work/ADNI_SMRIPREP/derivatives/smriprep/smriprep"
+SMRIPREP_DIR="/home/ec474/rds/hpc-work/ADNI_SMRIPREP/derivatives/smriprep_sessionwise/smriprep"
 OUT_ROOT="/home/ec474/rds/hpc-work/ADNI_SMRIPREP/derivatives/cnn_inputs"
 
 mkdir -p "${OUT_ROOT}/slurm_logs"
