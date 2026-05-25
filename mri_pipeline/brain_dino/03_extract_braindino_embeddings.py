@@ -242,7 +242,7 @@ def main():
             n_done += B
             if n_done % (10 * args.batch_size) == 0 or n_done >= len(df_all):
                 print(f"  [{n_done:>4d}/{len(df_all)}] extracted "
-                      f"(latest: sub-{batch['sub'][-1]} ses-{batch['ses'][-1]})")
+                      f"(latest: {batch['sub'][-1]} ses-{batch['ses'][-1]})")
 
     if not embeddings_list:
         print("  No embeddings produced. Aborting write.")
@@ -272,14 +272,12 @@ def main():
         all_df[embed_cols].to_numpy(dtype=np.float32))
     ids_full = list(zip(all_df["bids_sub"].tolist(), all_df["bids_ses"].tolist()))
 
-    # ── Atomic writes ─────────────────────────────────────────────────────────
-    tmp_pq = parquet_path.with_suffix(".parquet.tmp")
-    all_df.to_parquet(tmp_pq, index=False)
-    os.replace(tmp_pq, parquet_path)
-
+    # ── Atomic writes -- .pt FIRST (the critical artifact for the head ──────
+    # trainer). Parquet is nice-to-have for inspection; if pyarrow isn't
+    # installed we fall back to CSV so the run never gets wasted again.
     tmp_pt = pt_path.with_suffix(".pt.tmp")
     torch.save({
-        "embeddings": embeddings_full,                 # (N, 768) float32
+        "embeddings": embeddings_full,                 # (N, D) float32
         "ids":        ids_full,                        # list[(sub, ses)]
         "embed_dim":  EMBED_DIM,
         "model_name": MODEL_NAME,
@@ -287,6 +285,18 @@ def main():
         "source_ckpt": str(args.pretrained_ckpt),
     }, tmp_pt)
     os.replace(tmp_pt, pt_path)
+    print(f"  Saved .pt: {pt_path}")
+
+    try:
+        tmp_pq = parquet_path.with_suffix(".parquet.tmp")
+        all_df.to_parquet(tmp_pq, index=False)
+        os.replace(tmp_pq, parquet_path)
+        print(f"  Saved parquet: {parquet_path}")
+    except (ImportError, ValueError) as exc:
+        csv_path = parquet_path.with_suffix(".csv.gz")
+        print(f"  [WARN] parquet write failed ({exc.__class__.__name__}: "
+              f"{exc}). Falling back to CSV: {csv_path}")
+        all_df.to_csv(csv_path, index=False, compression="gzip")
 
     # ── Manifest (append) ─────────────────────────────────────────────────────
     new_manifest = pd.DataFrame(manifest_rows)

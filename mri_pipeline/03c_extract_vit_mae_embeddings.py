@@ -189,7 +189,8 @@ def main():
                 })
             n_done += cls_np.shape[0]
             if n_done % (10 * args.batch_size) == 0 or n_done >= len(df_all):
-                print(f"  [{n_done:>4d}/{len(df_all)}] extracted")
+                print(f"  [{n_done:>4d}/{len(df_all)}] extracted "
+                      f"(latest: {batch['sub'][-1]} ses-{batch['ses'][-1]})")
 
     if not embeddings_list:
         print("  No embeddings produced. Aborting write."); return
@@ -215,8 +216,7 @@ def main():
     embeddings_full = torch.from_numpy(all_df[embed_cols].to_numpy(dtype=np.float32))
     ids_full = list(zip(all_df["bids_sub"].tolist(), all_df["bids_ses"].tolist()))
 
-    tmp = parquet_path.with_suffix(".parquet.tmp")
-    all_df.to_parquet(tmp, index=False); os.replace(tmp, parquet_path)
+    # Atomic writes -- .pt FIRST (critical), parquet with CSV fallback.
     tmp = pt_path.with_suffix(".pt.tmp")
     torch.save({
         "embeddings": embeddings_full,
@@ -226,6 +226,16 @@ def main():
         "n_scans":    len(ids_full),
         "source_ckpt": str(args.pretrained_ckpt),
     }, tmp); os.replace(tmp, pt_path)
+    print(f"  Saved .pt: {pt_path}")
+    try:
+        tmp = parquet_path.with_suffix(".parquet.tmp")
+        all_df.to_parquet(tmp, index=False); os.replace(tmp, parquet_path)
+        print(f"  Saved parquet: {parquet_path}")
+    except (ImportError, ValueError) as exc:
+        csv_path = parquet_path.with_suffix(".csv.gz")
+        print(f"  [WARN] parquet write failed ({exc.__class__.__name__}: "
+              f"{exc}). Falling back to CSV: {csv_path}")
+        all_df.to_csv(csv_path, index=False, compression="gzip")
 
     new_manifest = pd.DataFrame(manifest_rows)
     if manifest_path.exists():
