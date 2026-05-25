@@ -1,0 +1,23 @@
+Files in this directory are vendored verbatim from:
+
+  https://github.com/mclwu22/BrainDINO/tree/main/BrainDINO_seg/dinov3
+
+The upstream copyright header is preserved on each file:
+
+  Copyright (c) Meta Platforms, Inc. and affiliates.
+  This software may be used and distributed in accordance with
+  the terms of the DINOv3 License Agreement.
+
+The only modifications are:
+  1. Absolute imports `from dinov3.layers import X` rewritten as
+     package-relative `from .layers import X` so the vendored copy is
+     self-contained.
+  2. `fp8_linear.py` was not vendored (we do not use FP8 inference);
+     `layers/__init__.py` exposes a no-op `convert_linears_to_fp8`
+     stub in its place.
+
+Refer to the DINOv3 License Agreement for use terms (the upstream repo
+does not contain a LICENSE file; consult Meta's DINOv3 release for the
+full text):
+
+  https://ai.meta.com/dinov3/

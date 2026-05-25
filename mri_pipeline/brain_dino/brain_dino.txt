@@ -1,0 +1,4 @@
+GitHub: https://github.com/mclwu22/BrainDINO
+
+BrainDINO: A Brain MRI Foundation Model for Generalizable Clinical Representation Learning arXiv:2604.27277
+MedDINOv3: How to adapt vision foundation models for medical image segmentation? arXiv:2509.02379
