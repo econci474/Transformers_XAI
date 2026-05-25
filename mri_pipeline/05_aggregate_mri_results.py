@@ -55,6 +55,12 @@ MODEL_TREES = [
     ("AG-MS3D-vanilla",  "agms3d_outputs/AGMS3DCNN_vanilla/*/seed_*/metrics.json"),
     ("BrainMVP",         "brainmvp_debug/aug_*/BrainMVP_uniformer/*/seed_*/*/metrics.json"),
     ("BrainDINO",        "braindino_outputs/aug_*/BrainDINO_vitb16_*/*/seed_*/metrics.json"),
+    # Cached-embedding head sweeps (one row per pretrained encoder, all
+    # under aug_none since the encoder forward is deterministic). HP
+    # leaves: <task>/seed_<n>/lr<>_d<>_ls<>/metrics.json.
+    ("BrainDINO-cached", "braindino_outputs/aug_none/BrainDINO_vitb16_frozen_cached/*/seed_*/*/metrics.json"),
+    ("BrainMVP-cached",  "brainmvp_debug/aug_none/BrainMVP_uniformer_frozen_cached/*/seed_*/*/metrics.json"),
+    ("ViT-MAE-cached",   "vit_outputs_debug/aug_none/ViT_B_mae75_frozen_cached/*/seed_*/*/metrics.json"),
 ]
 
 TASK_ORDER = ["T1_binary", "T1b_binary", "T1c_binary", "T1d_binary", "T2_multiclass"]
