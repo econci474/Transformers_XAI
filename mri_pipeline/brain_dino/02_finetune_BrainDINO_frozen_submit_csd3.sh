@@ -10,20 +10,27 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=48G
 #SBATCH --time=12:00:00
-#SBATCH --array=0-14%4
+#SBATCH --array=0-44%4
 # =============================================================================
 # 02_finetune_BrainDINO_frozen_submit_csd3.sh  --  encoder frozen, head only
 # =============================================================================
 # Fine-tunes BrainDINO ViT-B/16 with the encoder frozen -- only the
-# classification head trains. Cheapest baseline for direct comparison with
-# the BrainMVP frozen rows. Augmentation is fixed to 'stochastic' (skipping
-# none/plus_original this round per the plan -- BrainMVP's frozen rows
-# showed minimal sensitivity to the augment axis).
+# classification head (LayerNorm -> Linear -> GELU -> Dropout -> Linear)
+# trains. Lightest of the three strategies (~590k trainable params vs
+# LoRA's ~1.2M + head, vs full_ft's 86M).
 #
-# 5 tasks x 3 seeds x 1 augment = 15 combinations (array 0-14).
-# Array decoder: SEED_IDX -> TASK_IDX (low-to-high stride).
+# Hyperparams reconciled against runners/classification.py's frozen
+# config: lr=1e-4, weight_decay=1e-5, optimizer=Adam, scheduler=
+# ReduceLROnPlateau(mode=max, factor=0.5, patience=10), label_smoothing=0.0.
 #
-# Output layout: braindino_outputs/aug_stochastic/BrainDINO_vitb16_frozen/<task>/seed_<n>/
+# 5 tasks x 3 seeds x 3 augments = 45 combinations (array 0-44).
+# Array decoder: AUG_IDX -> SEED_IDX -> TASK_IDX (low-to-high stride).
+#
+#   Task    : T1_binary | T1b_binary | T1c_binary | T1d_binary | T2_multiclass
+#   Seed    : 0 | 1 | 2
+#   Augment : none | stochastic | plus_original
+#
+# Output layout: braindino_outputs/aug_${AUGMENT}/BrainDINO_vitb16_frozen/<task>/seed_<n>/
 # =============================================================================
 
 module purge
@@ -41,23 +48,26 @@ OUT_DIR="/home/ec474/rds/hpc-work/ADNI_MRI/braindino_outputs"
 
 PY_SESSION_FLAGS="--long all"
 STRATEGY="frozen"
-AUGMENT="stochastic"
 WANDB_PROJECT="${WANDB_PROJECT:-braindino_frozen}"
 export WANDB_MODE="${WANDB_MODE:-offline}"
 
-# -- Combination lookup: 4 tasks x 3 seeds = 12 -------------------------------
+# -- Combination lookup: 5 tasks x 3 seeds x 3 augments = 45 ------------------
 TASKS=("T1_binary" "T1b_binary" "T1c_binary" "T1d_binary" "T2_multiclass")
 SEEDS=(0 1 2)
+AUGMENTS=("none" "stochastic" "plus_original")
 
 N_TASKS=${#TASKS[@]}
 N_SEEDS=${#SEEDS[@]}
+N_AUG=${#AUGMENTS[@]}
 
 ID=${SLURM_ARRAY_TASK_ID}
+AUG_IDX=$(( ID % N_AUG ));      ID=$(( ID / N_AUG ))
 SEED_IDX=$(( ID % N_SEEDS ));   ID=$(( ID / N_SEEDS ))
 TASK_IDX=$(( ID % N_TASKS ))
 
 TASK="${TASKS[$TASK_IDX]}"
 SEED="${SEEDS[$SEED_IDX]}"
+AUGMENT="${AUGMENTS[$AUG_IDX]}"
 
 RUN_OUT_DIR="${OUT_DIR}/aug_${AUGMENT}/BrainDINO_vitb16_${STRATEGY}/${TASK}/seed_${SEED}"
 METRICS="${RUN_OUT_DIR}/metrics.json"
@@ -70,7 +80,7 @@ export WANDB_DIR="${RUN_OUT_DIR}"
 echo "============================================================"
 echo "  BrainDINO ViT-B/16 frozen (head only)"
 echo "  Job ID      : $SLURM_JOB_ID"
-echo "  Array ID    : $SLURM_ARRAY_TASK_ID  (of 0-$((N_TASKS*N_SEEDS-1)))"
+echo "  Array ID    : $SLURM_ARRAY_TASK_ID  (of 0-$((N_TASKS*N_SEEDS*N_AUG-1)))"
 echo "  Task        : ${TASK}"
 echo "  Seed        : ${SEED}"
 echo "  Strategy    : ${STRATEGY}"

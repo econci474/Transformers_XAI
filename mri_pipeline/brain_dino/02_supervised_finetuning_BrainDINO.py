@@ -441,7 +441,9 @@ def parse_args():
     if args.epochs is None:
         args.epochs = {"frozen": 100, "full_ft": 50, "lora": 8}[args.strategy]
     if args.lr is None:
-        args.lr = {"frozen": 1e-3, "full_ft": 1e-4, "lora": 1e-4}[args.strategy]
+        # Paper (runners/classification.py) sets lr=1e-4 for the frozen
+        # variant -- inherited here for the head-only run too (no LoRA).
+        args.lr = {"frozen": 1e-4, "full_ft": 1e-4, "lora": 1e-4}[args.strategy]
 
     # Resolve session selection mode
     if args.long is None:
