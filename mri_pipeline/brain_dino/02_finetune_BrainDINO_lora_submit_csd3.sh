@@ -36,7 +36,7 @@
 #   # Ensure peft is installed in the mri env:
 #   conda activate mri && pip install peft>=0.7
 #   # Ensure the checkpoint is at the canonical HPC path:
-#   ls /home/ec474/rds/hpc-work/ViT_pretrained/brain_dino_model.pth
+#   ls /home/ec474/rds/hpc-work/brain_dino_model.pth
 #
 # Usage:  sbatch mri_pipeline/brain_dino/02_finetune_BrainDINO_lora_submit_csd3.sh
 # Smoke:  sbatch --array=0 mri_pipeline/brain_dino/02_finetune_BrainDINO_lora_submit_csd3.sh
@@ -50,7 +50,7 @@ conda activate mri
 
 # -- Hardcoded paths ----------------------------------------------------------
 SCRIPT_DIR="/home/ec474/rds/hpc-work/Transformers_XAI/mri_pipeline/brain_dino"
-PRETRAINED_CKPT="/home/ec474/rds/hpc-work/ViT_pretrained/brain_dino_model.pth"
+PRETRAINED_CKPT="/home/ec474/rds/hpc-work/brain_dino_model.pth"
 BRAINDINO_INPUTS_DIR="/home/ec474/rds/hpc-work/ADNI_SMRIPREP/derivatives/braindino_inputs"
 MATCHED_LABELS_CSV="/home/ec474/rds/hpc-work/ADNI_MRI/master_mri_clinical_matched_viscode2_extended_post_exclusion.csv"
 DATA_DIR="/home/ec474/rds/hpc-work/ADNI_CL/no_cdr_stratified_post_exclusion/tabular/baseline"

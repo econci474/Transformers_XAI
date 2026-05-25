@@ -35,7 +35,7 @@ conda activate mri
 
 # -- Hardcoded paths ----------------------------------------------------------
 SCRIPT_DIR="/home/ec474/rds/hpc-work/Transformers_XAI/mri_pipeline/brain_dino"
-PRETRAINED_CKPT="/home/ec474/rds/hpc-work/ViT_pretrained/brain_dino_model.pth"
+PRETRAINED_CKPT="/home/ec474/rds/hpc-work/brain_dino_model.pth"
 BRAINDINO_INPUTS_DIR="/home/ec474/rds/hpc-work/ADNI_SMRIPREP/derivatives/braindino_inputs"
 MATCHED_LABELS_CSV="/home/ec474/rds/hpc-work/ADNI_MRI/master_mri_clinical_matched_viscode2_extended_post_exclusion.csv"
 DATA_DIR="/home/ec474/rds/hpc-work/ADNI_CL/no_cdr_stratified_post_exclusion/tabular/baseline"
