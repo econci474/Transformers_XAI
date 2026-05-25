@@ -378,6 +378,11 @@ def parse_args():
                    help="Early-stopping patience on val balanced accuracy.")
     p.add_argument("--dropout", type=float, default=0.1)
     p.add_argument("--label_smoothing", type=float, default=0.0)
+    p.add_argument("--backbone", type=str, default="separable",
+                   choices=["separable", "vanilla"],
+                   help="3D conv primitive in every AGMS3DCNN block. "
+                        "'separable' = paper-default depthwise-separable; "
+                        "'vanilla' = standard nn.Conv3d (rescue config).")
     p.add_argument("--base_filters", type=int, default=32,
                    help="Pathway base channel count (paper: 32). Channels "
                         "double only at downsample steps -> 4*base in B5.")
@@ -403,7 +408,12 @@ def main():
     np.random.seed(args.seed)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model_slug = "AGMS3DCNN"
+    # Bake the backbone choice into the output slug so vanilla and
+    # separable sweeps land in sibling trees and don't collide. Existing
+    # 'AGMS3DCNN' tree (separable, pre-rescue) is preserved verbatim;
+    # the post-rescue sweeps will live under 'AGMS3DCNN_vanilla' /
+    # 'AGMS3DCNN_separable' as appropriate.
+    model_slug = f"AGMS3DCNN_{args.backbone}"
     out_dir = Path(args.out_dir) / model_slug / args.task / f"seed_{args.seed}"
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -461,7 +471,8 @@ def main():
     # ── Model / loss / optimizer ──────────────────────────────────────────────
     ModelCls = load_agms3d_class()
     model = ModelCls(in_channels=1, n_outputs=num_labels,
-                     dropout=args.dropout, base=args.base_filters).to(device)
+                     dropout=args.dropout, base=args.base_filters,
+                     backbone=args.backbone).to(device)
     # Materialise LazyLinear head with one dummy forward (eval+no_grad so
     # BatchNorm running stats are untouched). Without this, .numel() and
     # AdamW(model.parameters()) both fail on the UninitializedParameter.
@@ -640,6 +651,7 @@ def main():
         config = {
             "model_id":              model_slug,
             "model_kind":            "agms3d",
+            "backbone":              args.backbone,
             "task":                  args.task,
             "task_description":      task_cfg["description"],
             "num_labels":            num_labels,

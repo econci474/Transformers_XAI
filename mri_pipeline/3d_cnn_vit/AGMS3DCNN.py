@@ -135,11 +135,20 @@ class SepBlock3D(nn.Module):
     shape is preserved, the shortcut is the identity."""
 
     def __init__(self, in_channels, out_channels, kernel_size=3,
-                 stride=1, dropout=DEFAULT_DROPOUT):
+                 stride=1, dropout=DEFAULT_DROPOUT, backbone: str = "separable"):
         super().__init__()
         padding = kernel_size // 2
-        self.conv = SeparableConv3d(in_channels, out_channels, kernel_size,
-                                    stride=stride, padding=padding, bias=False)
+        if backbone == "separable":
+            self.conv = SeparableConv3d(
+                in_channels, out_channels, kernel_size,
+                stride=stride, padding=padding, bias=False)
+        elif backbone == "vanilla":
+            self.conv = nn.Conv3d(
+                in_channels, out_channels, kernel_size,
+                stride=stride, padding=padding, bias=False)
+        else:
+            raise ValueError(
+                f"backbone must be 'separable' or 'vanilla', got {backbone!r}")
         self.norm = nn.BatchNorm3d(out_channels)
         self.act = nn.ELU(inplace=True)
         self.drop = nn.Dropout3d(p=dropout)
@@ -177,14 +186,16 @@ class Pathway(nn.Module):
     Stride pattern:               1  -> 2  -> 1  -> 2   -> 1    (~4x intra-pathway DS)
     """
 
-    def __init__(self, in_channels=1, base=32, dropout=DEFAULT_DROPOUT):
+    def __init__(self, in_channels=1, base=32, dropout=DEFAULT_DROPOUT,
+                 backbone: str = "separable"):
         super().__init__()
         c1, c2, c3, c4, c5 = base, base * 2, base * 2, base * 4, base * 4
-        self.b1 = SepBlock3D(in_channels, c1, kernel_size=3, stride=1, dropout=dropout)
-        self.b2 = SepBlock3D(c1,          c2, kernel_size=3, stride=2, dropout=dropout)
-        self.b3 = SepBlock3D(c2,          c3, kernel_size=3, stride=1, dropout=dropout)
-        self.b4 = SepBlock3D(c3,          c4, kernel_size=3, stride=2, dropout=dropout)
-        self.b5 = SepBlock3D(c4,          c5, kernel_size=3, stride=1, dropout=dropout)
+        kw = dict(kernel_size=3, dropout=dropout, backbone=backbone)
+        self.b1 = SepBlock3D(in_channels, c1, stride=1, **kw)
+        self.b2 = SepBlock3D(c1,          c2, stride=2, **kw)
+        self.b3 = SepBlock3D(c2,          c3, stride=1, **kw)
+        self.b4 = SepBlock3D(c3,          c4, stride=2, **kw)
+        self.b5 = SepBlock3D(c4,          c5, stride=1, **kw)
         self.out_channels = c5
 
     def forward(self, x):
@@ -239,11 +250,14 @@ class AGMS3DCNN(nn.Module):
     """
 
     def __init__(self, in_channels: int = 1, n_outputs: int = 2,
-                 dropout: float = DEFAULT_DROPOUT, base: int = 32):
+                 dropout: float = DEFAULT_DROPOUT, base: int = 32,
+                 backbone: str = "separable"):
         super().__init__()
-        self.fine   = Pathway(in_channels, base=base, dropout=dropout)
-        self.medium = Pathway(in_channels, base=base, dropout=dropout)
-        self.coarse = Pathway(in_channels, base=base, dropout=dropout)
+        kw = dict(base=base, dropout=dropout, backbone=backbone)
+        self.fine   = Pathway(in_channels, **kw)
+        self.medium = Pathway(in_channels, **kw)
+        self.coarse = Pathway(in_channels, **kw)
+        self.backbone = backbone
 
         # Learnable pathway fusion weights (softmaxed in forward so they sum to 1).
         self.alpha = nn.Parameter(torch.ones(3) / 3.0)
