@@ -45,11 +45,16 @@ DEFAULT_ROOT = r"D:/ADNI_BIDS_project/derivatives"
 
 # (model label, metrics.json glob relative to --root)
 MODEL_TREES = [
-    ("ViT-MAE75",   "vit_outputs_debug/ViT_B_mae75/*/seed_*/*/metrics.json"),
-    ("ViT-scratch", "vit_baseline/ViT_B_scratch/*/seed_*/*/metrics.json"),
-    ("Spasov-CNN",  "cnn3d_outputs/Spasov3DCNN_*/*/seed_*/metrics.json"),
-    ("AG-MS3D",     "agms3d_outputs/AGMS3DCNN/*/seed_*/metrics.json"),
-    ("BrainMVP",    "brainmvp_debug/aug_*/BrainMVP_uniformer/*/seed_*/*/metrics.json"),
+    ("ViT-MAE75",        "vit_outputs_debug/ViT_B_mae75/*/seed_*/*/metrics.json"),
+    ("ViT-scratch",      "vit_baseline/ViT_B_scratch/*/seed_*/*/metrics.json"),
+    ("Spasov-CNN",       "cnn3d_outputs/Spasov3DCNN_*/*/seed_*/metrics.json"),
+    # Legacy AG-MS3D run (pre-rescue separable backbone, collapsed on
+    # 14/15 cells) — kept in the aggregator as evidence-of-failure.
+    ("AG-MS3D-sep",      "agms3d_outputs/AGMS3DCNN/*/seed_*/metrics.json"),
+    # Post-rescue vanilla-backbone run (--lr 1e-3, --label_smoothing 0.1).
+    ("AG-MS3D-vanilla",  "agms3d_outputs/AGMS3DCNN_vanilla/*/seed_*/metrics.json"),
+    ("BrainMVP",         "brainmvp_debug/aug_*/BrainMVP_uniformer/*/seed_*/*/metrics.json"),
+    ("BrainDINO",        "braindino_outputs/aug_*/BrainDINO_vitb16_*/*/seed_*/metrics.json"),
 ]
 
 TASK_ORDER = ["T1_binary", "T1b_binary", "T1c_binary", "T1d_binary", "T2_multiclass"]
