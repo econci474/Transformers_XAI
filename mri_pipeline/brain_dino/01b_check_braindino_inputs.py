@@ -50,7 +50,16 @@ import nibabel as nib
 import numpy as np
 import pandas as pd
 
-DEFAULT_MANIFEST = r"D:\ADNI_BIDS_project\derivatives\braindino_inputs\braindino_manifest.csv"
+# Auto-detect local vs HPC manifest location. First existing path wins;
+# override with --manifest at runtime.
+_MANIFEST_CANDIDATES = [
+    "/home/ec474/rds/hpc-work/ADNI_SMRIPREP/derivatives/braindino_inputs/braindino_manifest.csv",
+    r"D:\ADNI_BIDS_project\derivatives\braindino_inputs\braindino_manifest.csv",
+]
+DEFAULT_MANIFEST = next(
+    (p for p in _MANIFEST_CANDIDATES if os.path.isfile(p)),
+    _MANIFEST_CANDIDATES[0],
+)
 
 EXPECTED_SHAPE   = (256, 256, 128)            # (R, A, S=axial)
 TOTAL_VOXELS     = int(np.prod(EXPECTED_SHAPE))  # 8,388,608
