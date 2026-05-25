@@ -28,7 +28,7 @@ source "$(conda info --base)/etc/profile.d/conda.sh"
 conda activate mri
 
 SCRIPT_DIR="/home/ec474/rds/hpc-work/Transformers_XAI/mri_pipeline"
-PRETRAINED_CKPT="/home/ec474/rds/hpc-work/ViT_pretrained/vit_mae_pretrained.pth"
+PRETRAINED_CKPT="/home/ec474/rds/hpc-work/ViT_pretrained/ViT_B_pretrained_noaug_mae75_BRATS2023_IXI_OASIS3_seed_8456_999_077000.pth.tar"
 VIT_INPUTS_DIR="/home/ec474/rds/hpc-work/ADNI_SMRIPREP/derivatives/vit_inputs"
 MATCHED_LABELS_CSV="/home/ec474/rds/hpc-work/ADNI_MRI/master_mri_clinical_matched_viscode2_extended_post_exclusion.csv"
 OUT_DIR="/home/ec474/rds/hpc-work/ADNI_MRI/cached_embeddings/vit_mae"
@@ -45,9 +45,7 @@ echo "  Started     : $(date)"
 echo "============================================================"
 
 if [ ! -f "${PRETRAINED_CKPT}" ]; then
-    echo "[ERROR] Pretrained checkpoint not found: ${PRETRAINED_CKPT}"
-    echo "        Check the path -- the MAE-pretrained ViT .pth is likely at"
-    echo "        /home/ec474/rds/hpc-work/ViT_pretrained/<some_name>.pth"; exit 1
+    echo "[ERROR] Pretrained checkpoint not found: ${PRETRAINED_CKPT}"; exit 1
 fi
 if [ ! -d "${VIT_INPUTS_DIR}" ]; then
     echo "[ERROR] ViT inputs dir not found: ${VIT_INPUTS_DIR}"; exit 1
