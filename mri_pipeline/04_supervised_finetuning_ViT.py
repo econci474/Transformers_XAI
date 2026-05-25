@@ -150,6 +150,24 @@ TASK_CONFIG = {
         "session_policy": "current",
         "description":    "Binary: CN vs AD (MCI excluded)",
     },
+    "T1d_binary": {
+        # Conversion task: among MCI subjects, predict whether they
+        # progressed to AD (pMCI=1) vs stayed stable (sMCI=1). Labels come
+        # from explicit pMCI/sMCI columns in the matched CSV (present on
+        # the HPC `_extended_post_exclusion` variant; not in the local
+        # master CSV, so T1d only runs on HPC). The earliest scan per
+        # subject is kept -- conversion is a subject-level property, so
+        # multiple sessions would over-weight the well-imaged subjects.
+        "label_col":      None,
+        "num_labels":     2,
+        "task_type":      "binary",
+        "label_map":      None,
+        "filter_non_ad":  False,
+        "session_policy": "conversion",
+        "pos_col":        "pMCI",
+        "neg_col":        "sMCI",
+        "description":    "Binary: pMCI vs sMCI (MCI->AD conversion, earliest scan/subject)",
+    },
     "T2_multiclass": {
         "label_col":      "Label_bl_multi",
         "num_labels":     3,
@@ -346,9 +364,13 @@ def class_names_for(task_cfg: dict) -> list:
 
     label_map may be many-to-one (e.g. T1_binary CN->0, MCI->1, AD->1), so each
     index collects every source name mapped to it ('MCI+AD'). label_map=None
-    (prognosis tasks) -> generic 'class_{i}'.
+    falls back to pos_col/neg_col (conversion tasks) or generic 'class_{i}'.
     """
     n = task_cfg["num_labels"]
+    # Conversion tasks: pos_col=class 1, neg_col=class 0.
+    if task_cfg.get("session_policy") == "conversion":
+        return [task_cfg.get("neg_col", "class_0"),
+                task_cfg.get("pos_col", "class_1")]
     lm = task_cfg.get("label_map")
     if not lm:
         return [f"class_{i}" for i in range(n)]
@@ -439,7 +461,17 @@ def _resolve_image_path(patient_id: str, viscode: str, vit_inputs_dir: Path) -> 
 
 
 def _resolve_labels(df: pd.DataFrame, task_cfg: dict) -> pd.DataFrame:
-    """Apply session_policy + label_map. Drops rows with NaN labels."""
+    """Apply session_policy + label_map. Drops rows with NaN labels.
+
+    Session policies:
+      current            label depends on bids_ses (Label_bl_multi for bl;
+                         Label_visit_diag otherwise). T1, T1b, T1c, T2.
+      baseline_anchored  label_col is constant per subject (Label_3y etc.).
+                         T3a, T3b.
+      conversion         label = 1 if pos_col==1, 0 if neg_col==1; rows
+                         missing both are dropped; then collapse to one
+                         (earliest) session per subject. T1d.
+    """
     if task_cfg["session_policy"] == "current":
         df = df.dropna(subset=["Label_bl_multi", "Label_visit_diag"], how="any").copy()
         def _label(row):
@@ -447,6 +479,31 @@ def _resolve_labels(df: pd.DataFrame, task_cfg: dict) -> pd.DataFrame:
             v = row[col]
             return task_cfg["label_map"].get(v) if task_cfg["label_map"] else v
         df["label"] = df.apply(_label, axis=1)
+    elif task_cfg["session_policy"] == "conversion":
+        pos = task_cfg["pos_col"]
+        neg = task_cfg["neg_col"]
+        for c in (pos, neg):
+            if c not in df.columns:
+                raise KeyError(
+                    f"matched_labels CSV is missing the {c!r} column "
+                    f"required by conversion task '{task_cfg.get('description', '?')}'. "
+                    f"This task only works on the HPC '_extended_post_exclusion' CSV.")
+        # _is_one tolerates "1", "1.0", True, etc.
+        def _is_one(v):
+            return str(v).strip() in ("1", "1.0", "True", "true")
+        df = df.dropna(subset=[pos, neg], how="any").copy()
+        df["label"] = df.apply(
+            lambda r: 1 if _is_one(r[pos]) else (0 if _is_one(r[neg]) else None),
+            axis=1)
+        df = df.dropna(subset=["label"]).copy()
+        df["label"] = df["label"].astype(int)
+        # Earliest session per subject (conversion is subject-level).
+        df["_months"] = df["bids_ses"].map(session_to_months)
+        df = df.dropna(subset=["_months"])
+        df = (df.sort_values(["Patient_ID", "_months"])
+                .groupby("Patient_ID", as_index=False).first()
+                .drop(columns="_months"))
+        return df  # already int-cast, return early to skip the int recast below
     else:
         df = df.dropna(subset=[task_cfg["label_col"]]).copy()
         df["label"] = df[task_cfg["label_col"]]

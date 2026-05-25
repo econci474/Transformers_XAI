@@ -10,16 +10,24 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=48G
 #SBATCH --time=12:00:00
-#SBATCH --array=0-23%4
+#SBATCH --array=0-29%4
 # =============================================================================
 # 04g_finetune_BrainMVP_submit_csd3.sh   --   BrainMVP "brainmvp_debug" re-run
 # =============================================================================
 # Fine-tunes BrainMVP UniFormer-Small on ADNI MRI classification tasks.
 #
-# 4 tasks x 3 seeds x 2 strategies = 24 combinations (array 0-23).
+# 5 tasks x 3 seeds x 2 strategies = 30 combinations (array 0-29).
+# T1d_binary (pMCI vs sMCI) added; previously-completed cells (T1, T1b, T1c,
+# T2 across both strategies + 3 augmentations) are auto-skipped via the
+# metrics.json check, so resubmitting with --array=0-29 only adds the T1d
+# cells. Note: ordering shifted slightly because T1d slots in BEFORE T2 to
+# stay consistent with the rest of the repo's task ordering -- previously
+# IDs 18-23 were T2; they're now 24-29. metrics.json skip-check makes this
+# a no-op for completed runs.
+#
 # Array index decoder: STRAT_IDX -> SEED_IDX -> TASK_IDX (low-to-high stride).
 #
-#   Task     : T1_binary | T1b_binary | T1c_binary | T2_multiclass
+#   Task     : T1_binary | T1b_binary | T1c_binary | T1d_binary | T2_multiclass
 #   Seed     : 0 | 1 | 2
 #   Strategy : full_ft | frozen
 #
@@ -73,7 +81,7 @@ OUT_DIR="/home/ec474/rds/hpc-work/ADNI_MRI/brainmvp_debug/aug_${AUGMENT}"
 PY_SESSION_FLAGS="--long all"
 
 # -- Combination lookup: 4 tasks, 3 seeds, 2 strategies -----------------------
-TASKS=("T1_binary" "T1b_binary" "T1c_binary" "T2_multiclass")
+TASKS=("T1_binary" "T1b_binary" "T1c_binary" "T1d_binary" "T2_multiclass")
 SEEDS=(0 1 2)
 STRATEGIES=("full_ft" "frozen")
 
