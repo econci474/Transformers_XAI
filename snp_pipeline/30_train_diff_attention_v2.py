@@ -318,25 +318,40 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--base", type=Path, default=DEFAULT_BASE)
-    ap.add_argument("--splits-root", type=Path, default=DEFAULT_SPLITS)
-    ap.add_argument("--seq-length", choices=["1001bp", "101bp"], required=True)
+    ap.add_argument("--splits-root", "--splits_root", type=Path, default=DEFAULT_SPLITS,
+                    dest="splits_root")
+    ap.add_argument("--seq-length", "--seq_length", choices=["1001bp", "101bp"],
+                    required=True, dest="seq_length")
     ap.add_argument("--model", choices=["bmfm_ref", "bmfm_snp", "ntv2",
                                           "caduceus_ph", "caduceus_ps"], required=True)
-    ap.add_argument("--functional-concat", choices=["off", "on"], default="off")
+    ap.add_argument("--functional-concat", "--functional_concat",
+                    default="off", dest="functional_concat",
+                    help="off/on (or True/False — WandB sweep may cast).")
     ap.add_argument("--aggregation", choices=["global_attn", "chrom_hier"], default="global_attn")
     ap.add_argument("--head", choices=["mlp2", "mlp3", "rf", "xgb"], required=True)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--epochs", type=int, default=80)
-    ap.add_argument("--batch-size", type=int, default=32)
+    ap.add_argument("--batch-size", "--batch_size", type=int, default=32, dest="batch_size")
     ap.add_argument("--lr", type=float, default=3e-4)
-    ap.add_argument("--weight-decay", type=float, default=1e-4)
+    ap.add_argument("--weight-decay", "--weight_decay", type=float, default=1e-4,
+                    dest="weight_decay")
     ap.add_argument("--patience", type=int, default=15)
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
-    ap.add_argument("--wandb-project", default=None,
-                    help="If set, init WandB with this project name")
-    ap.add_argument("--wandb-entity", default=None)
-    ap.add_argument("--output-root", type=Path, default=Path("outputs/diff_attn_v2"))
+    ap.add_argument("--wandb-project", "--wandb_project", default=None,
+                    help="If set, init WandB with this project name",
+                    dest="wandb_project")
+    ap.add_argument("--wandb-entity", "--wandb_entity", default=None, dest="wandb_entity")
+    ap.add_argument("--output-root", "--output_root", type=Path,
+                    default=Path("outputs/diff_attn_v2"), dest="output_root")
     args = ap.parse_args()
+    # Normalize functional_concat to {'off', 'on'} (WandB may send True/False/"True")
+    fc_str = str(args.functional_concat).strip().lower()
+    if fc_str in ("true", "on", "1", "yes"):
+        args.functional_concat = "on"
+    elif fc_str in ("false", "off", "0", "no", ""):
+        args.functional_concat = "off"
+    else:
+        raise ValueError(f"Bad --functional-concat: {args.functional_concat!r}")
     np.random.seed(args.seed); torch.manual_seed(args.seed)
 
     # ── WandB init ─────────────────────────────────────────────────────
