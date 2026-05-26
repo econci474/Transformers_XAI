@@ -105,6 +105,59 @@ def load_functional_features(parent: Path, target_rsids: list[str]) -> tuple[np.
     return feat, col_names
 
 
+# ───────────────────────── Modality summaries (for v3 trainer) ─────────────
+
+# Map modality → list of AlphaGenome output_type values that belong to it
+MODALITY_OUTPUT_TYPES = {
+    "eqtl":   ["RNA_SEQ"],
+    "acc":    ["DNASE", "ATAC"],
+    "tss":    ["CAGE", "PROCAP"],
+    "splice": ["SPLICE_SITES", "SPLICE_SITE_USAGE", "SPLICE_JUNCTIONS"],
+}
+
+
+def load_modality_summaries(parent: Path, target_rsids: list[str]) -> dict[str, np.ndarray]:
+    """For each of 4 modalities, derive (signed, abs) per-SNP scalar from the
+    tidy_long.tsv.gz long-format AlphaGenome output (already brain-filtered).
+
+    signed = max_signed across all tracks within the modality (i.e. value with
+    largest |raw_score|, sign preserved).
+    abs    = |signed|.
+
+    Returns dict with keys eqtl_signed, eqtl_abs, acc_signed, acc_abs,
+    tss_signed, tss_abs, splice_signed, splice_abs — each (N_SNPs,) float32
+    aligned to target_rsids order, zero for SNPs absent from tidy_long.
+    """
+    p = parent / "alphagenome_eqtl" / "recover_all_pool_tidy_long.tsv.gz"
+    if not p.exists():
+        raise FileNotFoundError(
+            f"tidy_long not found at {p} — required for modality summaries. "
+            f"Re-run AlphaGenome extraction or copy from local D: drive.")
+    df = pd.read_csv(p, sep="\t", compression="gzip",
+                      usecols=["rsID", "output_type", "raw_score"])
+    df = df[df["output_type"].notna() & df["raw_score"].notna()]
+    df["abs_score"] = df["raw_score"].abs()
+
+    rs_idx = {rs: i for i, rs in enumerate(target_rsids)}
+    N = len(target_rsids)
+    out: dict[str, np.ndarray] = {}
+    for modality, ot_list in MODALITY_OUTPUT_TYPES.items():
+        sub = df[df["output_type"].isin(ot_list)]
+        if sub.empty:
+            signed = np.zeros(N, dtype=np.float32)
+        else:
+            # For each rsID, pick the row with the largest |raw_score|
+            idx_max = sub.groupby("rsID")["abs_score"].idxmax()
+            best = sub.loc[idx_max, ["rsID", "raw_score"]]
+            signed = np.zeros(N, dtype=np.float32)
+            for _, row in best.iterrows():
+                if row["rsID"] in rs_idx:
+                    signed[rs_idx[row["rsID"]]] = np.float32(row["raw_score"])
+        out[f"{modality}_signed"] = signed
+        out[f"{modality}_abs"] = np.abs(signed).astype(np.float32)
+    return out
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter)

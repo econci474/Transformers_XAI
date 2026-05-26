@@ -292,12 +292,16 @@ class BiasedAttention(nn.Module):
         self.use_delta = use_delta
         self.delta = nn.Parameter(torch.zeros(())) if use_delta else None
 
-    def forward(self, x, mask, abs_beta, abs_dosbeta=None):
+    def forward(self, x, mask, abs_beta, abs_dosbeta=None, extra_bias=None):
         # x:(B,N,D) mask:(B,N) bool  abs_beta:(B,N)  abs_dosbeta:(B,N)|None
+        # extra_bias:(B,N)|None — optional additive per-SNP bias term (e.g. modality ε's
+        # already weighted+summed externally). Default None preserves v2 behaviour.
         score = self.u(torch.tanh(self.v(x))).squeeze(-1)        # (B,N)
         score = score + self.gamma * abs_beta
         if self.use_delta and abs_dosbeta is not None:
             score = score + self.delta * abs_dosbeta
+        if extra_bias is not None:
+            score = score + extra_bias
         score = score.masked_fill(~mask, float("-inf"))
         a = torch.softmax(score, dim=-1)
         a = torch.nan_to_num(a, nan=0.0)                          # empty row
@@ -317,8 +321,8 @@ class GlobalAttnPool(nn.Module):
     def output_dim(self) -> int:
         return self.dim
 
-    def forward(self, x, mask, chrom_idx, abs_beta, abs_dosbeta):
-        emb, a = self.attn(x, mask, abs_beta, abs_dosbeta)
+    def forward(self, x, mask, chrom_idx, abs_beta, abs_dosbeta, extra_bias=None):
+        emb, a = self.attn(x, mask, abs_beta, abs_dosbeta, extra_bias=extra_bias)
         return emb, {"a_snp": a}
 
 
@@ -339,7 +343,7 @@ class ChromHierPool(nn.Module):
     def output_dim(self) -> int:
         return self.dim
 
-    def forward(self, x, mask, chrom_idx, abs_beta, abs_dosbeta):
+    def forward(self, x, mask, chrom_idx, abs_beta, abs_dosbeta, extra_bias=None):
         B, S, D = x.shape
         chrom_emb = x.new_zeros(B, self.n_chroms, D)
         chrom_pres = torch.zeros(B, self.n_chroms, dtype=torch.bool,
@@ -350,7 +354,7 @@ class ChromHierPool(nn.Module):
             has = m.any(dim=1)
             if not has.any():
                 continue
-            emb_c, a_c = self.intra(x, m, abs_beta, abs_dosbeta)
+            emb_c, a_c = self.intra(x, m, abs_beta, abs_dosbeta, extra_bias=extra_bias)
             chrom_emb[has, c] = emb_c[has]
             chrom_pres[has, c] = True
             a_snp_full[has] += a_c[has]            # disjoint chroms → add ok

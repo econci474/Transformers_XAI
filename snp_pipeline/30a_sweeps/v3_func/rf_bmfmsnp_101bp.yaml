@@ -1,0 +1,34 @@
+# WandB sweep — diff-attention v3 functional-integration modes
+# Head: rf  Model: bmfm_snp  Seq: 101bp
+# Tests 7 ways of injecting AlphaGenome functional features × 2 aggregations × 3 seeds = 42 runs
+# Note: tree-head bias modes use FIXED ε=1 weights (no learning); MLP version explores learnable ε.
+program: snp_pipeline/30v3_train_diff_attention_func.py
+method: grid
+metric:
+  name: val_balanced_accuracy
+  goal: maximize
+command:
+  - ${env}
+  - python
+  - ${program}
+  - --wandb-project=adni-snp-diff-attn-v3-func-rf-bmfmsnp-101bp
+  - --head=rf
+  - --model=bmfm_snp
+  - --seq-length=101bp
+  - --base=/content/drive/MyDrive/ADNI_SNP/diff_attn_v2_upload
+  - --splits-root=/nonexistent/force-fallback
+  - ${args}
+parameters:
+  func_integration_mode:
+    values:
+      - none
+      - per_snp_zscored_23
+      - per_snp_summaries_8
+      - attn_bias_single
+      - attn_bias_per_modality
+      - value_mult
+      - attn_bias_per_modality_plus_value_mult
+  aggregation:
+    values: [global_attn, chrom_hier]
+  seed:
+    values: [0, 1, 2]
