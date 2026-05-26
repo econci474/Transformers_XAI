@@ -1,0 +1,40 @@
+# BrainDINO cached-embedding head HP sweep
+# =========================================
+# Register once on a CSD3 login node (needs internet):
+#   conda activate mri
+#   cd mri_pipeline/cached_head_sweep
+#   wandb sweep sweep_braindino.yaml
+# -> prints "wandb: Create sweep with ID: <sweep_id>"
+#
+# Then submit the SLURM array with that sweep_id:
+#   sbatch --export=ALL,SWEEP_ID=<sweep_id> 04_braindino_head_sweep_submit_csd3.sh
+#
+# After the sweep finishes, sync offline runs from a login node:
+#   for d in /home/ec474/rds/hpc-work/ADNI_MRI/braindino_outputs/aug_none/BrainDINO_vitb16_frozen_cached/*/seed_*/*/wandb/offline-run-*; do
+#       wandb sync "$d"
+#   done
+#
+# The runs upload as members of the registered sweep, surfacing the
+# native parallel-coordinates + HP-vs-metric scatter in the W&B Sweeps
+# tab. NOTE: we do NOT use `wandb agent` -- the SLURM array enumerates
+# the same 270 (lr x dropout x ls x task x seed) combinations. This
+# YAML serves only to register a sweep object that runs can be
+# associated with at `wandb.init` time (via WANDB_SWEEP_ID env var).
+name: braindino_frozen_cached_v1
+project: braindino_frozen_cached
+program: 04_head_finetune_from_embeddings.py
+method: grid
+metric:
+  name: best_val_bacc
+  goal: maximize
+parameters:
+  task:
+    values: [T1_binary, T1b_binary, T1c_binary, T1d_binary, T2_multiclass]
+  seed:
+    values: [0, 1, 2]
+  lr:
+    values: [0.001, 0.0001, 0.00001]
+  drop_rate:
+    values: [0.1, 0.2, 0.3]
+  label_smoothing:
+    values: [0.0, 0.1]

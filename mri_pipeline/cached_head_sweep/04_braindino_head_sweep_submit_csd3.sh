@@ -49,6 +49,20 @@ EMBED_DIM=768
 WANDB_PROJECT="${WANDB_PROJECT:-braindino_frozen_cached}"
 export WANDB_MODE="${WANDB_MODE:-offline}"
 
+# Optional formal W&B Sweep registration. Pre-register once on a login
+# node: `cd mri_pipeline/cached_head_sweep && wandb sweep sweep_braindino.yaml`
+# -> returns a sweep_id (e.g. abc12def). Pass it to this submit via
+#   sbatch --export=ALL,SWEEP_ID=abc12def 04_braindino_head_sweep_submit_csd3.sh
+# Each cell stamps its offline run with that sweep_id; after `wandb sync`
+# the W&B UI shows all 270 runs in the Sweeps tab with native
+# parallel-coordinates + HP-vs-metric plots. If SWEEP_ID is unset, cells
+# still run as individual W&B runs grouped under `head_sweep_BrainDINO`.
+SWEEP_ID="${SWEEP_ID:-}"
+SWEEP_FLAG=""
+if [ -n "$SWEEP_ID" ]; then
+    SWEEP_FLAG="--sweep_id $SWEEP_ID"
+fi
+
 # -- HP grid (WD fixed at 1e-5, not swept) ------------------------------------
 TASKS=("T1_binary" "T1b_binary" "T1c_binary" "T1d_binary" "T2_multiclass")
 SEEDS=(0 1 2)
@@ -120,7 +134,8 @@ python "${SCRIPT_DIR}/04_head_finetune_from_embeddings.py" \
     --data_dir             "${DATA_DIR}" \
     --out_dir              "${OUT_DIR}" \
     --wandb \
-    --wandb_project        "${WANDB_PROJECT}"
+    --wandb_project        "${WANDB_PROJECT}" \
+    ${SWEEP_FLAG}
 
 EXIT_CODE=$?
 echo "============================================================"

@@ -169,8 +169,21 @@ def init_wandb(args, task_cfg, extra=None):
     except ImportError:
         print("  [WARN] --wandb set but wandb not installed; continuing local-only.")
         return None
+    # Associate this run with a registered W&B Sweep, if --sweep_id was
+    # passed (or WANDB_SWEEP_ID is already in env). Must be set BEFORE
+    # wandb.init -- the run dir stamps the sweep_id and `wandb sync`
+    # later uploads the run as a member of the sweep, so the sweep page
+    # gets native parallel-coords / HP-vs-metric visualisation. The
+    # sweep itself must be pre-registered once via `wandb sweep
+    # sweep_<model>.yaml` on a login node (needs internet).
+    if args.sweep_id:
+        os.environ["WANDB_SWEEP_ID"] = args.sweep_id
+        print(f"  W&B sweep: associating with {args.sweep_id}")
+    # Group: clusters all cells of one model/sweep together in the W&B UI
+    # (works even without a formal sweep registered).
+    group = args.wandb_group or f"head_sweep_{args.model_name}"
     name = args.wandb_run_name or (
-        f"{args.model_name}-{args.task}-s{args.seed}-cached"
+        f"{args.task}-s{args.seed}-cached"
         f"-lr{args.lr:.0e}_d{args.drop_rate}_ls{args.label_smoothing}")
     cfg = {
         "model_name":      args.model_name,
@@ -190,7 +203,7 @@ def init_wandb(args, task_cfg, extra=None):
     if extra:
         cfg.update(extra)
     return wandb.init(project=args.wandb_project, entity=args.wandb_entity,
-                      name=name, config=cfg, reinit=True)
+                      name=name, group=group, config=cfg, reinit=True)
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
@@ -230,6 +243,14 @@ def parse_args():
     p.add_argument("--wandb_project", type=str, default=None)
     p.add_argument("--wandb_entity",  type=str, default=None)
     p.add_argument("--wandb_run_name", type=str, default=None)
+    p.add_argument("--wandb_group", type=str, default=None,
+                   help="W&B run group label (defaults to head_sweep_{model_name}). "
+                        "All cells of one model cluster under this group in the UI.")
+    p.add_argument("--sweep_id", type=str, default=None,
+                   help="W&B Sweep ID returned by `wandb sweep <yaml>`. If set, "
+                        "WANDB_SWEEP_ID env var is exported before wandb.init so the "
+                        "offline run is stamped with the sweep_id and `wandb sync` "
+                        "later uploads it as a member of the registered sweep.")
     args = p.parse_args()
 
     if args.long is None:

@@ -1,0 +1,23 @@
+# ViT-MAE75 cached-embedding head HP sweep
+# =========================================
+# Register: cd mri_pipeline/cached_head_sweep && wandb sweep sweep_vit_mae.yaml
+# Submit:   sbatch --export=ALL,SWEEP_ID=<id> 04_vit_mae_head_sweep_submit_csd3.sh
+# See sweep_braindino.yaml for the full workflow description.
+name: vit_mae_frozen_cached_v1
+project: vit_mae_frozen_cached
+program: 04_head_finetune_from_embeddings.py
+method: grid
+metric:
+  name: best_val_bacc
+  goal: maximize
+parameters:
+  task:
+    values: [T1_binary, T1b_binary, T1c_binary, T1d_binary, T2_multiclass]
+  seed:
+    values: [0, 1, 2]
+  lr:
+    values: [0.001, 0.0001, 0.00001]
+  drop_rate:
+    values: [0.1, 0.2, 0.3]
+  label_smoothing:
+    values: [0.0, 0.1]

@@ -34,6 +34,17 @@ EMBED_DIM=768
 WANDB_PROJECT="${WANDB_PROJECT:-vit_mae_frozen_cached}"
 export WANDB_MODE="${WANDB_MODE:-offline}"
 
+# Optional formal W&B Sweep registration. Pre-register once on a login
+# node: `cd mri_pipeline/cached_head_sweep && wandb sweep sweep_vit_mae.yaml`
+# -> returns a sweep_id. Pass it via:
+#   sbatch --export=ALL,SWEEP_ID=<id> 04_vit_mae_head_sweep_submit_csd3.sh
+# If unset, cells run as individual W&B runs grouped under `head_sweep_ViT-MAE75`.
+SWEEP_ID="${SWEEP_ID:-}"
+SWEEP_FLAG=""
+if [ -n "$SWEEP_ID" ]; then
+    SWEEP_FLAG="--sweep_id $SWEEP_ID"
+fi
+
 TASKS=("T1_binary" "T1b_binary" "T1c_binary" "T1d_binary" "T2_multiclass")
 SEEDS=(0 1 2)
 DROPOUTS=(0.1 0.2 0.3)
@@ -100,7 +111,8 @@ python "${SCRIPT_DIR}/04_head_finetune_from_embeddings.py" \
     --data_dir             "${DATA_DIR}" \
     --out_dir              "${OUT_DIR}" \
     --wandb \
-    --wandb_project        "${WANDB_PROJECT}"
+    --wandb_project        "${WANDB_PROJECT}" \
+    ${SWEEP_FLAG}
 
 EXIT_CODE=$?
 echo "============================================================"
