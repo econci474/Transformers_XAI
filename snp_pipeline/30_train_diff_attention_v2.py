@@ -224,8 +224,9 @@ def _metrics(y_true, prob, pred, loss_val=None) -> dict:
 
 def _train_mlp(model: nn.Module, train_data, val_data, *,
                epochs: int, batch_size: int, lr: float, weight_decay: float,
-               patience: int, device: str, pos_weight: float) -> dict:
-    """End-to-end SGD with early-stop on val_loss."""
+               patience: int, device: str, pos_weight: float,
+               wandb_run=None) -> dict:
+    """End-to-end SGD with early-stop on val_loss; per-epoch wandb log."""
     model = model.to(device)
     opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
     Xtr, beta_tr, dxb_tr, chrom_tr, ytr = train_data
@@ -239,6 +240,9 @@ def _train_mlp(model: nn.Module, train_data, val_data, *,
     for ep in range(epochs):
         model.train()
         idx = torch.randperm(n_train)
+        train_loss_sum = 0.0; train_loss_n = 0
+        # Also track train balAcc on the same epoch for a fairness curve
+        tr_probs_chunks = []; tr_y_chunks = []
         for s in range(0, n_train, batch_size):
             b = idx[s:s+batch_size]
             opt.zero_grad()
@@ -248,6 +252,15 @@ def _train_mlp(model: nn.Module, train_data, val_data, *,
             loss = loss_fn(logits, ytr[b].float().to(device))
             loss.backward()
             opt.step()
+            train_loss_sum += loss.item() * len(b)
+            train_loss_n += len(b)
+            tr_probs_chunks.append(torch.sigmoid(logits.detach()).cpu().numpy())
+            tr_y_chunks.append(ytr[b].cpu().numpy())
+        train_loss = train_loss_sum / max(1, train_loss_n)
+        tr_probs = np.concatenate(tr_probs_chunks)
+        tr_y = np.concatenate(tr_y_chunks)
+        tr_pred = (tr_probs > 0.5).astype(int)
+        tr_balacc = balanced_accuracy_score(tr_y, tr_pred)
 
         # Val pass
         model.eval()
@@ -259,7 +272,20 @@ def _train_mlp(model: nn.Module, train_data, val_data, *,
             v_prob = torch.sigmoid(v_logits).cpu().numpy()
             v_pred = (v_prob > 0.5).astype(int)
             v_m = _metrics(yva.cpu().numpy(), v_prob, v_pred, v_loss)
-        history.append({"epoch": ep, **{f"val_{k}": v for k, v in v_m.items()}})
+        history.append({"epoch": ep, "train_loss": train_loss,
+                          "train_balanced_accuracy": tr_balacc,
+                          **{f"val_{k}": v for k, v in v_m.items()}})
+
+        # Per-epoch wandb log → learning curves visible in WandB UI
+        if wandb_run is not None:
+            wandb_run.log({
+                "epoch": ep,
+                "train_loss": train_loss,
+                "train_balanced_accuracy": tr_balacc,
+                "val_loss": v_loss,
+                "val_balanced_accuracy": v_m["balanced_accuracy"],
+                "val_roc_auc": v_m["roc_auc"],
+            }, step=ep)
 
         if v_loss < best_val_loss - 1e-5:
             best_val_loss = v_loss; bad = 0
@@ -478,7 +504,7 @@ def main() -> None:
                                 epochs=args.epochs, batch_size=args.batch_size,
                                 lr=args.lr, weight_decay=args.weight_decay,
                                 patience=args.patience, device=args.device,
-                                pos_weight=pos_weight)
+                                pos_weight=pos_weight, wandb_run=wb)
         val_m, val_prob = _eval_mlp(model, (Xva_t, beta_t, dxb_va_t, chrom_t, yva_t), args.device)
         test_m, test_prob = _eval_mlp(model, (Xte_t, beta_t, dxb_te_t, chrom_t, yte_t), args.device)
         torch.save(model.state_dict(), out_dir / "model.pt")
