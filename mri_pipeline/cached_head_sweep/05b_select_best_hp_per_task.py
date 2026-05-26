@@ -322,10 +322,36 @@ def main():
         out_dir.mkdir(parents=True, exist_ok=True)
         winners_path = out_dir / "winners.csv"
         topk_path    = out_dir / f"top_{args.top_k}_per_task.csv"
+        pretty_path  = out_dir / "winners_pretty.csv"
         winners_df.to_csv(winners_path, index=False, float_format="%.4f")
         top_k_df.to_csv(topk_path, index=False, float_format="%.4f")
+        # Pretty-formatted headline: one row per task, mean±std strings
+        # pre-formatted for direct LaTeX / Excel paste. Raw numerics kept
+        # in winners.csv so the user can restyle freely.
+        pretty = pd.DataFrame({
+            "model":           winners_df["model"],
+            "task":            winners_df["task"],
+            "winning_hp":      winners_df.apply(
+                lambda r: f"lr={r['lr']:.0e} d={r['drop_rate']:.2f} ls={r['label_smoothing']:.2f}",
+                axis=1),
+            "n_seeds":         winners_df["val_bacc_n"].astype("Int64"),
+            "val_bacc":        winners_df.apply(
+                lambda r: _fmt(r['val_bacc_mean'], r['val_bacc_std']),
+                axis=1),
+            "test_bacc":       winners_df.apply(
+                lambda r: _fmt(r['test_bacc_mean'], r['test_bacc_std']),
+                axis=1),
+            "test_auc":        winners_df.apply(
+                lambda r: _fmt(r['test_auc_mean'], r['test_auc_std']),
+                axis=1),
+            "test_f1":         winners_df.apply(
+                lambda r: _fmt(r['test_f1_mean'], r['test_f1_std']),
+                axis=1),
+        })
+        pretty.to_csv(pretty_path, index=False)
         print(f"  CSV : {winners_path}")
         print(f"  CSV : {topk_path}")
+        print(f"  CSV : {pretty_path}  (mean±std strings, paste-ready)")
 
     actions = emplace_winning_pts(winners_df, runs_df, out_dir,
                                   copy=args.copy, dry_run=args.dry_run)
