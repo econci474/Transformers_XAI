@@ -1,0 +1,33 @@
+# WandB sweep — Section E (Sweep B): XGB HP sweep, funcon vs none
+# 540 cells = 5 models × 2 modes × 3 n_estimators × 3 max_depths × 2 lrs × 3 seeds
+# Locked at v2 winners: seq=1001bp, head=xgb (RF excluded — XGB top > RF top in v2)
+# Per-round train_logloss / val_logloss logged to wandb via _fit_tree's evals_result_ → wandb_run.log()
+program: snp_pipeline/30v3_train_diff_attention_func.py
+method: grid
+metric:
+  name: val_balanced_accuracy
+  goal: maximize
+command:
+  - ${env}
+  - python
+  - ${program}
+  - --wandb-project=adni-snp-diff-attn-v3-funcon-xgb
+  - --head=xgb
+  - --seq-length=1001bp
+  - --aggregation=global_attn   # unused for tree path; argparse requires a valid choice
+  - --base=/content/drive/MyDrive/ADNI_SNP/diff_attn_v2_upload
+  - --splits-root=/nonexistent/force-fallback
+  - ${args}
+parameters:
+  model:
+    values: [bmfm_ref, bmfm_snp, ntv2, caduceus_ph, caduceus_ps]
+  func_integration_mode:
+    values: [none, attn_bias_per_modality]
+  xgb_n_estimators:
+    values: [200, 500, 1000]
+  xgb_max_depth:
+    values: [3, 4, 6]
+  xgb_lr:
+    values: [0.05, 0.1]
+  seed:
+    values: [0, 1, 2]

@@ -1,0 +1,33 @@
+# WandB sweep — Section D (Sweep A): MLP2 HP sweep, funcon vs none
+# 540 cells = 5 models × 3 modes × 2 widths × 2 dropouts × 3 lrs × 3 seeds
+# Locked at v2 winners: seq=101bp, agg=chrom_hier, head=mlp2
+# Per-epoch train/val curves logged to wandb via _train_mlp's wandb_run.log()
+program: snp_pipeline/30v3_train_diff_attention_func.py
+method: grid
+metric:
+  name: val_balanced_accuracy
+  goal: maximize
+command:
+  - ${env}
+  - python
+  - ${program}
+  - --wandb-project=adni-snp-diff-attn-v3-funcon-mlp2
+  - --head=mlp2
+  - --aggregation=chrom_hier
+  - --seq-length=101bp
+  - --base=/content/drive/MyDrive/ADNI_SNP/diff_attn_v2_upload
+  - --splits-root=/nonexistent/force-fallback
+  - ${args}
+parameters:
+  model:
+    values: [bmfm_ref, bmfm_snp, ntv2, caduceus_ph, caduceus_ps]
+  func_integration_mode:
+    values: [none, attn_bias_single, attn_bias_per_modality]
+  mlp_width:
+    values: [256, 512]
+  mlp_dropout:
+    values: [0.1, 0.3]
+  lr:
+    values: [0.0001, 0.0003, 0.001]
+  seed:
+    values: [0, 1, 2]

@@ -236,7 +236,8 @@ class DiffAttnV3(nn.Module):
     via the new extra_bias kwarg."""
 
     def __init__(self, in_dim: int, n_chroms: int, aggregation: str,
-                 head: str, mode: str, attn_hidden: int = 128):
+                 head: str, mode: str, attn_hidden: int = 128,
+                 mlp_width: int = 256, mlp_dropout: float = 0.3):
         super().__init__()
         self.mode = mode
         self.aggregation = aggregation
@@ -246,10 +247,15 @@ class DiffAttnV3(nn.Module):
             self.pool = fl.ChromHierPool(in_dim, n_chroms=n_chroms, use_delta=True,
                                           attn_hidden=attn_hidden)
         self.norm = nn.LayerNorm(in_dim)
+        # MLP-head width/dropout now configurable for the HP sweep.
+        # mlp2: single hidden layer (width = mlp_width)
+        # mlp3: two hidden layers (h1 = mlp_width, h2 = mlp_width // 2 to keep
+        #       the tapered shape from the original verbatim head)
         if head == "mlp2":
-            self.head = fl.MLPHead(in_dim)
+            self.head = fl.MLPHead(in_dim, hidden=mlp_width, dropout=mlp_dropout)
         elif head == "mlp3":
-            self.head = fl.MLP3Head(in_dim)
+            self.head = fl.MLP3Head(in_dim, h1=mlp_width, h2=max(mlp_width // 2, 32),
+                                     dropout=mlp_dropout)
         else:
             raise ValueError(f"Unsupported head for end-to-end: {head}")
         # Learnable ε's
@@ -438,7 +444,9 @@ def _eval_mlp(model, data, device, modality_abs_t, func_imp_abs_t) -> tuple[dict
     return _metrics(y, prob, pred, loss_val=loss), prob
 
 
-def _fit_tree(head: str, train_emb, train_y, val_emb, val_y, seed: int) -> dict:
+def _fit_tree(head: str, train_emb, train_y, val_emb, val_y, seed: int,
+                xgb_n_estimators: int = 500, xgb_max_depth: int = 4,
+                xgb_lr: float = 0.05, wandb_run=None) -> dict:
     pos = int((train_y == 1).sum()); neg = int((train_y == 0).sum())
     pos_w = neg / max(1, pos)
     if head == "rf":
@@ -448,10 +456,23 @@ def _fit_tree(head: str, train_emb, train_y, val_emb, val_y, seed: int) -> dict:
         clf.fit(train_emb, train_y)
     elif head == "xgb":
         from xgboost import XGBClassifier
-        clf = XGBClassifier(n_estimators=500, max_depth=4, learning_rate=0.05,
+        clf = XGBClassifier(n_estimators=xgb_n_estimators, max_depth=xgb_max_depth,
+                             learning_rate=xgb_lr,
                              tree_method="hist", scale_pos_weight=pos_w,
                              eval_metric="logloss", random_state=seed)
-        clf.fit(train_emb, train_y, eval_set=[(val_emb, val_y)], verbose=False)
+        # Pass BOTH train and val as eval sets → train_logloss + val_logloss curves
+        clf.fit(train_emb, train_y,
+                eval_set=[(train_emb, train_y), (val_emb, val_y)], verbose=False)
+        # Per-round logging to wandb → train/val curves visible in Charts tab
+        if wandb_run is not None:
+            evr = clf.evals_result_  # {'validation_0': {'logloss': [...]}, 'validation_1': {...}}
+            train_curve = evr.get("validation_0", {}).get("logloss", [])
+            val_curve = evr.get("validation_1", {}).get("logloss", [])
+            for i in range(max(len(train_curve), len(val_curve))):
+                payload = {"xgb_round": i}
+                if i < len(train_curve): payload["train_logloss"] = float(train_curve[i])
+                if i < len(val_curve):   payload["val_logloss"] = float(val_curve[i])
+                wandb_run.log(payload, step=i)
     else:
         raise ValueError(head)
     prob = clf.predict_proba(val_emb)[:, 1]
@@ -487,6 +508,18 @@ def main() -> None:
     ap.add_argument("--weight-decay", "--weight_decay", type=float, default=1e-4,
                     dest="weight_decay")
     ap.add_argument("--patience", type=int, default=15)
+    # MLP head HPs (Sweep A)
+    ap.add_argument("--mlp-width", "--mlp_width", type=int, default=256,
+                    dest="mlp_width", help="Hidden width of MLP head (mlp2: hidden; mlp3: h1).")
+    ap.add_argument("--mlp-dropout", "--mlp_dropout", type=float, default=0.3,
+                    dest="mlp_dropout", help="Dropout in MLP head.")
+    # XGB head HPs (Sweep B)
+    ap.add_argument("--xgb-n-estimators", "--xgb_n_estimators", type=int, default=500,
+                    dest="xgb_n_estimators", help="XGB n_estimators.")
+    ap.add_argument("--xgb-max-depth", "--xgb_max_depth", type=int, default=4,
+                    dest="xgb_max_depth", help="XGB max_depth.")
+    ap.add_argument("--xgb-lr", "--xgb_lr", type=float, default=0.05,
+                    dest="xgb_lr", help="XGB learning_rate.")
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     ap.add_argument("--wandb-project", "--wandb_project", default=None,
                     dest="wandb_project")
@@ -645,7 +678,8 @@ def main() -> None:
         print(f"  pos_weight (neg/pos): {pos_weight:.3f}")
 
         model = DiffAttnV3(in_dim=F, n_chroms=n_chroms,
-                            aggregation=args.aggregation, head=args.head, mode=mode)
+                            aggregation=args.aggregation, head=args.head, mode=mode,
+                            mlp_width=args.mlp_width, mlp_dropout=args.mlp_dropout)
         fit_info = _train_mlp(model,
                                 (Xtr_t, beta_t, dxb_tr_t, chrom_t, ytr_t),
                                 (Xva_t, beta_t, dxb_va_t, chrom_t, yva_t),
@@ -670,7 +704,11 @@ def main() -> None:
         emb_te = _fixed_aggregator_v3(Xte, beta_te, splits["test"]["dosage"],
                                         extra_bias_tree_np)
         print(f"  tree emb dims: train {emb_tr.shape}, val {emb_va.shape}")
-        result = _fit_tree(args.head, emb_tr, ytr, emb_va, yva, args.seed)
+        result = _fit_tree(args.head, emb_tr, ytr, emb_va, yva, args.seed,
+                              xgb_n_estimators=args.xgb_n_estimators,
+                              xgb_max_depth=args.xgb_max_depth,
+                              xgb_lr=args.xgb_lr,
+                              wandb_run=wb)
         val_m = result["val_metrics"]
         clf = result["classifier"]
         test_prob = clf.predict_proba(emb_te)[:, 1]
