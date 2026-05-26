@@ -189,11 +189,14 @@ class DiffAttnV2(nn.Module):
             raise ValueError(f"Unsupported head for end-to-end: {head}")
 
     def forward(self, x, beta, dosage_x_beta, chrom_idx=None):
-        # x: (B, S, F); beta: (S,); dosage_x_beta: (B, S)
-        if self.aggregation == "global_attn":
-            emb, _ = self.pool(x, beta, dosage_x_beta)
-        else:
-            emb, _, _ = self.pool(x, beta, dosage_x_beta, chrom_idx)
+        # x: (B, S, F); beta: (S,); dosage_x_beta: (B, S); chrom_idx: (S,)
+        B, S, _ = x.shape
+        mask = torch.ones(B, S, dtype=torch.bool, device=x.device)
+        abs_beta = beta.abs().unsqueeze(0).expand(B, S)
+        abs_dosbeta = dosage_x_beta.abs()
+        if chrom_idx is None:
+            chrom_idx = torch.zeros(S, dtype=torch.long, device=x.device)
+        emb, _ = self.pool(x, mask, chrom_idx, abs_beta, abs_dosbeta)
         return self.head(self.norm(emb)).squeeze(-1)
 
 
