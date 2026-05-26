@@ -1,0 +1,26 @@
+# WandB sweep — diff-attention v2, rf head (RandomForest, fixed γ=δ=1 aggregator)
+# Run: wandb sweep snp_pipeline/30a_sweeps/rf.yaml
+#      wandb agent <returned-sweep-id> --count 120
+program: snp_pipeline/30_train_diff_attention_v2.py
+method: grid
+metric:
+  name: val_balanced_accuracy
+  goal: maximize
+command:
+  - ${env}
+  - python
+  - ${program}
+  - --wandb-project=adni-snp-diff-attn-v2-rf
+  - --head=rf
+  - ${args}
+parameters:
+  seq_length:
+    values: ["1001bp", "101bp"]
+  model:
+    values: [bmfm_ref, bmfm_snp, ntv2, caduceus_ph, caduceus_ps]
+  functional_concat:
+    values: [off, on]
+  aggregation:
+    values: [global_attn, chrom_hier]
+  seed:
+    values: [0, 1, 2]
