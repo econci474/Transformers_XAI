@@ -537,6 +537,10 @@ def main() -> None:
                     action="store_true", dest="exclude_cn_to_ad",
                     help="Drop CN_to_AD subgroup from POS class "
                           "(seed-1 val has 0 CN_to_AD subjects — noisy comparison).")
+    ap.add_argument("--save-predictions", "--save_predictions",
+                    action="store_true", dest="save_predictions",
+                    help="Write per-patient val + test predictions to "
+                          "<out_dir>/predictions.tsv (cols: Patient_ID, split, y, prob).")
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     ap.add_argument("--wandb-project", "--wandb_project", default=None,
                     dest="wandb_project")
@@ -719,9 +723,9 @@ def main() -> None:
                                 modality_abs_t=modality_abs_t,
                                 func_imp_abs_t=func_imp_abs_t,
                                 wandb_run=wb)
-        val_m, _ = _eval_mlp(model, (Xva_t, beta_t, dxb_va_t, chrom_t, yva_t),
+        val_m, val_prob = _eval_mlp(model, (Xva_t, beta_t, dxb_va_t, chrom_t, yva_t),
                               args.device, modality_abs_t, func_imp_abs_t)
-        test_m, _ = _eval_mlp(model, (Xte_t, beta_t, dxb_te_t, chrom_t, yte_t),
+        test_m, test_prob = _eval_mlp(model, (Xte_t, beta_t, dxb_te_t, chrom_t, yte_t),
                               args.device, modality_abs_t, func_imp_abs_t)
         torch.save(model.state_dict(), out_dir / "model.pt")
     else:
@@ -739,6 +743,7 @@ def main() -> None:
                               xgb_lr=args.xgb_lr,
                               wandb_run=wb, out_dir=out_dir)
         val_m = result["val_metrics"]
+        val_prob = result.get("val_prob")
         clf = result["classifier"]
         test_prob = clf.predict_proba(emb_te)[:, 1]
         test_pred = (test_prob > 0.5).astype(int)
@@ -750,6 +755,30 @@ def main() -> None:
 
     metrics = {"val": val_m, "test": test_m, "config": vars(args)}
     (out_dir / "metrics.json").write_text(json.dumps(metrics, default=str, indent=2))
+
+    # Per-patient predictions for downstream quantile / Lee R² plots.
+    if args.save_predictions and val_prob is not None and test_prob is not None:
+        pred_rows = []
+        for ptid, y, p in zip(splits["val"]["ptid"], yva, np.asarray(val_prob).ravel()):
+            pred_rows.append({"Patient_ID": str(ptid), "split": "val",
+                                "y": int(y), "prob": float(p),
+                                "seed": args.seed, "model": args.model,
+                                "func_integration_mode": args.func_integration_mode,
+                                "head": args.head, "seq_length": args.seq_length,
+                                "aggregation": args.aggregation,
+                                "mlp_width": args.mlp_width,
+                                "mlp_dropout": args.mlp_dropout, "lr": args.lr})
+        for ptid, y, p in zip(splits["test"]["ptid"], yte, np.asarray(test_prob).ravel()):
+            pred_rows.append({"Patient_ID": str(ptid), "split": "test",
+                                "y": int(y), "prob": float(p),
+                                "seed": args.seed, "model": args.model,
+                                "func_integration_mode": args.func_integration_mode,
+                                "head": args.head, "seq_length": args.seq_length,
+                                "aggregation": args.aggregation,
+                                "mlp_width": args.mlp_width,
+                                "mlp_dropout": args.mlp_dropout, "lr": args.lr})
+        pd.DataFrame(pred_rows).to_csv(out_dir / "predictions.tsv",
+                                          sep="\t", index=False)
 
     log_payload = {f"val_{k}": v for k, v in val_m.items()}
     log_payload.update({f"test_{k}": v for k, v in test_m.items()})

@@ -42,7 +42,7 @@ from sklearn.pipeline import Pipeline
 warnings.filterwarnings("ignore")
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-from _prs_strict_qc_lib import (ALL_SOURCES, per_source_prs_table,
+from _prs_strict_qc_lib import (ALL_SOURCES, PRSCS_SOURCES, per_source_prs_table,
                                   load_subject_covariates,
                                   get_dedup_dosage_matrix,
                                   DEFAULT_LD_CONFIG)  # noqa: E402
@@ -228,7 +228,9 @@ def main():
     if args.beta_source == "raw":
         out_dir = OUT_BASE / args.ld_config / "classification"
     else:
-        out_dir = OUT_BASE.parent / f"strict_qc_prs_{args.beta_source}" / args.ld_config / "classification"
+        # PRS-CS uses the unpruned 115-SNP pool; --ld-config is methodologically
+        # irrelevant. Output goes to a single flat dir (no ld_<cfg>/ subdir).
+        out_dir = OUT_BASE.parent / f"strict_qc_prs_{args.beta_source}" / "classification"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"Building per-source PRS table for {args.ld_config}  beta_source={args.beta_source}...")
@@ -241,10 +243,15 @@ def main():
     # meta_prs uses the union of source PRS values; "n_snps" is total
     # unique rsIDs in the LD-pruned pool (proxy — same as dedup size).
     n_snp_per_src["meta_prs_EN_combined"] = dedup_dosage.shape[1]
-    all_with_dedup = (ALL_SOURCES + ["prs_all_dedup",
+    # PRS-CS leaderboard: 6 individual PRS-CS sources only (no dedup, no EN).
+    # Raw-β leaderboard: 16 individual sources + dedup + 2 EN ablation rows.
+    if args.beta_source == "prscs":
+        source_list = list(PRSCS_SOURCES)
+    else:
+        source_list = ALL_SOURCES + ["prs_all_dedup",
                                        "prs_all_dedup_EN_dosage",
-                                       "meta_prs_EN_combined"])
-    sources = [args.source] if args.source else [s for s in all_with_dedup
+                                       "meta_prs_EN_combined"]
+    sources = [args.source] if args.source else [s for s in source_list
                                                     if n_snp_per_src.get(s, 0) > 0]
     print(f"Sources with >=1 SNP after LD prune + orient: {len(sources)}")
 

@@ -47,30 +47,32 @@ def main():
         OUT_BASE = Path(str(OUT_BASE) + f"_{args.beta_source}")
     print(f"reading from {OUT_BASE}")
 
-    frames = []  # one DataFrame per (LD config × task) with key (source|covar_mode)
-    for cfg in LD_CONFIGS:
+    # PRS-CS uses the unpruned 115-SNP pool — no LD config loop. Single dir.
+    cfg_iter = [None] if args.beta_source == "prscs" else LD_CONFIGS
+
+    frames = []
+    for cfg in cfg_iter:
         for task, (mcol, scol), short in TASKS:
-            p = OUT_BASE / cfg / task / "leaderboard.csv"
+            p = (OUT_BASE / task / "leaderboard.csv") if cfg is None \
+                else (OUT_BASE / cfg / task / "leaderboard.csv")
             if not p.exists():
                 print(f"[skip] {p}"); continue
             df = pd.read_csv(p)
             df["key"] = df["source"] + "|" + df["covar_mode"]
             df["cell"] = [_fmt_pm(m, s) for m, s in zip(df[mcol], df[scol])]
+            tag = cfg if cfg is not None else "strictQC"  # single column tag for prscs
             sub = df[["key", "n_snps", "cell"]].rename(columns={
-                "n_snps": f"n_snps__{cfg}",
-                "cell":   f"{short}__{cfg}",
+                "n_snps": f"n_snps__{tag}",
+                "cell":   f"{short}__{tag}",
             })
-            # only need n_snps once per LD config; the first task we see fills it
             sub_idx = sub.set_index("key")
-            frames.append((cfg, short, sub_idx))
+            frames.append((tag, short, sub_idx))
 
     # Outer-join everything
     out = None
-    for cfg, short, sub in frames:
-        # n_snps column is identical across tasks within one LD config — keep one only
-        cols_to_use = [f"{short}__{cfg}"]
-        # Only the FIRST task per config adds n_snps__<cfg>
-        ns_col = f"n_snps__{cfg}"
+    for tag, short, sub in frames:
+        cols_to_use = [f"{short}__{tag}"]
+        ns_col = f"n_snps__{tag}"
         if ns_col in sub.columns and (out is None or ns_col not in out.columns):
             cols_to_use = [ns_col] + cols_to_use
         joined = sub[cols_to_use]
@@ -81,13 +83,14 @@ def main():
     out[["source", "covar_mode"]] = out["key"].str.split("|", expand=True)
     out = out.drop(columns=["key"])
 
-    # Column order: source, covar_mode, then per-LD-config block
+    # Column order: source, covar_mode, then per-tag block
+    tag_iter = ["strictQC"] if args.beta_source == "prscs" else LD_CONFIGS
     cols_ordered = ["source", "covar_mode"]
-    for cfg in LD_CONFIGS:
-        cols_ordered.append(f"n_snps__{cfg}")
-        cols_ordered.append(f"bacc__{cfg}")
-        cols_ordered.append(f"cindex__{cfg}")
-        cols_ordered.append(f"R2__{cfg}")
+    for tag in tag_iter:
+        cols_ordered.append(f"n_snps__{tag}")
+        cols_ordered.append(f"bacc__{tag}")
+        cols_ordered.append(f"cindex__{tag}")
+        cols_ordered.append(f"R2__{tag}")
     cols_ordered = [c for c in cols_ordered if c in out.columns]
     out = out[cols_ordered]
 
@@ -98,6 +101,7 @@ def main():
         "ld_500kb_r2_0.2":  ("500 kb",  "r²<0.2"),
         "ld_250kb_r2_0.1":  ("250 kb",  "r²<0.1"),
         "ld_50_5_r2_0.5":   ("50 SNP",  "r²<0.5"),
+        "strictQC":         ("strict-QC", "no LD prune"),
     }
     def _short(c: str) -> str:
         for cfg, (window, r2) in SHORT_CFG.items():
@@ -107,7 +111,7 @@ def main():
         return c
 
     # Sort by covar_mode (alpha) then by best classification BalAcc at default config
-    sort_col = "bacc__ld_1000kb_r2_0.8"
+    sort_col = "bacc__strictQC" if args.beta_source == "prscs" else "bacc__ld_1000kb_r2_0.8"
     if sort_col in out.columns:
         def _bacc_val(v):
             if not isinstance(v, str) or v == "": return -1.0
@@ -173,6 +177,7 @@ def main():
         for mode in out_idx["covar_mode"].unique():
             mask = out_idx["covar_mode"] == mode
             sub = out_idx.loc[mask, col]
+            if sub.empty: continue
             means = [_mean(v) for v in sub.tolist()]
             if all(m == float("-inf") for m in means): continue
             local_top = int(np.argmax(means))

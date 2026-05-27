@@ -51,6 +51,15 @@ ALL_SOURCES = [
     "Kosteridis_novel_AD", "Kosteridis_shared_AD_CV", "Kosteridis_MTAG_AD",
 ]
 
+# Sources that have a PRS-CS posterior β file under
+# D:/.../source_prs/prscs_posterior/<src>_prscs_posterior_beta.tsv.
+# Used to whitelist sources in the PRS-CS leaderboard — we deliberately
+# exclude prs_all_dedup (degenerate = Bellenguez when ordered by largest
+# GWAS N), prs_all_dedup_EN_dosage and meta_prs_EN_combined (those use
+# raw dosage / per-source PRS values, no PRS-CS shrinkage involved).
+PRSCS_SOURCES = ["Bellenguez", "Wightman", "Kunkle", "Schwanzentruber",
+                  "Kosteridis", "DeRojas"]
+
 # Per-source effective GWAS N (from paper abstracts; used to break ties when
 # multiple sources contribute the same rsID in the dedup combined PRS).
 # Largest-N source wins. See feedback_multi_method_prs_comparison / project_prs_source_extension.
@@ -88,6 +97,30 @@ def _complement(base: str) -> str:
 
 def _is_palindromic(a1: str, a2: str) -> bool:
     return {a1.upper(), a2.upper()} in ({"A","T"}, {"C","G"})
+
+
+STRICTQC_BIM = QC_DIR / "recover_all_pool_strictQC.bim"
+STRICTQC_DOSAGE = QC_DIR / "recover_all_pool_strictQC_dosage.tsv"
+
+
+def load_strictqc_dosage() -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """Return (bim_df, dosage_df) for the full unpruned 115-SNP strict-QC pool.
+
+    Used by PRS-CS downstream: PRS-CS already does LD-aware shrinkage internally
+    using the 1000G EUR HM3 LD reference, so further PLINK --indep-pairwise on
+    top is methodologically wrong (it discards PRS-CS-assigned posteriors and
+    applies a second LD measure on a different reference). The PRS-CS pipeline
+    should always operate on the full 115-SNP unpruned pool.
+    """
+    bim = pd.read_csv(STRICTQC_BIM, sep=r"\s+", header=None,
+                       names=["chrom","rsID","cM","bp","A1","A2"], dtype=str)
+    dos = pd.read_csv(STRICTQC_DOSAGE, sep="\t", dtype=str)
+    dos["PTID"] = dos["PTID"].astype(str)
+    dos = dos.set_index("PTID")
+    for c in dos.columns:
+        dos[c] = pd.to_numeric(dos[c], errors="coerce")
+    dos = dos.apply(lambda c: c.fillna(c.mean()))
+    return bim, dos
 
 
 def load_ldpruned_dosage(ld_config: str = DEFAULT_LD_CONFIG
@@ -256,7 +289,12 @@ def per_source_prs_table(sources: List[str] | None = None,
     """
     if sources is None:
         sources = ALL_SOURCES
-    bim, dos = load_ldpruned_dosage(ld_config)
+    if beta_source == "prscs":
+        # PRS-CS already does LD-aware shrinkage; using the LD-pruned dosage
+        # would double-apply LD logic. Always use the unpruned 115-SNP pool.
+        bim, dos = load_strictqc_dosage()
+    else:
+        bim, dos = load_ldpruned_dosage(ld_config)
     cols = {"PTID": list(dos.index)}
     df_snp = {}
     for s in sources:

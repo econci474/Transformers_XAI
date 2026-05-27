@@ -1084,16 +1084,43 @@ def main():
             # Balanced accuracy on val — the metric that selects the best
             # checkpoint. val_loss alone, under class imbalance + warmup,
             # selects an untrained epoch-1 model (see the debug plan).
-            va_bacc = float(balanced_accuracy_score(
-                va_labels, va_logits.argmax(axis=-1)))
+            # Also pull the full val metric set via compute_test_metrics
+            # so W&B has val_auc / val_f1 / val_prec / val_recall (binary:
+            # + val_sens / val_spec + val_TP/FP/TN/FN) per epoch, mirroring
+            # the test-side report.
+            _val_full, va_preds, _ = compute_test_metrics(
+                va_labels.astype(int), va_logits, task_cfg["task_type"])
+            va_bacc = float(_val_full["balanced_acc"])
+            val_extra = {
+                "val_auc":    float(_val_full.get(
+                    "auc_roc", _val_full.get("auc_roc_ovr", float("nan")))),
+                "val_auc_pr": float(_val_full.get(
+                    "auc_pr",  _val_full.get("auc_pr_macro", float("nan")))),
+                "val_f1":     float(_val_full.get(
+                    "f1",      _val_full.get("macro_f1", float("nan")))),
+                "val_prec":   float(_val_full.get(
+                    "precision", _val_full.get("precision_macro", float("nan")))),
+                "val_recall": float(_val_full.get(
+                    "recall",  _val_full.get("recall_macro", float("nan")))),
+            }
+            if task_cfg["task_type"] == "binary":
+                val_extra["val_sens"] = float(_val_full["sensitivity"])
+                val_extra["val_spec"] = float(_val_full["specificity"])
+                _cm = confusion_matrix(
+                    va_labels.astype(int), va_preds, labels=[0, 1])
+                val_extra["val_TN"] = int(_cm[0, 0])
+                val_extra["val_FP"] = int(_cm[0, 1])
+                val_extra["val_FN"] = int(_cm[1, 0])
+                val_extra["val_TP"] = int(_cm[1, 1])
 
             log_rows.append({"epoch": epoch + 1, "lr": cur_lr,
                              "train_loss": tr_loss, "train_acc": tr_acc,
                              "val_loss": va_loss, "val_acc": va_acc,
-                             "val_bacc": va_bacc})
+                             "val_bacc": va_bacc, **val_extra})
             print(f"  [epoch {epoch+1:>3}/{args.epochs}] "
                   f"lr={cur_lr:.2e}  train_loss={tr_loss:.4f}  train_acc={tr_acc:.4f}  "
-                  f"val_loss={va_loss:.4f}  val_acc={va_acc:.4f}  val_bacc={va_bacc:.4f}")
+                  f"val_loss={va_loss:.4f}  val_acc={va_acc:.4f}  val_bacc={va_bacc:.4f}  "
+                  f"val_auc={val_extra['val_auc']:.3f}  val_f1={val_extra['val_f1']:.3f}")
 
             # Selection: maximise val balanced accuracy, tie-break on lower
             # val_loss (ties at 0.5 are common when a model collapses).
@@ -1120,7 +1147,8 @@ def main():
                            "train_loss": tr_loss, "train_acc": tr_acc,
                            "val_loss": va_loss, "val_acc": va_acc,
                            "val_bacc": va_bacc,
-                           "best_val_balanced_acc": best_metric})
+                           "best_val_balanced_acc": best_metric,
+                           **val_extra})
 
             if epochs_since_improve >= args.patience:
                 print(f"  Early stopping at epoch {epoch+1} "

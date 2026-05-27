@@ -28,7 +28,7 @@ warnings.filterwarnings("ignore")
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from sklearn.linear_model import ElasticNet
-from _prs_strict_qc_lib import (ALL_SOURCES, per_source_prs_table,
+from _prs_strict_qc_lib import (ALL_SOURCES, PRSCS_SOURCES, per_source_prs_table,
                                   load_subject_covariates,
                                   get_dedup_dosage_matrix,
                                   DEFAULT_LD_CONFIG)  # noqa: E402
@@ -175,7 +175,8 @@ def main():
     if args.beta_source == "raw":
         out_dir = OUT_BASE / args.ld_config / "aao_regression"
     else:
-        out_dir = OUT_BASE.parent / f"strict_qc_prs_{args.beta_source}" / args.ld_config / "aao_regression"
+        # PRS-CS already does LD-aware shrinkage; use unpruned 115-SNP pool only.
+        out_dir = OUT_BASE.parent / f"strict_qc_prs_{args.beta_source}" / "aao_regression"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"Building per-source PRS table for {args.ld_config}  beta_source={args.beta_source}...")
@@ -186,10 +187,13 @@ def main():
     n_snp_per_src = {s: len(st) for s, st in snps_per_src.items()}
     n_snp_per_src["prs_all_dedup_EN_dosage"] = dedup_dosage.shape[1]
     n_snp_per_src["meta_prs_EN_combined"] = dedup_dosage.shape[1]
-    all_with_dedup = (ALL_SOURCES + ["prs_all_dedup",
+    if args.beta_source == "prscs":
+        source_list = list(PRSCS_SOURCES)
+    else:
+        source_list = ALL_SOURCES + ["prs_all_dedup",
                                        "prs_all_dedup_EN_dosage",
-                                       "meta_prs_EN_combined"])
-    sources = [args.source] if args.source else [s for s in all_with_dedup
+                                       "meta_prs_EN_combined"]
+    sources = [args.source] if args.source else [s for s in source_list
                                                     if n_snp_per_src.get(s, 0) > 0]
     print(f"Sources with >=1 SNP after LD prune + orient: {len(sources)}")
 
