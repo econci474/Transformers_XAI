@@ -14,7 +14,9 @@
 # =============================================================================
 # 04h_finetune_ViT_hi_lr_submit_csd3.sh
 # =============================================================================
-# COMPARISON sweep for the existing W&B project `vit_debugging`. Same trainer
+# COMPARISON sweep -- isolated in its own W&B project `vit_mae_hi_lr` so the
+# new run set doesn't visually mix with the prior 24 runs in `vit_debugging`.
+# Same trainer
 # (04_supervised_finetuning_ViT.py), same architecture (ViT-B/16 mae75), with
 # a single-variable change:
 #
@@ -73,7 +75,7 @@ source "$(conda info --base)/etc/profile.d/conda.sh"
 conda activate mri
 
 export WANDB_MODE="${WANDB_MODE:-offline}"
-WANDB_PROJECT="${WANDB_PROJECT:-vit_debugging}"
+WANDB_PROJECT="${WANDB_PROJECT:-vit_mae_hi_lr}"
 
 # -- Hardcoded paths (post-exclusion, current canonical) ----------------------
 SCRIPT_DIR="/home/ec474/rds/hpc-work/Transformers_XAI/mri_pipeline"
