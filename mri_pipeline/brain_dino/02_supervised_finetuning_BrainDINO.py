@@ -64,7 +64,7 @@ import numpy as np
 import pandas as pd
 import torch.nn as nn
 import torch.nn.functional as F
-from sklearn.metrics import balanced_accuracy_score
+from sklearn.metrics import balanced_accuracy_score, confusion_matrix
 from sklearn.utils.class_weight import compute_class_weight
 from torch.utils.data import DataLoader, ConcatDataset
 
@@ -631,19 +631,49 @@ def main():
                       f"(tr_loss={tr_loss}, va_loss={va_loss}) -- stopping.")
                 break
 
-            va_bacc = float(balanced_accuracy_score(
-                va_labels.astype(int), va_logits.argmax(axis=-1)))
+            # Full val-metric set (matches compute_test_metrics so W&B has
+            # the same numbers we record for test): bacc, accuracy, AUC,
+            # F1, precision, recall + binary-only sensitivity/specificity
+            # and confusion-matrix entries (TP/FP/TN/FN). va_acc/val_loss
+            # came from run_one_epoch; everything else is derived here.
+            _val_full, va_preds, _ = compute_test_metrics(
+                va_labels.astype(int), va_logits, task_cfg["task_type"])
+            va_bacc = float(_val_full["balanced_acc"])
+            val_extra = {
+                "val_auc":    float(_val_full.get(
+                    "auc_roc", _val_full.get("auc_roc_ovr", float("nan")))),
+                "val_auc_pr": float(_val_full.get(
+                    "auc_pr",  _val_full.get("auc_pr_macro", float("nan")))),
+                "val_f1":     float(_val_full.get(
+                    "f1",      _val_full.get("macro_f1", float("nan")))),
+                "val_prec":   float(_val_full.get(
+                    "precision", _val_full.get("precision_macro", float("nan")))),
+                "val_recall": float(_val_full.get(
+                    "recall",  _val_full.get("recall_macro", float("nan")))),
+            }
+            if task_cfg["task_type"] == "binary":
+                val_extra["val_sens"] = float(_val_full["sensitivity"])
+                val_extra["val_spec"] = float(_val_full["specificity"])
+                _cm = confusion_matrix(
+                    va_labels.astype(int), va_preds, labels=[0, 1])
+                val_extra["val_TN"] = int(_cm[0, 0])
+                val_extra["val_FP"] = int(_cm[0, 1])
+                val_extra["val_FN"] = int(_cm[1, 0])
+                val_extra["val_TP"] = int(_cm[1, 1])
+
             # Paper's ReduceLROnPlateau: factor=0.5, patience=10, on val_bacc.
             scheduler.step(va_bacc)
 
             log_rows.append({"epoch": epoch + 1, "lr": cur_lr,
                              "train_loss": tr_loss, "train_acc": tr_acc,
                              "val_loss": va_loss, "val_acc": va_acc,
-                             "val_bacc": va_bacc})
+                             "val_bacc": va_bacc, **val_extra})
             print(f"  [epoch {epoch+1:>3}/{args.epochs}] "
                   f"lr={cur_lr:.2e}  tr_loss={tr_loss:.4f}  "
                   f"va_loss={va_loss:.4f}  va_acc={va_acc:.4f}  "
-                  f"va_bacc={va_bacc:.4f}")
+                  f"va_bacc={va_bacc:.4f}  "
+                  f"va_auc={val_extra['val_auc']:.3f}  "
+                  f"va_f1={val_extra['val_f1']:.3f}")
 
             improved = (va_bacc > best_metric + 1e-6) or (
                 abs(va_bacc - best_metric) <= 1e-6
@@ -666,7 +696,8 @@ def main():
                 wandb.log({"epoch": epoch + 1, "lr": cur_lr,
                            "train_loss": tr_loss, "val_loss": va_loss,
                            "val_acc": va_acc, "val_bacc": va_bacc,
-                           "best_val_balanced_acc": best_metric})
+                           "best_val_balanced_acc": best_metric,
+                           **val_extra})
 
             if epochs_since_improve >= args.patience:
                 print(f"  Early stopping at epoch {epoch+1}")

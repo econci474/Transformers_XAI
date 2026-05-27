@@ -62,6 +62,7 @@ MODEL_TREES = [
     ("BrainDINO",        "braindino_outputs/aug_*/BrainDINO_vitb16_*/*/seed_*/metrics.json"),
     ("BrainDINO",        "braindino_outputs/lora/aug_*/BrainDINO_vitb16_*/*/seed_*/metrics.json"),
     ("BrainDINO",        "braindino_outputs/ft/aug_*/BrainDINO_vitb16_*/*/seed_*/metrics.json"),
+    ("BrainDINO",        "braindino_outputs/frozen/aug_*/BrainDINO_vitb16_*/*/seed_*/metrics.json"),
     # Cached-embedding head sweeps (one row per pretrained encoder, all
     # under aug_none since the encoder forward is deterministic). HP
     # leaves: <task>/seed_<n>/lr<>_d<>_ls<>/metrics.json.
