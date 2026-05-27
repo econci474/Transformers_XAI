@@ -1,8 +1,8 @@
 #!/bin/bash
 #SBATCH -A LIO-CHARM-SL2-GPU
 #SBATCH --job-name=bdino_lora
-#SBATCH --output=/home/ec474/rds/hpc-work/ADNI_MRI/braindino_outputs/slurm_logs/bdino_lora_%A_%a.log
-#SBATCH --error=/home/ec474/rds/hpc-work/ADNI_MRI/braindino_outputs/slurm_logs/bdino_lora_%A_%a.err
+#SBATCH --output=/home/ec474/rds/hpc-work/ADNI_MRI/braindino_outputs/lora/slurm_logs/bdino_lora_%A_%a.log
+#SBATCH --error=/home/ec474/rds/hpc-work/ADNI_MRI/braindino_outputs/lora/slurm_logs/bdino_lora_%A_%a.err
 #SBATCH -p ampere
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -29,10 +29,12 @@
 # params, 8 epochs vs. 50 for full_ft). Submit this FIRST to validate the
 # harness end-to-end before committing GPU-hours to the full_ft sweep.
 #
-# Output layout: braindino_outputs/aug_${AUGMENT}/BrainDINO_vitb16_lora/<task>/seed_<n>/
+# Output layout: braindino_outputs/lora/aug_${AUGMENT}/BrainDINO_vitb16_lora/<task>/seed_<n>/
+# (nested under lora/ so this sweep is kept separate from the existing
+#  frozen + head sweep at braindino_outputs/aug_none/...)
 #
 # Pre-flight (run once):
-#   mkdir -p /home/ec474/rds/hpc-work/ADNI_MRI/braindino_outputs/slurm_logs
+#   mkdir -p /home/ec474/rds/hpc-work/ADNI_MRI/braindino_outputs/lora/slurm_logs
 #   # Ensure peft is installed in the mri env:
 #   conda activate mri && pip install peft>=0.7
 #   # Ensure the checkpoint is at the canonical HPC path:
@@ -55,6 +57,9 @@ BRAINDINO_INPUTS_DIR="/home/ec474/rds/hpc-work/ADNI_SMRIPREP/derivatives/braindi
 MATCHED_LABELS_CSV="/home/ec474/rds/hpc-work/ADNI_MRI/master_mri_clinical_matched_viscode2_extended_post_exclusion.csv"
 DATA_DIR="/home/ec474/rds/hpc-work/ADNI_CL/no_cdr_stratified_post_exclusion/tabular/baseline"
 OUT_DIR="/home/ec474/rds/hpc-work/ADNI_MRI/braindino_outputs"
+# Strategy-scoped subroot: keeps this LoRA sweep's outputs + slurm logs
+# separate from the existing frozen + head sweep that lives under OUT_DIR/aug_*.
+STRATEGY_OUT_DIR="${OUT_DIR}/lora"
 
 PY_SESSION_FLAGS="--long all"
 STRATEGY="lora"
@@ -82,12 +87,12 @@ AUGMENT="${AUGMENTS[$AUG_IDX]}"
 
 # Per-aug output root so the trainer's path schema and the aggregator glob
 # (braindino_outputs/aug_*/BrainDINO_vitb16_*/...) line up.
-RUN_OUT_DIR="${OUT_DIR}/aug_${AUGMENT}/BrainDINO_vitb16_${STRATEGY}/${TASK}/seed_${SEED}"
+RUN_OUT_DIR="${STRATEGY_OUT_DIR}/aug_${AUGMENT}/BrainDINO_vitb16_${STRATEGY}/${TASK}/seed_${SEED}"
 METRICS="${RUN_OUT_DIR}/metrics.json"
 CKPT="${RUN_OUT_DIR}/last_checkpoint.pt"
 
 mkdir -p "${RUN_OUT_DIR}"
-mkdir -p "${OUT_DIR}/slurm_logs"
+mkdir -p "${STRATEGY_OUT_DIR}/slurm_logs"
 export WANDB_DIR="${RUN_OUT_DIR}"
 
 echo "============================================================"
@@ -137,7 +142,7 @@ python "${SCRIPT_DIR}/02_supervised_finetuning_BrainDINO.py" \
     --matched_labels_csv    "${MATCHED_LABELS_CSV}" \
     --data_dir              "${DATA_DIR}" \
     --braindino_inputs_dir  "${BRAINDINO_INPUTS_DIR}" \
-    --out_dir               "${OUT_DIR}" \
+    --out_dir               "${STRATEGY_OUT_DIR}" \
     --num_workers           "${SLURM_CPUS_PER_TASK}"
 
 EXIT_CODE=$?
