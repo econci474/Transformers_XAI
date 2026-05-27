@@ -446,7 +446,8 @@ def _eval_mlp(model, data, device, modality_abs_t, func_imp_abs_t) -> tuple[dict
 
 def _fit_tree(head: str, train_emb, train_y, val_emb, val_y, seed: int,
                 xgb_n_estimators: int = 500, xgb_max_depth: int = 4,
-                xgb_lr: float = 0.05, wandb_run=None) -> dict:
+                xgb_lr: float = 0.05, wandb_run=None,
+                out_dir: Path | None = None) -> dict:
     pos = int((train_y == 1).sum()); neg = int((train_y == 0).sum())
     pos_w = neg / max(1, pos)
     if head == "rf":
@@ -473,6 +474,9 @@ def _fit_tree(head: str, train_emb, train_y, val_emb, val_y, seed: int,
                 if i < len(train_curve): payload["train_logloss"] = float(train_curve[i])
                 if i < len(val_curve):   payload["val_logloss"] = float(val_curve[i])
                 wandb_run.log(payload, step=i)
+        # Persist the XGB model for later interrogation / drop-splice ablation
+        if out_dir is not None:
+            clf.save_model(str(out_dir / "xgb_model.json"))
     else:
         raise ValueError(head)
     prob = clf.predict_proba(val_emb)[:, 1]
@@ -520,6 +524,10 @@ def main() -> None:
                     dest="xgb_max_depth", help="XGB max_depth.")
     ap.add_argument("--xgb-lr", "--xgb_lr", type=float, default=0.05,
                     dest="xgb_lr", help="XGB learning_rate.")
+    ap.add_argument("--drop-splice", "--drop_splice", action="store_true",
+                    dest="drop_splice",
+                    help="Zero the splice modality (46/128 SNPs missing). "
+                          "Affects bias path + value-mult path.")
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     ap.add_argument("--wandb-project", "--wandb_project", default=None,
                     dest="wandb_project")
@@ -533,10 +541,12 @@ def main() -> None:
     wb = None
     if args.wandb_project:
         import wandb
+        _name = (f"{args.seq_length}_{args.model}_{args.func_integration_mode}"
+                  f"_{args.aggregation}_{args.head}_s{args.seed}")
+        if args.drop_splice:
+            _name += "_no_splice"
         wb = wandb.init(project=args.wandb_project, entity=args.wandb_entity,
-                         config=vars(args),
-                         name=(f"{args.seq_length}_{args.model}_{args.func_integration_mode}"
-                                f"_{args.aggregation}_{args.head}_s{args.seed}"))
+                         config=vars(args), name=_name)
 
     # ── Load core tensors ────────────────────────────────────────────────
     print(f"[load] diff: {args.seq_length} × {args.model}")
@@ -623,6 +633,12 @@ def main() -> None:
             zv, st = _zscore_train(v, train_snp_mask)
             summaries_z[k] = zv.reshape(-1)
             zscore_stats[k] = st
+        if args.drop_splice:
+            for k in ("splice_abs", "splice_signed"):
+                if k in summaries_z:
+                    summaries_z[k] = np.zeros_like(summaries_z[k])
+            print("  [drop-splice] zeroed splice_abs + splice_signed "
+                  "(modality contribution → 0)")
 
     # ── Build per-(p, i, F_full) value tensors ──────────────────────────
     def _build(sp):
@@ -708,7 +724,7 @@ def main() -> None:
                               xgb_n_estimators=args.xgb_n_estimators,
                               xgb_max_depth=args.xgb_max_depth,
                               xgb_lr=args.xgb_lr,
-                              wandb_run=wb)
+                              wandb_run=wb, out_dir=out_dir)
         val_m = result["val_metrics"]
         clf = result["classifier"]
         test_prob = clf.predict_proba(emb_te)[:, 1]
