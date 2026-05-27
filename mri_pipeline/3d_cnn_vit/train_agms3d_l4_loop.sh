@@ -13,12 +13,13 @@
 #
 # Pre-flight (once):
 #   conda env list | grep mri      # confirm the `mri` env is present
-#   ls $HOME/ADNI_data/ADNI_SMRIPREP/derivatives/cnn_inputs   # confirm rsync done
-#   ls $HOME/ADNI_data/ADNI_MRI/master_mri_clinical_matched_viscode2_extended_post_exclusion.csv
-#   ls $HOME/ADNI_data/ADNI_CL/no_cdr_stratified_post_exclusion/tabular/baseline
+#   ls $HOME/ADNI_SMRIPREP/cnn_inputs    # confirm rsync done
+#   ls $HOME/ADNI_MRI/master_mri_clinical_matched_viscode2_extended_post_exclusion.csv
+#   ls $HOME/ADNI_CL/no_cdr_stratified_post_exclusion/tabular/baseline
 #
 # Run (detached so SSH disconnect doesn't kill it):
-#   cd $HOME/ADNI_data/ADNI_MRI/agms3d_outputs
+#   mkdir -p $HOME/ADNI_MRI/agms3d_outputs
+#   cd $HOME/ADNI_MRI/agms3d_outputs
 #   nohup bash $HOME/Transformers_XAI/mri_pipeline/3d_cnn_vit/train_agms3d_l4_loop.sh \
 #       > l4_loop_$(date +%Y%m%d_%H%M%S).log 2>&1 &
 #   tail -f l4_loop_*.log    # watch progress
@@ -42,13 +43,15 @@ set -u
 source "$(conda info --base)/etc/profile.d/conda.sh"
 conda activate mri
 
-# -- L4 paths (edit these block if your layout differs) -----------------------
-SCRIPT_DIR="${HOME}/Transformers_XAI/mri_pipeline/3d_cnn_vit"
-DATA_ROOT="${HOME}/ADNI_data"
-CNN_INPUTS_DIR="${DATA_ROOT}/ADNI_SMRIPREP/derivatives/cnn_inputs"
-MATCHED_LABELS_CSV="${DATA_ROOT}/ADNI_MRI/master_mri_clinical_matched_viscode2_extended_post_exclusion.csv"
-SPLITS_DIR="${DATA_ROOT}/ADNI_CL/no_cdr_stratified_post_exclusion/tabular/baseline"
-OUT_DIR="${DATA_ROOT}/ADNI_MRI/agms3d_outputs"
+# -- L4 paths (shallow layout: data dirs live directly under $HOME) -----------
+# Override any of these via env var on the sbatch command line if your
+# layout differs, e.g.:
+#   CNN_INPUTS_DIR=/scratch/cnn_inputs bash train_agms3d_l4_loop.sh
+SCRIPT_DIR="${SCRIPT_DIR:-${HOME}/Transformers_XAI/mri_pipeline/3d_cnn_vit}"
+CNN_INPUTS_DIR="${CNN_INPUTS_DIR:-${HOME}/ADNI_SMRIPREP/cnn_inputs}"
+MATCHED_LABELS_CSV="${MATCHED_LABELS_CSV:-${HOME}/ADNI_MRI/master_mri_clinical_matched_viscode2_extended_post_exclusion.csv}"
+SPLITS_DIR="${SPLITS_DIR:-${HOME}/ADNI_CL/no_cdr_stratified_post_exclusion/tabular/baseline}"
+OUT_DIR="${OUT_DIR:-${HOME}/ADNI_MRI/agms3d_outputs}"
 
 # -- Hyperparams (locked to the CSD3 rescue config) ---------------------------
 BACKBONE="vanilla"
