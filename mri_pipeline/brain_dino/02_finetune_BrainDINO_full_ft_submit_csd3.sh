@@ -1,8 +1,8 @@
 #!/bin/bash
 #SBATCH -A LIO-CHARM-SL2-GPU
 #SBATCH --job-name=bdino_full_ft
-#SBATCH --output=/home/ec474/rds/hpc-work/ADNI_MRI/braindino_outputs/slurm_logs/bdino_full_ft_%A_%a.log
-#SBATCH --error=/home/ec474/rds/hpc-work/ADNI_MRI/braindino_outputs/slurm_logs/bdino_full_ft_%A_%a.err
+#SBATCH --output=/home/ec474/rds/hpc-work/ADNI_MRI/braindino_outputs/ft/slurm_logs/bdino_full_ft_%A_%a.log
+#SBATCH --error=/home/ec474/rds/hpc-work/ADNI_MRI/braindino_outputs/ft/slurm_logs/bdino_full_ft_%A_%a.err
 #SBATCH -p ampere
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -25,7 +25,13 @@
 # the most GPU-expensive of the three BrainDINO sweeps (50 epochs vs. 8 for
 # LoRA, 86 M vs. 0.5 M trainable params).
 #
-# Output layout: braindino_outputs/aug_${AUGMENT}/BrainDINO_vitb16_full_ft/<task>/seed_<n>/
+# Output layout: braindino_outputs/ft/aug_${AUGMENT}/BrainDINO_vitb16_full_ft/<task>/seed_<n>/
+# (nested under ft/ so this sweep is kept separate from the existing
+#  frozen + head sweep at braindino_outputs/aug_none/... and the
+#  LoRA sweep at braindino_outputs/lora/...)
+#
+# Pre-flight (run once):
+#   mkdir -p /home/ec474/rds/hpc-work/ADNI_MRI/braindino_outputs/ft/slurm_logs
 # =============================================================================
 
 module purge
@@ -40,6 +46,10 @@ BRAINDINO_INPUTS_DIR="/home/ec474/rds/hpc-work/ADNI_SMRIPREP/derivatives/braindi
 MATCHED_LABELS_CSV="/home/ec474/rds/hpc-work/ADNI_MRI/master_mri_clinical_matched_viscode2_extended_post_exclusion.csv"
 DATA_DIR="/home/ec474/rds/hpc-work/ADNI_CL/no_cdr_stratified_post_exclusion/tabular/baseline"
 OUT_DIR="/home/ec474/rds/hpc-work/ADNI_MRI/braindino_outputs"
+# Strategy-scoped subroot: keeps this full-finetune sweep's outputs + slurm
+# logs separate from the existing frozen + head sweep (OUT_DIR/aug_*) and
+# the LoRA sweep (OUT_DIR/lora/...).
+STRATEGY_OUT_DIR="${OUT_DIR}/ft"
 
 PY_SESSION_FLAGS="--long all"
 STRATEGY="full_ft"
@@ -64,12 +74,12 @@ TASK="${TASKS[$TASK_IDX]}"
 SEED="${SEEDS[$SEED_IDX]}"
 AUGMENT="${AUGMENTS[$AUG_IDX]}"
 
-RUN_OUT_DIR="${OUT_DIR}/aug_${AUGMENT}/BrainDINO_vitb16_${STRATEGY}/${TASK}/seed_${SEED}"
+RUN_OUT_DIR="${STRATEGY_OUT_DIR}/aug_${AUGMENT}/BrainDINO_vitb16_${STRATEGY}/${TASK}/seed_${SEED}"
 METRICS="${RUN_OUT_DIR}/metrics.json"
 CKPT="${RUN_OUT_DIR}/last_checkpoint.pt"
 
 mkdir -p "${RUN_OUT_DIR}"
-mkdir -p "${OUT_DIR}/slurm_logs"
+mkdir -p "${STRATEGY_OUT_DIR}/slurm_logs"
 export WANDB_DIR="${RUN_OUT_DIR}"
 
 echo "============================================================"
@@ -118,7 +128,7 @@ python "${SCRIPT_DIR}/02_supervised_finetuning_BrainDINO.py" \
     --matched_labels_csv    "${MATCHED_LABELS_CSV}" \
     --data_dir              "${DATA_DIR}" \
     --braindino_inputs_dir  "${BRAINDINO_INPUTS_DIR}" \
-    --out_dir               "${OUT_DIR}" \
+    --out_dir               "${STRATEGY_OUT_DIR}" \
     --num_workers           "${SLURM_CPUS_PER_TASK}"
 
 EXIT_CODE=$?
