@@ -57,6 +57,10 @@ OUT_DIR="${OUT_DIR:-${HOME}/ADNI_MRI/agms3d_outputs}"
 BACKBONE="vanilla"
 LR="1e-3"
 LABEL_SMOOTHING="0.1"
+# Batch size: 4 is the trainer default (~10-13 GB VRAM at AMP on L4 with
+# vanilla conv backbone). Drop to 2 if the L4 is shared and memory is
+# tight: `BATCH_SIZE=2 bash train_agms3d_l4_loop.sh`. batch=1 fits in <5 GB.
+BATCH_SIZE="${BATCH_SIZE:-4}"
 NUM_WORKERS="${NUM_WORKERS:-4}"
 WANDB_PROJECT="${WANDB_PROJECT:-agms3d_vanilla_rescue}"
 export WANDB_MODE="${WANDB_MODE:-offline}"
@@ -145,6 +149,7 @@ for TASK in "${TASKS[@]}"; do
             --backbone            "${BACKBONE}" \
             --lr                  "${LR}" \
             --label_smoothing     "${LABEL_SMOOTHING}" \
+            --batch_size          "${BATCH_SIZE}" \
             --cnn_inputs_dir      "${CNN_INPUTS_DIR}" \
             --matched_labels_csv  "${MATCHED_LABELS_CSV}" \
             --data_dir            "${SPLITS_DIR}" \
