@@ -54,7 +54,14 @@ MODEL_TREES = [
     # Post-rescue vanilla-backbone run (--lr 1e-3, --label_smoothing 0.1).
     ("AG-MS3D-vanilla",  "agms3d_outputs/AGMS3DCNN_vanilla/*/seed_*/metrics.json"),
     ("BrainMVP",         "brainmvp_debug/aug_*/BrainMVP_uniformer/*/seed_*/*/metrics.json"),
+    # BrainDINO supervised finetune sweeps. Three globs cover (a) the legacy
+    # un-nested layout (residual frozen+head runs predating the strategy-
+    # scoped refactor), (b) today's LoRA sweep under lora/, and (c) today's
+    # full_ft sweep under ft/. The trainer encodes strategy + augment in the
+    # path so read_run can still parse the variant from each match.
     ("BrainDINO",        "braindino_outputs/aug_*/BrainDINO_vitb16_*/*/seed_*/metrics.json"),
+    ("BrainDINO",        "braindino_outputs/lora/aug_*/BrainDINO_vitb16_*/*/seed_*/metrics.json"),
+    ("BrainDINO",        "braindino_outputs/ft/aug_*/BrainDINO_vitb16_*/*/seed_*/metrics.json"),
     # Cached-embedding head sweeps (one row per pretrained encoder, all
     # under aug_none since the encoder forward is deterministic). HP
     # leaves: <task>/seed_<n>/lr<>_d<>_ls<>/metrics.json.
