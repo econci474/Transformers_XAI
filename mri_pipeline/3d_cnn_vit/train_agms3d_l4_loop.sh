@@ -53,10 +53,13 @@ MATCHED_LABELS_CSV="${MATCHED_LABELS_CSV:-${HOME}/ADNI_MRI/master_mri_clinical_m
 SPLITS_DIR="${SPLITS_DIR:-${HOME}/ADNI_CL/no_cdr_stratified_post_exclusion/tabular/baseline}"
 OUT_DIR="${OUT_DIR:-${HOME}/ADNI_MRI/agms3d_outputs}"
 
-# -- Hyperparams (locked to the CSD3 rescue config) ---------------------------
-BACKBONE="vanilla"
-LR="1e-3"
-LABEL_SMOOTHING="0.1"
+# -- Hyperparams ---------------------------------------------------------------
+# Defaults match the CSD3 rescue config; all env-var overridable so you can
+# toggle diagnostics without editing the script:
+#   LR=3e-3 LABEL_SMOOTHING=0.0 bash train_agms3d_l4_loop.sh --single T1c_binary 0
+BACKBONE="${BACKBONE:-vanilla}"
+LR="${LR:-1e-3}"
+LABEL_SMOOTHING="${LABEL_SMOOTHING:-0.1}"
 # Batch size: 4 is the trainer default (~10-13 GB VRAM at AMP on L4 with
 # vanilla conv backbone). Drop to 2 if the L4 is shared and memory is
 # tight: `BATCH_SIZE=2 bash train_agms3d_l4_loop.sh`. batch=1 fits in <5 GB.
