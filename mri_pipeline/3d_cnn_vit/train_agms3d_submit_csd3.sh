@@ -16,12 +16,14 @@
 # =============================================================================
 # SLURM array job: trains the AG-MS3D-CNN classifier on the 5 diagnostic tasks.
 #
-# This is the RESCUE sweep -- the prior separable+lr=5e-4+ls=0.0 run collapsed
-# on 14/15 cells (only T1c/seed 2 escaped chance). This sweep bundles four
-# changes from that failed run:
+# This is the RESCUE sweep -- the prior vanilla+lr=1e-3+ls=0.1 L4 smoke
+# collapsed (val_bacc 0.5, train_loss flat at ln 2). This sweep bundles the
+# higher-LR + no-label-smoothing diagnostic the user approved, plus a batch
+# size bump from 4 -> 8 since A100-80GB has ample VRAM (vs the shared L4):
 #   --backbone vanilla       (nn.Conv3d instead of depthwise-separable)
-#   --lr 1e-3                (standard from-scratch ConvNet LR)
-#   --label_smoothing 0.1    (breaks the weighted-CE majority-class minimum)
+#   --lr 3e-3                (bigger steps to escape the majority-class minimum)
+#   --label_smoothing 0.0    (LS+weighted CE was flattening the loss landscape)
+#   --batch_size 8           (A100-80GB headroom; trainer default is 4 for L4)
 #   weighted CE kept on      (was already enabled in the prior run)
 # Outputs land under AGMS3DCNN_vanilla/ -- sibling to the existing
 # AGMS3DCNN_separable/ (formerly AGMS3DCNN/) tree, no overwriting.
@@ -37,7 +39,7 @@
 # single-channel volumes -- diminishing returns above 8). num_workers
 # scales from $SLURM_CPUS_PER_TASK so any future bump is one number.
 #
-# Runs offline wandb -> sync to project 'agms3d_baseline' after the sweep:
+# Runs offline wandb -> sync to project 'agms3d_vanilla_rescue' after the sweep:
 #   wandb sync <OUT_DIR>/AGMS3DCNN_vanilla/*/seed_*/wandb/offline-run-*
 #
 # SLURM .log/.err and per-run offline-wandb data land under the OUTPUT tree,
@@ -105,7 +107,7 @@ echo "  Task        : ${TASK}"
 echo "  Seed        : ${SEED}"
 echo "  CPUs/task   : $SLURM_CPUS_PER_TASK   (-> num_workers)"
 echo "  Output dir  : ${RUN_DIR}"
-echo "  wandb       : offline -> project agms3d_baseline"
+echo "  wandb       : offline -> project agms3d_vanilla_rescue"
 echo "  Started     : $(date)"
 echo "============================================================"
 
@@ -134,8 +136,9 @@ python "${SCRIPT_DIR}/train_agms3d.py" \
     --task                "${TASK}" \
     --seed                "${SEED}" \
     --backbone            vanilla \
-    --lr                  1e-3 \
-    --label_smoothing     0.1 \
+    --lr                  3e-3 \
+    --label_smoothing     0.0 \
+    --batch_size          8 \
     --cnn_inputs_dir      "${CNN_INPUTS_DIR}" \
     --matched_labels_csv  "${MATCHED_LABELS_CSV}" \
     --data_dir            "${DATA_DIR}" \
