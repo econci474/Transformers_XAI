@@ -1,0 +1,165 @@
+#!/bin/bash
+#SBATCH -A LIO-CHARM-SL2-GPU
+#SBATCH --job-name=vit_no_llrd
+#SBATCH --output=/home/ec474/rds/hpc-work/ADNI_MRI/vit_outputs_no_llrd/slurm_logs/vit_no_llrd_%A_%a.log
+#SBATCH --error=/home/ec474/rds/hpc-work/ADNI_MRI/vit_outputs_no_llrd/slurm_logs/vit_no_llrd_%A_%a.err
+#SBATCH -p ampere
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --gres=gpu:1
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=48G
+#SBATCH --time=12:00:00
+#SBATCH --array=0-29%4
+# =============================================================================
+# 04h_finetune_ViT_no_llrd_submit_csd3.sh
+# =============================================================================
+# COMPARISON sweep for the existing W&B project `vit_debugging`. Same trainer
+# (04_supervised_finetuning_ViT.py), same architecture (ViT-B/16 mae75), but
+# with one knob changed:
+#
+#   --llrd_gamma 1.0    (no layer-wise LR decay, vs the prior 0.7)
+#
+# Motivation
+# ----------
+# The 24 prior runs in vit_debugging used llrd_gamma=0.7 (encoder layers
+# get smaller LRs the further they sit from the head). Across all tasks
+# those runs underperformed the cached-head sweep at lr=1e-3 -- e.g. on T1c
+# the cached-head best was 0.844 val_bacc vs vit_debugging at 0.782. With
+# llrd_gamma=0.7 the deep encoder layers received lr ~ 1e-4 * 0.7^12 = 1.4e-5
+# which may be too small to adapt the pretrained features. This sweep
+# isolates LLRD: with llrd_gamma=1.0 every layer trains at the base lr,
+# so the head and encoder both adapt equally fast.
+#
+# 5 tasks x 3 seeds x 2 strategies = 30 combinations (array 0-29).
+# Array decoder: STRAT_IDX -> SEED_IDX -> TASK_IDX (low-to-high stride).
+#
+#   Task    : T1_binary | T1b_binary | T1c_binary | T1d_binary | T2_multiclass
+#   Seed    : 0 | 1 | 2
+#   Strat   : full_ft | frozen
+#
+# Strategy notes:
+#   - full_ft: llrd_gamma=1.0 means the whole encoder + head train at the
+#     trainer's default lr (1e-4). This is the actual variable test vs the
+#     prior runs that used 0.7.
+#   - frozen: the encoder is frozen so LLRD is a no-op. We still re-run
+#     these for completeness and to fill in T1d, which the prior 24 runs
+#     skipped. The frozen rows will look very similar to the prior frozen
+#     rows in vit_debugging since the head-only recipe is unchanged.
+#
+# Output layout: vit_outputs_no_llrd/ViT_B_mae75/<task>/seed_<n>/<strategy>/
+# (new tree to avoid colliding with the prior runs' output dirs)
+#
+# Pre-flight (run once):
+#   mkdir -p /home/ec474/rds/hpc-work/ADNI_MRI/vit_outputs_no_llrd/slurm_logs
+#
+# Submit:  sbatch mri_pipeline/04h_finetune_ViT_no_llrd_submit_csd3.sh
+# Smoke :  sbatch --array=0 mri_pipeline/04h_finetune_ViT_no_llrd_submit_csd3.sh
+# =============================================================================
+
+module purge
+module load cuda/12.1
+source "$(conda info --base)/etc/profile.d/conda.sh"
+conda activate mri
+
+export WANDB_MODE="${WANDB_MODE:-offline}"
+WANDB_PROJECT="${WANDB_PROJECT:-vit_debugging}"
+
+# -- Hardcoded paths (post-exclusion, current canonical) ----------------------
+SCRIPT_DIR="/home/ec474/rds/hpc-work/Transformers_XAI/mri_pipeline"
+PRETRAINED_CKPT="/home/ec474/rds/hpc-work/ViT_pretrained/ViT_B_pretrained_noaug_mae75_BRATS2023_IXI_OASIS3_seed_8456_999_077000.pth.tar"
+VIT_INPUTS_DIR="/home/ec474/rds/hpc-work/ADNI_SMRIPREP/derivatives/vit_inputs"
+MATCHED_LABELS_CSV="/home/ec474/rds/hpc-work/ADNI_MRI/master_mri_clinical_matched_viscode2_extended_post_exclusion.csv"
+DATA_DIR="/home/ec474/rds/hpc-work/ADNI_CL/no_cdr_stratified_post_exclusion/tabular/baseline"
+OUT_DIR="/home/ec474/rds/hpc-work/ADNI_MRI/vit_outputs_no_llrd"
+
+PY_SESSION_FLAGS="--long all"
+LLRD_GAMMA="${LLRD_GAMMA:-1.0}"   # the variable under test; override allowed
+
+# -- Combination lookup -------------------------------------------------------
+TASKS=("T1_binary" "T1b_binary" "T1c_binary" "T1d_binary" "T2_multiclass")
+SEEDS=(0 1 2)
+STRATEGIES=("full_ft" "frozen")
+
+N_TASKS=${#TASKS[@]}        # 5
+N_SEEDS=${#SEEDS[@]}        # 3
+N_STRAT=${#STRATEGIES[@]}   # 2
+
+ID=${SLURM_ARRAY_TASK_ID}
+STRAT_IDX=$(( ID % N_STRAT ));   ID=$(( ID / N_STRAT ))
+SEED_IDX=$(( ID % N_SEEDS ));    ID=$(( ID / N_SEEDS ))
+TASK_IDX=$(( ID % N_TASKS ))
+
+TASK="${TASKS[$TASK_IDX]}"
+SEED="${SEEDS[$SEED_IDX]}"
+STRATEGY="${STRATEGIES[$STRAT_IDX]}"
+
+MODEL_SLUG="ViT_B_mae75"
+RUN_DIR="${OUT_DIR}/${MODEL_SLUG}/${TASK}/seed_${SEED}/${STRATEGY}"
+METRICS="${RUN_DIR}/metrics.json"
+CKPT="${RUN_DIR}/last_checkpoint.pt"
+
+mkdir -p "${OUT_DIR}/slurm_logs"
+mkdir -p "${RUN_DIR}"
+export WANDB_DIR="${RUN_DIR}"
+
+echo "============================================================"
+echo "  ViT-MAE75 finetune -- no-LLRD comparison sweep"
+echo "  Job ID      : $SLURM_JOB_ID"
+echo "  Array ID    : $SLURM_ARRAY_TASK_ID  (of 0-$((N_TASKS*N_SEEDS*N_STRAT-1)))"
+echo "  Node        : $SLURMD_NODENAME"
+echo "  Task        : ${TASK}"
+echo "  Seed        : ${SEED}"
+echo "  Strategy    : ${STRATEGY}"
+echo "  LLRD gamma  : ${LLRD_GAMMA}  (1.0 = no decay; prior runs used 0.7)"
+echo "  Output dir  : ${RUN_DIR}"
+echo "  wandb       : ${WANDB_PROJECT}  (WANDB_MODE=${WANDB_MODE})"
+echo "  Started     : $(date)"
+echo "============================================================"
+
+# -- Pre-flight checks --------------------------------------------------------
+if [ ! -f "${PRETRAINED_CKPT}" ]; then
+    echo "[ERROR] Pretrained checkpoint not found: ${PRETRAINED_CKPT}"; exit 1
+fi
+if [ ! -d "${VIT_INPUTS_DIR}" ]; then
+    echo "[ERROR] ViT inputs dir not found: ${VIT_INPUTS_DIR}"; exit 1
+fi
+if [ ! -f "${MATCHED_LABELS_CSV}" ]; then
+    echo "[ERROR] Matched labels CSV not found: ${MATCHED_LABELS_CSV}"; exit 1
+fi
+if [ ! -d "${DATA_DIR}/seed_${SEED}" ]; then
+    echo "[ERROR] Clinical splits dir not found: ${DATA_DIR}/seed_${SEED}"; exit 1
+fi
+
+if [ -f "${METRICS}" ]; then
+    echo "  metrics.json already exists -- skipping."; exit 0
+fi
+if [ -f "${CKPT}" ]; then
+    echo "  last_checkpoint.pt found -- python will AUTO-RESUME this combo."
+fi
+
+python "${SCRIPT_DIR}/04_supervised_finetuning_ViT.py" \
+    --task                "${TASK}" \
+    --seed                "${SEED}" \
+    --strategy            "${STRATEGY}" \
+    --llrd_gamma          "${LLRD_GAMMA}" \
+    ${PY_SESSION_FLAGS} \
+    --wandb \
+    --wandb_project       "${WANDB_PROJECT}" \
+    --pretrained_ckpt     "${PRETRAINED_CKPT}" \
+    --matched_labels_csv  "${MATCHED_LABELS_CSV}" \
+    --data_dir            "${DATA_DIR}" \
+    --vit_inputs_dir      "${VIT_INPUTS_DIR}" \
+    --out_dir             "${OUT_DIR}" \
+    --num_workers         "${SLURM_CPUS_PER_TASK}"
+
+EXIT_CODE=$?
+echo "============================================================"
+echo "  Finished    : $(date)"
+echo "  Exit code   : ${EXIT_CODE}"
+echo "  Output      : ${RUN_DIR}/"
+if [ ! -f "${METRICS}" ] && [ -f "${CKPT}" ]; then
+    echo "  NOTE: no metrics.json yet (likely hit 12h cap). Resubmit to AUTO-RESUME."
+fi
+echo "============================================================"
+exit ${EXIT_CODE}

@@ -122,6 +122,10 @@ def read_run(path: str, model: str) -> dict:
         "subj_balanced_acc": tms.get("balanced_acc"),
         "n_test":       cfg.get("n_test"),
         "degenerate":   _is_degenerate(d.get("test_diagnostics", {})),
+        # Used by the cross-model aggregator to pick HP winners for cached
+        # head sweeps (which produce many HP-leaves per task/seed). For
+        # single-HP runs this is the same as best across training.
+        "best_val_bacc": cfg.get("best_val_balanced_acc"),
         "path":         path,
     }
 

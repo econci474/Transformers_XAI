@@ -117,6 +117,47 @@ def _row_label(model, variant, augment) -> str:
     return lab
 
 
+def _filter_cached_to_hp_winners(df):
+    """For models whose name ends in '-cached' (cached-head HP sweeps with
+    many HP-leaves per task), filter rows to only the HP-winner per
+    (model, task). Winner = HP-combo with highest mean best_val_balanced_acc
+    across seeds. This makes cached rows comparable to single-HP rows in
+    the cross-model table (otherwise their mean is diluted by the full
+    HP grid, including known-bad cells).
+
+    The HP combo is identified by the path leaf (`<task>/seed_<n>/<hp>/
+    metrics.json`)."""
+    if df.empty or "path" not in df.columns:
+        return df
+    cached_mask = df["model"].str.endswith("-cached")
+    if not cached_mask.any():
+        return df
+    cached   = df[cached_mask].copy()
+    other    = df[~cached_mask].copy()
+    cached["hp_leaf"] = cached["path"].apply(lambda p: os.path.basename(os.path.dirname(p)))
+
+    val = pd.to_numeric(cached["best_val_bacc"], errors="coerce")
+    cached["_val"] = val
+
+    # Mean best_val_bacc across seeds for each (model, task, hp_leaf).
+    grp = (cached.groupby(["model", "task", "hp_leaf"], dropna=False)["_val"]
+                 .mean().reset_index())
+    # Winner per (model, task): hp_leaf with the highest mean.
+    winners = grp.loc[grp.groupby(
+        ["model", "task"], dropna=False)["_val"].idxmax()]
+    keep = set(zip(winners["model"], winners["task"], winners["hp_leaf"]))
+
+    cached = cached[cached.apply(
+        lambda r: (r["model"], r["task"], r["hp_leaf"]) in keep, axis=1)]
+    cached = cached.drop(columns=["hp_leaf", "_val"])
+
+    n_dropped = int(cached_mask.sum()) - len(cached)
+    if n_dropped:
+        print(f"  HP-winner filter: kept {len(cached)} cached rows, "
+              f"dropped {n_dropped} non-winning HP cells.")
+    return pd.concat([other, cached], ignore_index=True)
+
+
 def _collect_runs(root):
     """Read every metrics.json under the model trees and return a long
     DataFrame (one row per training run).
@@ -430,6 +471,8 @@ def main():
     if df.empty:
         print("\nNo runs found under any model tree — nothing to render.")
         sys.exit(1)
+
+    df = _filter_cached_to_hp_winners(df)
 
     summ_df = _summarise(df)
     summ_df = summ_df[summ_df["task"].isin(TASK_ORDER)].reset_index(drop=True)
