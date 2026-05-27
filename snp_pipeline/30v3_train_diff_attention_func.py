@@ -117,16 +117,21 @@ def _load_beta(base: Path) -> pd.DataFrame:
 
 
 def _load_labels_for_split(splits_root: Path, seed: int, split: str,
-                              base: Path | None = None) -> pd.DataFrame:
+                              base: Path | None = None,
+                              exclude_cn_to_ad: bool = False) -> pd.DataFrame:
     p = splits_root / f"seed_{seed}/{split}.csv"
     if not p.exists() and base is not None:
         fallback = base / "splits" / f"seed_{seed}/{split}.csv"
         if fallback.exists():
             p = fallback
     df = pd.read_csv(p, dtype=str)
-    df["y_pos"] = ((df["AD_bl"].astype(int) == 1) |
-                    (df["pMCI"].astype(int) == 1) |
-                    (df["CN_to_AD"].astype(int) == 1)).astype(int)
+    pos_terms = [df["AD_bl"].astype(int) == 1, df["pMCI"].astype(int) == 1]
+    if not exclude_cn_to_ad:
+        pos_terms.append(df["CN_to_AD"].astype(int) == 1)
+    y_pos = pos_terms[0]
+    for t in pos_terms[1:]:
+        y_pos = y_pos | t
+    df["y_pos"] = y_pos.astype(int)
     df["y_neg"] = (df["sCN"].astype(int) == 1).astype(int)
     df = df[(df["y_pos"] == 1) | (df["y_neg"] == 1)].copy()
     df["y"] = df["y_pos"].astype(int)
@@ -528,6 +533,10 @@ def main() -> None:
                     dest="drop_splice",
                     help="Zero the splice modality (46/128 SNPs missing). "
                           "Affects bias path + value-mult path.")
+    ap.add_argument("--exclude-cn-to-ad", "--exclude_cn_to_ad",
+                    action="store_true", dest="exclude_cn_to_ad",
+                    help="Drop CN_to_AD subgroup from POS class "
+                          "(seed-1 val has 0 CN_to_AD subjects — noisy comparison).")
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     ap.add_argument("--wandb-project", "--wandb_project", default=None,
                     dest="wandb_project")
@@ -545,6 +554,8 @@ def main() -> None:
                   f"_{args.aggregation}_{args.head}_s{args.seed}")
         if args.drop_splice:
             _name += "_no_splice"
+        if args.exclude_cn_to_ad:
+            _name += "_no_cn_to_ad"
         wb = wandb.init(project=args.wandb_project, entity=args.wandb_entity,
                          config=vars(args), name=_name)
 
@@ -594,7 +605,9 @@ def main() -> None:
 
     # ── Labels per split ────────────────────────────────────────────────
     print(f"[labels] splits_root={args.splits_root}, seed={args.seed}")
-    labels = {sp: _load_labels_for_split(args.splits_root, args.seed, sp, base=args.base)
+    labels = {sp: _load_labels_for_split(args.splits_root, args.seed, sp,
+                                            base=args.base,
+                                            exclude_cn_to_ad=args.exclude_cn_to_ad)
                for sp in ("train", "val", "test")}
     for sp, df in labels.items():
         print(f"  {sp}: n={len(df)}, pos={(df.y==1).sum()}, neg={(df.y==0).sum()}")
