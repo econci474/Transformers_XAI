@@ -222,12 +222,18 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--source", default=None)
     ap.add_argument("--ld-config", default=DEFAULT_LD_CONFIG)
+    ap.add_argument("--beta-source", default="raw", choices=["raw","prscs"],
+                     help="raw = published lead-SNP β; prscs = PRS-CS posterior β.")
     args = ap.parse_args()
-    out_dir = OUT_BASE / args.ld_config / "classification"
+    if args.beta_source == "raw":
+        out_dir = OUT_BASE / args.ld_config / "classification"
+    else:
+        out_dir = OUT_BASE.parent / f"strict_qc_prs_{args.beta_source}" / args.ld_config / "classification"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"Building per-source PRS table for {args.ld_config}...")
-    prs_full, snps_per_src = per_source_prs_table(ld_config=args.ld_config)
+    print(f"Building per-source PRS table for {args.ld_config}  beta_source={args.beta_source}...")
+    prs_full, snps_per_src = per_source_prs_table(ld_config=args.ld_config,
+                                                     beta_source=args.beta_source)
     cov = load_subject_covariates()
     dedup_st, dedup_dosage = get_dedup_dosage_matrix(args.ld_config)
     n_snp_per_src = {s: len(st) for s, st in snps_per_src.items()}

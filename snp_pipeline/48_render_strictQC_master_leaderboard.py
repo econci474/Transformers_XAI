@@ -21,6 +21,8 @@ OUT_BASE = Path("D:/ADNI_SNP_Omni2.5M_20140220/outputs/strict_qc_prs")
 LD_CONFIGS = ["ld_1000kb_r2_0.8", "ld_500kb_r2_0.2",
                "ld_250kb_r2_0.1", "ld_50_5_r2_0.5"]
 
+# When --beta-source prscs, the OUT_BASE is rerooted (see scripts 45/46/47).
+
 # (task subdir, primary metric mean+std column pair, short label for display)
 TASKS = [
     ("classification", ("val_bacc_mean", "val_bacc_std"), "bacc"),
@@ -36,6 +38,15 @@ def _fmt_pm(m, s):
 
 
 def main():
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--beta-source", default="raw", choices=["raw","prscs"])
+    args = ap.parse_args()
+    global OUT_BASE
+    if args.beta_source != "raw":
+        OUT_BASE = Path(str(OUT_BASE) + f"_{args.beta_source}")
+    print(f"reading from {OUT_BASE}")
+
     frames = []  # one DataFrame per (LD config × task) with key (source|covar_mode)
     for cfg in LD_CONFIGS:
         for task, (mcol, scol), short in TASKS:

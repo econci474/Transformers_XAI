@@ -106,7 +106,48 @@ def load_ldpruned_dosage(ld_config: str = DEFAULT_LD_CONFIG
     return bim, dos
 
 
-def load_source_beta(src: str, bim: pd.DataFrame) -> pd.DataFrame:
+def load_prscs_beta(src: str, bim: pd.DataFrame) -> pd.DataFrame:
+    """Read per-source PRS-CS posterior β file and orient to A1_in_bim.
+    Posterior file columns: chrom rsID bp A1 A2 posterior_beta.
+
+    Returns DataFrame with cols: rsID, beta_A1, A1_in_bim, A2_in_bim, beta_pub,
+    effect_allele_pub, other_allele_pub  (mirrors raw load_source_beta shape).
+    """
+    p = ROOT / "source_prs" / "prscs_posterior" / f"{src}_prscs_posterior_beta.tsv"
+    if not p.exists():
+        return pd.DataFrame()
+    df = pd.read_csv(p, sep="\t")
+    expected = {"chrom","rsID","bp","A1","A2","posterior_beta"}
+    if not expected.issubset(df.columns):
+        return pd.DataFrame()
+    df = df.rename(columns={"A1":"effect_allele_pub", "A2":"other_allele_pub",
+                              "posterior_beta":"beta_pub"})
+    df["beta_pub"] = pd.to_numeric(df["beta_pub"], errors="coerce")
+    df = df.dropna(subset=["beta_pub","rsID"])
+    bim_idx = bim.set_index("rsID")
+    df = df[df["rsID"].isin(bim_idx.index)].copy()
+    if df.empty: return pd.DataFrame()
+    df["A1_in_bim"] = df["rsID"].map(bim_idx["A1"])
+    df["A2_in_bim"] = df["rsID"].map(bim_idx["A2"])
+
+    def _orient(row):
+        ea = str(row["effect_allele_pub"]).upper()
+        a1 = str(row["A1_in_bim"]).upper()
+        a2 = str(row["A2_in_bim"]).upper()
+        if _is_palindromic(a1, a2): return np.nan
+        if ea == a1: return row["beta_pub"]
+        if ea == a2: return -row["beta_pub"]
+        if ea == _complement(a1): return row["beta_pub"]
+        if ea == _complement(a2): return -row["beta_pub"]
+        return np.nan
+    df["beta_A1"] = df.apply(_orient, axis=1)
+    df = df.dropna(subset=["beta_A1"]).copy()
+    return df[["rsID","beta_A1","A1_in_bim","A2_in_bim","beta_pub",
+                "effect_allele_pub","other_allele_pub"]].reset_index(drop=True)
+
+
+def load_source_beta(src: str, bim: pd.DataFrame,
+                       beta_source: str = "raw") -> pd.DataFrame:
     """Return per-source SNP table with cols: rsID, beta_A1, A1, A2, drop_reason.
 
     Logic:
@@ -123,6 +164,10 @@ def load_source_beta(src: str, bim: pd.DataFrame) -> pd.DataFrame:
           - Else (palindromic, mismatched)      →  drop
       * If src in OR_SOURCES, convert OR → log(OR) before sign-flip.
     """
+    if beta_source == "prscs":
+        return load_prscs_beta(src, bim)
+    if beta_source != "raw":
+        raise ValueError(f"unknown beta_source: {beta_source!r}")
     p = SRC_DIR / f"{src}_full_snps_resolution.tsv"
     if not p.exists():
         return pd.DataFrame()
@@ -196,7 +241,8 @@ def compute_prs(src_snp: pd.DataFrame, dosage: pd.DataFrame) -> pd.Series:
 
 def per_source_prs_table(sources: List[str] | None = None,
                             ld_config: str = DEFAULT_LD_CONFIG,
-                            include_dedup: bool = True
+                            include_dedup: bool = True,
+                            beta_source: str = "raw"
                            ) -> Tuple[pd.DataFrame, Dict[str, pd.DataFrame]]:
     """Build per-source PRS for the entire 616-subj cohort.
     Returns:
@@ -204,6 +250,9 @@ def per_source_prs_table(sources: List[str] | None = None,
               + (if include_dedup) "PRS_prs_all_dedup"
       df_snp: dict source → SNP table (rsID, beta_A1, alleles, etc.)
               + (if include_dedup) "prs_all_dedup" → composed SNP table
+
+    beta_source: "raw" uses published lead-SNP β; "prscs" uses PRS-CS posterior β
+    (only available for sources with full sumstats — see snp_pipeline/43_run_prscs_shrinkage.py).
     """
     if sources is None:
         sources = ALL_SOURCES
@@ -211,7 +260,7 @@ def per_source_prs_table(sources: List[str] | None = None,
     cols = {"PTID": list(dos.index)}
     df_snp = {}
     for s in sources:
-        st = load_source_beta(s, bim)
+        st = load_source_beta(s, bim, beta_source=beta_source)
         if st.empty:
             cols[f"PRS_{s}"] = [np.nan] * len(dos)
             df_snp[s] = st
