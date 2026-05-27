@@ -48,6 +48,12 @@ ALL_SOURCES = [
     "Vesilievick", "Zhang",
     "Felsky_MF", "Felsky_IT",
     "ONeil_NPY", "ONeil_GHR",
+    # Kosteridis: "Kosteridis" is the unified source (union of MTAG_AD +
+    # shared_AD_CV, dedupe by rsID, MTAG β preferred on overlap) — see
+    # _build_kosteridis_combined.py. The sub-bundles are kept for
+    # comparison / traceability but the unified row is the canonical
+    # Kosteridis representative going forward.
+    "Kosteridis",
     "Kosteridis_novel_AD", "Kosteridis_shared_AD_CV", "Kosteridis_MTAG_AD",
 ]
 
@@ -67,6 +73,7 @@ N_GWAS = {
     "Bellenguez":               487511,
     "Wightman":                 472868,
     "Schwanzentruber":          446092,
+    "Kosteridis":               436000,
     "Kosteridis_MTAG_AD":       436000,
     "Kosteridis_shared_AD_CV":  436000,
     "Kosteridis_novel_AD":      436000,

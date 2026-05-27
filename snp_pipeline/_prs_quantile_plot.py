@@ -87,9 +87,10 @@ def _load_baseline_labels_pooled(split: str) -> pd.DataFrame:
 
 
 def _compute_kosteridis_prs() -> pd.DataFrame:
-    """Per-patient Kosteridis_shared_AD_CV PRS on the LD-pruned strict-QC pool."""
+    """Per-patient Kosteridis (unified MTAG_AD ∪ shared_AD_CV) PRS on the
+    LD-pruned strict-QC pool at 1000kb/r²<0.8."""
     bim, dos = load_ldpruned_dosage("ld_1000kb_r2_0.8")
-    st = load_source_beta("Kosteridis_shared_AD_CV", bim, beta_source="raw")
+    st = load_source_beta("Kosteridis", bim, beta_source="raw")
     if st.empty:
         return pd.DataFrame()
     prs = compute_prs(st, dos)
@@ -190,7 +191,7 @@ def main():
     # Per-PRS per-patient scores
     print("\nLoading FM predictions...")
     fm = _load_fm_predictions()
-    print("\nComputing Kosteridis_shared_AD_CV PRS (LD-pruned, raw β)...")
+    print("\nComputing Kosteridis (unified MTAG_AD ∪ shared_AD_CV) PRS (LD-pruned, raw β)...")
     kost = _compute_kosteridis_prs()
     print(f"  n_patients with Kosteridis PRS = {len(kost)}")
     print("\nComputing DeRojas PRS-CS (unpruned strict-QC)...")
@@ -222,7 +223,7 @@ def main():
 
         prs_panels = [
             ("FM diff-attention (bmfm_snp/per_modality)", fm_merged),
-            ("Kosteridis_shared_AD_CV (LD-pruned, raw β)", kost_merged),
+            ("Kosteridis (LD-pruned, raw β, MTAG_AD ∪ shared_AD_CV)", kost_merged),
             ("DeRojas PRS-CS (unpruned 115-SNP pool)",      der_merged),
         ]
 
@@ -248,7 +249,7 @@ def main():
         # Plot: 2 panels (prevalence + OR), 3 curves
         fig, axs = plt.subplots(1, 2, figsize=(14, 5.5))
         colors = {"FM diff-attention (bmfm_snp/per_modality)": "tab:blue",
-                  "Kosteridis_shared_AD_CV (LD-pruned, raw β)": "tab:orange",
+                  "Kosteridis (LD-pruned, raw β, MTAG_AD ∪ shared_AD_CV)": "tab:orange",
                   "DeRojas PRS-CS (unpruned 115-SNP pool)": "tab:green"}
         for d in per_prs:
             c = colors.get(d["name"], "k")
