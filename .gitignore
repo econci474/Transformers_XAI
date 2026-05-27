@@ -33,3 +33,13 @@ classification_results/
 #Wandb
 wandb_api.txt
 wandb/
+
+# AlphaGenome API key (NEVER commit)
+snp_pipeline/alphagenome/alphagenome_api.txt
+snp_pipeline/alphagenome/*api*
+*alphagenome*api*.txt
+
+# OpenGWAS JWT (NEVER commit) — actual file lives outside repo at
+# D:/ADNI_SNP_Omni2.5M_20140220/.opengwas_jwt.txt
+*.opengwas_jwt*
+*opengwas*jwt*.txt
