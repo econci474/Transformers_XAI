@@ -211,6 +211,15 @@ def session_to_months(ses_label: str):
 
 MODEL_SLUG = "ViT_B_mae75"
 
+# ── Architecture sizings (Vaswani / DeiT canonical) ───────────────────────────
+# embed_dim, depth, n_heads, mlp_ratio
+VIT_SIZES = {
+    "tiny":  dict(embed_dim=192, depth=12, n_heads=3,  mlp_ratio=4.0),
+    "small": dict(embed_dim=384, depth=12, n_heads=6,  mlp_ratio=4.0),
+    "base":  dict(embed_dim=768, depth=12, n_heads=12, mlp_ratio=4.0),
+}
+VIT_SIZE_SLUG = {"tiny": "ViT_T", "small": "ViT_S", "base": "ViT_B"}
+
 
 # ── CLI ────────────────────────────────────────────────────────────────────────
 def parse_args():
@@ -220,6 +229,14 @@ def parse_args():
     p.add_argument("--seed",            type=int, required=True, choices=[0, 1, 2])
     p.add_argument("--strategy",        type=str, default="full_ft",
                    choices=["full_ft", "frozen", "scratch"])
+    p.add_argument("--vit_size",        type=str, default="base",
+                   choices=["tiny", "small", "base"],
+                   help="ViT architecture size. 'base' = paper-default ViT-B "
+                        "(embed_dim=768, depth=12, heads=12, ~86M params). "
+                        "'small' = ViT-S (384, 12, 6, ~22M). 'tiny' = ViT-Ti "
+                        "(192, 12, 3, ~5.5M). The MAE-pretrained checkpoint "
+                        "is ViT-B only; --vit_size != base requires "
+                        "--strategy scratch.")
     p.add_argument("--pretrained_ckpt", type=str, default=None,
                    help="MAE-pretrained .pth (ckpt['net'] state_dict). Required "
                         "for full_ft / frozen; ignored for scratch.")
@@ -311,6 +328,10 @@ def parse_args():
     # --pretrained_ckpt is required for full_ft / frozen, ignored for scratch.
     if args.strategy in ("full_ft", "frozen") and not args.pretrained_ckpt:
         p.error(f"--pretrained_ckpt is required for strategy '{args.strategy}'")
+    # The MAE-pretrained .pth is ViT-B only; non-base sizes are scratch-only.
+    if args.vit_size != "base" and args.strategy != "scratch":
+        p.error(f"--vit_size={args.vit_size} only supports --strategy scratch "
+                f"(MAE checkpoint is ViT-B only).")
 
     # Resolve session selection mode
     if args.long is None:
@@ -400,6 +421,7 @@ def init_wandb(args, task_cfg: dict, extra=None):
         "task":            args.task,
         "seed":            args.seed,
         "strategy":        args.strategy,
+        "vit_size":        args.vit_size,
         "augment":         args.augment,
         "aug_copies":      args.aug_copies,
         "epochs":          args.epochs,
@@ -866,7 +888,12 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     # scratch runs land under a distinct model slug so 05/06 aggregators treat
     # the from-scratch ViT as a separate model from the MAE-pretrained one.
-    model_slug = "ViT_B_scratch" if args.strategy == "scratch" else MODEL_SLUG
+    # Sized scratch variants (Tiny / Small / Base) get their own slug so the
+    # cross-model table can compare them as separate ablations.
+    if args.strategy == "scratch":
+        model_slug = f"{VIT_SIZE_SLUG[args.vit_size]}_scratch"
+    else:
+        model_slug = MODEL_SLUG  # full_ft / frozen: pretrained ViT-B
     out_dir = Path(args.out_dir) / model_slug / args.task / f"seed_{args.seed}" / args.strategy
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -982,10 +1009,12 @@ def main():
                              num_workers=args.num_workers, pin_memory=True)
 
     # ── Model + checkpoint ───────────────────────────────────────────────────
+    size_cfg = VIT_SIZES[args.vit_size]
     model = Vision_Transformer3D(
         img_size=(128, 128, 128), patch_size=16, in_chans=1,
         n_classes=task_cfg["num_labels"],
-        embed_dim=768, depth=12, n_heads=12, mlp_ratio=4.0,
+        embed_dim=size_cfg["embed_dim"], depth=size_cfg["depth"],
+        n_heads=size_cfg["n_heads"], mlp_ratio=size_cfg["mlp_ratio"],
         qkv_bias=True, drop_path_rate=args.drop_path_rate, p=0.0,
         attn_p=args.attn_dropout,
         global_avg_pool=False, pos_embed_type="learnable",
@@ -1213,6 +1242,7 @@ def main():
             "session_policy":        task_cfg["session_policy"],
             "seed":                  args.seed,
             "strategy":              args.strategy,
+            "vit_size":              args.vit_size,
             "augment":               args.augment,
             "aug_copies":            args.aug_copies,
             "epochs":                args.epochs,

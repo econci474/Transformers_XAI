@@ -242,9 +242,9 @@ def _build_pivot(summ_df):
     # appended without disturbing the existing rows.
     MODEL_RANK = {
         "BrainDINO": 0, "BrainMVP": 1, "ViT-MAE75": 2,
-        "ViT-scratch": 3,
-        "AG-MS3D-r2": 4, "AG-MS3D-vanilla": 5, "AG-MS3D-sep": 6,
-        "Spasov-CNN": 7,
+        "ViT-Tiny": 3, "ViT-scratch": 4,
+        "AG-MS3D-r2": 5, "AG-MS3D-vanilla": 6, "AG-MS3D-sep": 7,
+        "Spasov-CNN": 8,
     }
     VARIANT_RANK = {
         "full_ft": 0, "lora": 1, "frozen": 2,

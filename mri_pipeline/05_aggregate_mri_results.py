@@ -47,6 +47,9 @@ DEFAULT_ROOT = r"D:/ADNI_BIDS_project/derivatives"
 MODEL_TREES = [
     ("ViT-MAE75",        "vit_outputs_debug/ViT_B_mae75/*/seed_*/*/metrics.json"),
     ("ViT-scratch",      "vit_baseline/ViT_B_scratch/*/seed_*/*/metrics.json"),
+    # ViT-Tiny ablation (~5.5M params vs ViT-B's ~86M; from-scratch only --
+    # the MAE pretrained checkpoint is ViT-B sized only).
+    ("ViT-Tiny",         "vit_tiny_baseline/ViT_T_scratch/*/seed_*/*/metrics.json"),
     ("Spasov-CNN",       "cnn3d_outputs/Spasov3DCNN_*/*/seed_*/metrics.json"),
     # Legacy AG-MS3D run (pre-rescue separable backbone, collapsed on
     # 14/15 cells) — kept in the aggregator as evidence-of-failure.
