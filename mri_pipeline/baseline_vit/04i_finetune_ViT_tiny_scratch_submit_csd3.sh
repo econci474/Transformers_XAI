@@ -50,11 +50,13 @@
 #                        transformer on tiny data has nothing reining in
 #                        the attention weight norms.
 #   --label_smoothing 0.1   DeiT default; softens the majority-class minimum.
-#   --augment plus_original  doubles the effective train set with deterministic
-#                        K=1 augmented copies. The trainer's plus_original
-#                        outperformed `random` on BrainMVP T1 / T1d / T2,
-#                        and ViT-Tiny needs every effective-sample lift.
-#   --aug_copies 1       K=1 -> 2x train set (1160 train items at T1).
+#   --augment random     ViT trainer default. Stochastic on-the-fly:
+#                        RandFlip x3 + RandRotate90 + RandScaleIntensity +
+#                        RandShiftIntensity, each fires at p~0.2. Same aug
+#                        policy as the existing ViT-Base from-scratch sweep
+#                        (vit_baseline/ViT_B_scratch) -- enables a clean
+#                        size ablation isolating ViT-B (~86M) vs ViT-Ti
+#                        (~5.5M) with everything else held constant.
 #   --warmup_epochs 10   scratch default; with a 192-dim ViT a longer warmup
 #                        helps the attention temperature settle before the LR
 #                        bites.
@@ -154,7 +156,7 @@ echo "  Task        : ${TASK}"
 echo "  Seed        : ${SEED}"
 echo "  Size        : ${VIT_SIZE}  (~5.5M params; ViT-B is ~86M)"
 echo "  Strategy    : ${STRATEGY} (random init, no MAE checkpoint)"
-echo "  Recipe      : lr=5e-4 | wd=5e-2 | ls=0.1 | aug=plus_original K=1"
+echo "  Recipe      : lr=5e-4 | wd=5e-2 | ls=0.1 | aug=random  (matches ViT-B from-scratch)"
 echo "  Output dir  : ${RUN_DIR}"
 echo "  wandb       : offline -> project vit_tiny_scratch"
 echo "  Started     : $(date)"
@@ -196,8 +198,7 @@ python "${SCRIPT_DIR}/04_supervised_finetuning_ViT.py" \
     --lr                  5e-4 \
     --weight_decay        5e-2 \
     --label_smoothing     0.1 \
-    --augment             plus_original \
-    --aug_copies          1 \
+    --augment             random \
     --epochs              100 \
     --warmup_epochs       10 \
     --patience            15 \
