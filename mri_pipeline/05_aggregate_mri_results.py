@@ -53,14 +53,23 @@ MODEL_TREES = [
     #     LLRD-on by +0.017 to +0.037 test bacc on every full_ft task, so the
     #     llrd=1.0 numbers are the canonical ViT-MAE75 full_ft row going forward.
     #     vit_outputs_hi_lr also fills T1d which the original sweep lacked.
+    # frozen @ llrd=0.7 for aug=random. Lives in vit_outputs_debug (the
+    # original sweep). LLRD is a no-op when only the head trains, so
+    # llrd=0.7 vs 1.0 doesn't matter mathematically -- this row is "the
+    # canonical frozen/random row" regardless of what llrd_gamma it was
+    # trained at.
     ("ViT-MAE75",        "vit_outputs_debug/ViT_B_mae75/*/seed_*/frozen/metrics.json"),
-    # full_ft @ llrd=1.0 sweeps. Three augmentation variants land in sibling
-    # subtrees so they don't collide:
-    #   vit_outputs_hi_lr/ViT_B_mae75/...                    <- aug=random (legacy default)
+    # full_ft + (frozen for non-random augs) @ llrd=1.0 sweeps. Augmentation
+    # variants land in sibling subtrees so they don't collide:
+    #   vit_outputs_hi_lr/ViT_B_mae75/...                    <- aug=random (legacy unsuffixed default)
     #   vit_outputs_hi_lr/aug_none/ViT_B_mae75/...           <- aug=none
     #   vit_outputs_hi_lr/aug_plus_original/ViT_B_mae75/...  <- aug=plus_original
+    # full_ft globs cover all augs; frozen glob covers only the aug_*/ subtree
+    # (frozen/random comes from vit_outputs_debug above, so we don't re-glob
+    # the unsuffixed hi_lr tree for frozen and accidentally duplicate).
     ("ViT-MAE75",        "vit_outputs_hi_lr/ViT_B_mae75/*/seed_*/full_ft/metrics.json"),
     ("ViT-MAE75",        "vit_outputs_hi_lr/aug_*/ViT_B_mae75/*/seed_*/full_ft/metrics.json"),
+    ("ViT-MAE75",        "vit_outputs_hi_lr/aug_*/ViT_B_mae75/*/seed_*/frozen/metrics.json"),
     ("ViT-scratch",      "vit_baseline/ViT_B_scratch/*/seed_*/*/metrics.json"),
     # ViT-Tiny ablation (~5.5M params vs ViT-B's ~86M; from-scratch only --
     # the MAE pretrained checkpoint is ViT-B sized only).
