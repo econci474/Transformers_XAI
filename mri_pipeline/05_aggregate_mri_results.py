@@ -45,7 +45,22 @@ DEFAULT_ROOT = r"D:/ADNI_BIDS_project/derivatives"
 
 # (model label, metrics.json glob relative to --root)
 MODEL_TREES = [
-    ("ViT-MAE75",        "vit_outputs_debug/ViT_B_mae75/*/seed_*/*/metrics.json"),
+    # ViT-MAE75 split between two sweeps now:
+    #   - frozen rows come from vit_outputs_debug (the original llrd=0.7 sweep;
+    #     llrd is a no-op when only the head trains, so identical to llrd=1.0).
+    #   - full_ft rows come from vit_outputs_hi_lr (llrd=1.0, originally called
+    #     the "hi_lr" sweep but actually a LLRD-off comparison). LLRD-off beats
+    #     LLRD-on by +0.017 to +0.037 test bacc on every full_ft task, so the
+    #     llrd=1.0 numbers are the canonical ViT-MAE75 full_ft row going forward.
+    #     vit_outputs_hi_lr also fills T1d which the original sweep lacked.
+    ("ViT-MAE75",        "vit_outputs_debug/ViT_B_mae75/*/seed_*/frozen/metrics.json"),
+    # full_ft @ llrd=1.0 sweeps. Three augmentation variants land in sibling
+    # subtrees so they don't collide:
+    #   vit_outputs_hi_lr/ViT_B_mae75/...                    <- aug=random (legacy default)
+    #   vit_outputs_hi_lr/aug_none/ViT_B_mae75/...           <- aug=none
+    #   vit_outputs_hi_lr/aug_plus_original/ViT_B_mae75/...  <- aug=plus_original
+    ("ViT-MAE75",        "vit_outputs_hi_lr/ViT_B_mae75/*/seed_*/full_ft/metrics.json"),
+    ("ViT-MAE75",        "vit_outputs_hi_lr/aug_*/ViT_B_mae75/*/seed_*/full_ft/metrics.json"),
     ("ViT-scratch",      "vit_baseline/ViT_B_scratch/*/seed_*/*/metrics.json"),
     # ViT-Tiny ablation (~5.5M params vs ViT-B's ~86M; from-scratch only --
     # the MAE pretrained checkpoint is ViT-B sized only).

@@ -83,10 +83,26 @@ PRETRAINED_CKPT="/home/ec474/rds/hpc-work/ViT_pretrained/ViT_B_pretrained_noaug_
 VIT_INPUTS_DIR="/home/ec474/rds/hpc-work/ADNI_SMRIPREP/derivatives/vit_inputs"
 MATCHED_LABELS_CSV="/home/ec474/rds/hpc-work/ADNI_MRI/master_mri_clinical_matched_viscode2_extended_post_exclusion.csv"
 DATA_DIR="/home/ec474/rds/hpc-work/ADNI_CL/no_cdr_stratified_post_exclusion/tabular/baseline"
-OUT_DIR="/home/ec474/rds/hpc-work/ADNI_MRI/vit_outputs_hi_lr"
 
 PY_SESSION_FLAGS="--long all"
 LLRD_GAMMA="${LLRD_GAMMA:-1.0}"   # the variable under test; override allowed
+
+# -- Run-time aug knob (baked into OUT_DIR so multiple augs coexist) ----------
+# Default 'random' keeps existing aug=random rsync paths intact:
+#   vit_outputs_hi_lr/ViT_B_mae75/...   <- aug=random (legacy default, kept)
+# For any other aug, the path gains an aug_<augment>/ layer:
+#   vit_outputs_hi_lr/aug_none/ViT_B_mae75/...
+#   vit_outputs_hi_lr/aug_plus_original/ViT_B_mae75/...
+# Override at submit time:
+#   sbatch --export=ALL,AUGMENT=none          ...
+#   sbatch --export=ALL,AUGMENT=plus_original ...
+AUGMENT="${AUGMENT:-random}"
+if [ "${AUGMENT}" = "random" ]; then
+    OUT_DIR="/home/ec474/rds/hpc-work/ADNI_MRI/vit_outputs_hi_lr"
+else
+    OUT_DIR="/home/ec474/rds/hpc-work/ADNI_MRI/vit_outputs_hi_lr/aug_${AUGMENT}"
+fi
+AUG_COPIES="${AUG_COPIES:-1}"     # plus_original only -- ignored for random/none
 
 # -- Combination lookup -------------------------------------------------------
 TASKS=("T1_binary" "T1b_binary" "T1c_binary" "T1d_binary" "T2_multiclass")
@@ -111,7 +127,9 @@ RUN_DIR="${OUT_DIR}/${MODEL_SLUG}/${TASK}/seed_${SEED}/${STRATEGY}"
 METRICS="${RUN_DIR}/metrics.json"
 CKPT="${RUN_DIR}/last_checkpoint.pt"
 
-mkdir -p "${OUT_DIR}/slurm_logs"
+# Centralised slurm-log dir under the un-suffixed base so logs from all aug
+# variants land together (easier to grep cross-aug failures from one place).
+mkdir -p "/home/ec474/rds/hpc-work/ADNI_MRI/vit_outputs_hi_lr/slurm_logs"
 mkdir -p "${RUN_DIR}"
 export WANDB_DIR="${RUN_DIR}"
 
@@ -124,6 +142,7 @@ echo "  Task        : ${TASK}"
 echo "  Seed        : ${SEED}"
 echo "  Strategy    : ${STRATEGY}"
 echo "  LLRD gamma  : ${LLRD_GAMMA}  (1.0 = no decay; prior runs used 0.7)"
+echo "  Augment     : ${AUGMENT}     (aug_copies=${AUG_COPIES} -- only used for plus_original)"
 echo "  Output dir  : ${RUN_DIR}"
 echo "  wandb       : ${WANDB_PROJECT}  (WANDB_MODE=${WANDB_MODE})"
 echo "  Started     : $(date)"
@@ -155,6 +174,8 @@ python "${SCRIPT_DIR}/04_supervised_finetuning_ViT.py" \
     --seed                "${SEED}" \
     --strategy            "${STRATEGY}" \
     --llrd_gamma          "${LLRD_GAMMA}" \
+    --augment             "${AUGMENT}" \
+    --aug_copies          "${AUG_COPIES}" \
     ${PY_SESSION_FLAGS} \
     --wandb \
     --wandb_project       "${WANDB_PROJECT}" \
