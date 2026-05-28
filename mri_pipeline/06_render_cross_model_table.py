@@ -123,14 +123,19 @@ def _group_key(row) -> tuple:
 def _row_label(model, variant, augment) -> str:
     """Render the row header. Augment carries a Unicode-superscript marker
     (see AUG_LEGEND_LINES under the table) so a reader can decode the
-    augmentation policy without checking source. Unknown augments are
-    rendered without a superscript -- the legend mapping is the source of
-    truth."""
+    augmentation policy without checking source.
+
+    If the augment value ends in HP_TUNED_MARKER ('†'), the row was produced
+    by the cached-head HP-tuning sweep -- the marker is stripped for the
+    superscript lookup and re-appended as the final label-tail token."""
     lab = f"{model} / {variant}"
-    if augment not in ("-", None, ""):
-        sup = AUG_SUPERSCRIPT.get(augment, "")
-        lab += f" / {augment}{sup}"
-    return lab
+    if augment in ("-", None, ""):
+        return lab
+    is_hp = isinstance(augment, str) and augment.endswith(HP_TUNED_MARKER)
+    aug_clean = augment[:-len(HP_TUNED_MARKER)] if is_hp else augment
+    sup = AUG_SUPERSCRIPT.get(aug_clean, "")
+    suffix = HP_TUNED_MARKER if is_hp else ""
+    return f"{lab} / {aug_clean}{sup}{suffix}"
 
 
 # ---------------------------------------------------------------------------
@@ -146,6 +151,11 @@ AUG_SUPERSCRIPT = {
     "flips":        "⁴",   # 4
     "flips+strong": "⁵",   # 5
 }
+# Marker postfixed to an augment value in summ_df (e.g. "none†") to flag rows
+# that were produced by the cached-head HP-tuning sweep rather than a single-HP
+# trainer run. _row_label strips this for the superscript lookup and re-appends
+# it as the final label-tail marker; the legend block below explains the sweep.
+HP_TUNED_MARKER = "†"
 AUG_LEGEND_LINES = [
     "Augmentation key:",
     "⁰ none = no train-time augmentation (frozen-encoder cached forward, "
@@ -163,6 +173,14 @@ AUG_LEGEND_LINES = [
     "rescue1 vanilla, Spasov-CNN).",
     "⁵ flips+strong = flips + RandAffine + RandGaussianNoise + "
     "RandBiasField + RandAdjustContrast (AG-MS3D rescue2, --strong_aug).",
+    "† HP-tuned via the cached-head sweep (frozen encoder + linear head "
+    "on cached embeddings; trainer = 04_head_finetune_from_embeddings.py). "
+    "Grid: lr ∈ {1e-3, 1e-4, 1e-5} × drop_rate ∈ {0.1, 0.2, 0.3} × "
+    "label_smoothing ∈ {0.0, 0.1} = 18 HP combos per (task, seed); "
+    "epochs=50, wd=1e-5, patience=15, batch=full. HP winner selected per "
+    "task by mean val_bacc across 3 seeds (n=3 in the cell = 3 seeds at "
+    "the winning HP combo). Non-† rows are single-HP runs from the "
+    "on-the-fly trainer.",
 ]
 
 # Augment back-fill: the per-pipeline trainers were written independently and
@@ -605,15 +623,32 @@ def main():
     summ_df = _summarise(df)
     summ_df = summ_df[summ_df["task"].isin(TASK_ORDER)].reset_index(drop=True)
 
-    # Relabel: until the BrainDINO LoRA/full_ft sweeps land, the only BrainDINO
-    # results we have come from the cached-head pipeline (frozen encoder +
-    # deterministic forward, no augmentation). Display these as
-    # "BrainDINO / frozen / none" rather than "BrainDINO-cached /
-    # frozen_cached" -- functionally identical to a frozen + aug=none run.
-    _braindino_cached = summ_df["model"] == "BrainDINO-cached"
-    summ_df.loc[_braindino_cached, "model"]   = "BrainDINO"
-    summ_df.loc[_braindino_cached, "variant"] = "frozen"
-    summ_df.loc[_braindino_cached, "augment"] = "none"
+    # ── Relabel cached-head HP-tuned rows under their parent model name ──
+    # All three (BrainDINO, BrainMVP, ViT-MAE) ran the same cached-head HP
+    # sweep (04_head_finetune_from_embeddings.py); the result for each model
+    # is one HP-winner row per task. Surface these as
+    # "<Model> / frozen / none†" so a reader sees a single canonical row
+    # per pretrained encoder and the † marker + legend explain that it's
+    # the HP-winner from a sweep (not a single-HP run). Then drop the
+    # single-HP "BrainMVP / frozen / none" rows (no T1c anyway; the
+    # HP-tuned row supersedes them for the publication table).
+    for cached_name, parent_name in [
+        ("BrainDINO-cached", "BrainDINO"),
+        ("BrainMVP-cached",  "BrainMVP"),
+        ("ViT-MAE-cached",   "ViT-MAE75"),
+    ]:
+        mask = summ_df["model"] == cached_name
+        summ_df.loc[mask, "model"]   = parent_name
+        summ_df.loc[mask, "variant"] = "frozen"
+        summ_df.loc[mask, "augment"] = "none" + HP_TUNED_MARKER
+
+    # Drop the on-the-fly single-HP BrainMVP / frozen / none rows; the
+    # HP-tuned cached variant displaces them in the publication table.
+    summ_df = summ_df[~(
+        (summ_df["model"] == "BrainMVP") &
+        (summ_df["variant"] == "frozen") &
+        (summ_df["augment"] == "none")
+    )].reset_index(drop=True)
 
     # Merge the ViT-from-scratch family under one model name so the two sizes
     # appear as sibling sub-rows in the table (apples-to-apples size ablation):
