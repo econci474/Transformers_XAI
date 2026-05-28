@@ -117,6 +117,53 @@ def _row_label(model, variant, augment) -> str:
     return lab
 
 
+# ---------------------------------------------------------------------------
+# Augment back-fill: the per-pipeline trainers were written independently and
+# do not all record an `augment` field in metrics.json. The values below are
+# derived from each trainer's own _train_transform (verified by inspecting
+# the trainer source):
+#   - ViT (04_supervised_finetuning_ViT.py): --augment {none,random,plus_original};
+#     "random" = RandFlip x3 + RandRotate90 + RandScaleIntensity + RandShiftIntensity,
+#     all on-the-fly stochastic. Recorded explicitly in metrics.json.
+#   - BrainMVP (brain_mvp/04_supervised_finetuning_BrainMVP.py): --augment
+#     {none,stochastic,plus_original}. Recorded explicitly in metrics.json.
+#   - BrainDINO (brain_dino/02_supervised_finetuning_BrainDINO.py): cached-head
+#     pipeline used to date is encoder-frozen + deterministic forward, so no
+#     train-time aug -> "none".
+#   - AG-MS3D legacy + rescue1 (3d_cnn_vit/train_agms3d.py at args.strong_aug=False):
+#     RandFlipd x3 (3 axes), nothing else. Not recorded in metrics.json -> "flips".
+#   - AG-MS3D rescue2 (--strong_aug): RandFlip x3 + RandAffine + RandGaussianNoise
+#     + RandBiasField + RandAdjustContrast. Recorded as `strong_aug: True` in
+#     metrics.json -> "flips+strong".
+#   - Spasov-CNN (3d_conv_net/train_3dcnn.py): RandFlipd x3 only. Not recorded
+#     in metrics.json -> "flips".
+# When a model adds new aug options later, extend this mapping.
+_DEFAULT_AUG_BY_MODEL = {
+    "AG-MS3D-sep":      "flips",
+    "AG-MS3D-vanilla":  "flips",
+    "AG-MS3D-r2":       "flips+strong",
+    "Spasov-CNN":       "flips",
+    # ViT family records `augment` in metrics.json; if for some reason it's
+    # missing (very old runs), fall back to the trainer default "random".
+    "ViT-MAE75":        "random",
+    "ViT-Tiny":         "random",
+    "ViT-scratch":      "random",
+}
+
+
+def _backfill_augment(df):
+    """For every row whose `augment` is missing/blank/'-', substitute the
+    trainer-derived default (see _DEFAULT_AUG_BY_MODEL). Makes every cross-
+    model row self-documenting about the augmentation policy used."""
+    if df.empty:
+        return df
+    df = df.copy()
+    blank = df["augment"].isin([None, "", "-"]) | df["augment"].isna()
+    df.loc[blank, "augment"] = df.loc[blank, "model"].map(
+        lambda m: _DEFAULT_AUG_BY_MODEL.get(m, "-"))
+    return df
+
+
 def _filter_cached_to_hp_winners(df):
     """For models whose name ends in '-cached' (cached-head HP sweeps with
     many HP-leaves per task), filter rows to only the HP-winner per
@@ -192,21 +239,15 @@ def _collect_runs(root):
 
 def _summarise(df):
     """Mean+std over seeds, grouped by (model, variant, augment, task).
-    Output is a tidy DataFrame keyed by group tuple + task."""
+    Output is a tidy DataFrame keyed by group tuple + task.
+
+    Augment is always preserved verbatim now (no `aug_varies` blanking) --
+    every cross-model row in the publication table explicitly carries the
+    augmentation policy used. Missing/blank augments are back-filled
+    upstream via _backfill_augment, so by the time _summarise sees a row
+    the augment column is always a real label."""
     if df.empty:
         return df
-
-    # Which models varied augmentation? Only those should display it in
-    # the row label.
-    aug_varies = (
-        df.groupby("model")["augment"].nunique() > 1
-    ).to_dict()
-
-    df = df.copy()
-    df["augment"] = df.apply(
-        lambda r: r["augment"] if aug_varies.get(r["model"]) else "-",
-        axis=1,
-    )
 
     summ = []
     for keys, sub in df.groupby(
@@ -240,11 +281,23 @@ def _build_pivot(summ_df):
     # Establish a stable row ordering: model (paper-quality first), then
     # variant, then augment. The order list is fixed; new models can be
     # appended without disturbing the existing rows.
+    # Row ordering (user-specified): BrainDINO -> BrainMVP -> ViT-MAE75 ->
+    # AG-MS3D -> Spasov-CNN. Cached-head sweeps sit immediately after their
+    # parent model; ViT-Tiny / ViT-scratch sit under the ViT block (they
+    # share the ViT-B/16 architecture, just different sizes / inits).
     MODEL_RANK = {
-        "BrainDINO": 0, "BrainMVP": 1, "ViT-MAE75": 2,
-        "ViT-Tiny": 3, "ViT-scratch": 4,
-        "AG-MS3D-r2": 5, "AG-MS3D-vanilla": 6, "AG-MS3D-sep": 7,
-        "Spasov-CNN": 8,
+        "BrainDINO":         0,
+        "BrainDINO-cached":  1,
+        "BrainMVP":          2,
+        "BrainMVP-cached":   3,
+        "ViT-MAE75":         4,
+        "ViT-MAE-cached":    5,
+        "ViT-Tiny":          6,
+        "ViT-scratch":       7,
+        "AG-MS3D-r2":        8,
+        "AG-MS3D-vanilla":   9,
+        "AG-MS3D-sep":      10,
+        "Spasov-CNN":       11,
     }
     VARIANT_RANK = {
         "full_ft": 0, "lora": 1, "frozen": 2,
@@ -330,12 +383,6 @@ def _render_png(fmt, num, path):
         row_header = _row_label(m, v, a)
         body.append([row_header] + [row[t] for t in TASK_ORDER])
 
-    # ── Chance row (visual reference) ───────────────────────────────────
-    chance_row = ["chance"] + [
-        f"{CHANCE[t]:.3f}" for t in TASK_ORDER
-    ]
-    body.append(chance_row)
-
     tab = ax.table(
         cellText=body,
         colLabels=col_labels,
@@ -357,15 +404,13 @@ def _render_png(fmt, num, path):
         cell = tab[best_idx + 1, j]
         cell.set_text_props(weight="bold")
 
-    # Style header row + chance row
+    # Style header row
     for j in range(n_cols):
         tab[0, j].set_facecolor("#ECECEC")
         tab[0, j].set_text_props(weight="bold")
-        tab[n_rows + 1, j].set_facecolor("#F5F5F5")
-        tab[n_rows + 1, j].set_text_props(style="italic")
 
     # Left-align the row-header column
-    for i in range(n_rows + 2):
+    for i in range(n_rows + 1):
         tab[i, 0].set_text_props(ha="left")
         tab[i, 0].PAD = 0.04
 
@@ -387,7 +432,7 @@ def _render_tex(fmt, num, path):
         r"\centering",
         r"\caption{MRI models -- test balanced accuracy by task "
         r"(mean $\pm$ std across seeds; n in parentheses). Best per task "
-        r"in \textbf{bold}. Chance baseline: 0.500 binary, 0.333 multiclass.}",
+        r"in \textbf{bold}.}",
         r"\label{tab:mri_cross_model}",
         r"\small\setlength{\tabcolsep}{4pt}",
         r"\begin{tabular}{" + col_spec + r"}",
@@ -418,10 +463,6 @@ def _render_tex(fmt, num, path):
         lines.append(header + " & " + " & ".join(cells) + r" \\")
 
     lines += [
-        r"\midrule",
-        r"\textit{chance} & " + " & ".join(
-            f"{CHANCE[t]:.3f}" for t in TASK_ORDER
-        ) + r" \\",
         r"\bottomrule",
         r"\end{tabular}",
         r"\end{table}",
@@ -473,10 +514,21 @@ def main():
         print("\nNo runs found under any model tree — nothing to render.")
         sys.exit(1)
 
+    df = _backfill_augment(df)
     df = _filter_cached_to_hp_winners(df)
 
     summ_df = _summarise(df)
     summ_df = summ_df[summ_df["task"].isin(TASK_ORDER)].reset_index(drop=True)
+
+    # Relabel: until the BrainDINO LoRA/full_ft sweeps land, the only BrainDINO
+    # results we have come from the cached-head pipeline (frozen encoder +
+    # deterministic forward, no augmentation). Display these as
+    # "BrainDINO / frozen / none" rather than "BrainDINO-cached /
+    # frozen_cached" -- functionally identical to a frozen + aug=none run.
+    _braindino_cached = summ_df["model"] == "BrainDINO-cached"
+    summ_df.loc[_braindino_cached, "model"]   = "BrainDINO"
+    summ_df.loc[_braindino_cached, "variant"] = "frozen"
+    summ_df.loc[_braindino_cached, "augment"] = "none"
 
     fmt, num = _build_pivot(summ_df)
 
