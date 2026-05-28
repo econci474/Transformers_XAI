@@ -92,7 +92,11 @@
 #   Seed : 0 | 1 | 2
 #
 # W&B project: vit_tiny_scratch
-# Output root: vit_tiny_baseline/ViT_T_scratch/<task>/seed_<n>/scratch/
+# Output root: vit_tiny_baseline/aug_${AUGMENT}/ViT_T_scratch/<task>/seed_<n>/scratch/
+#   AUGMENT defaults to 'random' (apples-to-apples with ViT-B from-scratch).
+#   Override via:  sbatch --export=ALL,AUGMENT=plus_original ...
+#   Each augment policy lands in its own aug_<name>/ subtree so multiple
+#   runs coexist without overwriting each other.
 #
 # Pre-flight (run once):
 #   mkdir -p /home/ec474/rds/hpc-work/ADNI_MRI/vit_tiny_baseline/slurm_logs
@@ -117,7 +121,11 @@ SCRIPT_DIR="/home/ec474/rds/hpc-work/Transformers_XAI/mri_pipeline"
 DATA_DIR="/home/ec474/rds/hpc-work/ADNI_CL/no_cdr_stratified_post_exclusion/tabular/baseline"
 MATCHED_LABELS_CSV="/home/ec474/rds/hpc-work/ADNI_MRI/master_mri_clinical_matched_viscode2_extended_post_exclusion.csv"
 VIT_INPUTS_DIR="/home/ec474/rds/hpc-work/ADNI_SMRIPREP/derivatives/vit_inputs"
-OUT_DIR="/home/ec474/rds/hpc-work/ADNI_MRI/vit_tiny_baseline"
+# Run-time aug knob -- baked into the output path so multiple augmentation
+# policies can coexist without overwriting each other (mirrors BrainMVP's
+# aug_<augment>/ convention).
+AUGMENT="${AUGMENT:-random}"   # default for the apples-to-apples size ablation
+OUT_DIR="/home/ec474/rds/hpc-work/ADNI_MRI/vit_tiny_baseline/aug_${AUGMENT}"
 
 # -- Session selection (must match what 03 produced) --------------------------
 PY_SESSION_FLAGS="--long all"
@@ -142,7 +150,7 @@ RUN_DIR="${OUT_DIR}/${MODEL_SLUG}/${TASK}/seed_${SEED}/${STRATEGY}"
 METRICS="${RUN_DIR}/metrics.json"
 CKPT="${RUN_DIR}/last_checkpoint.pt"
 
-mkdir -p "${OUT_DIR}/slurm_logs"
+mkdir -p "/home/ec474/rds/hpc-work/ADNI_MRI/vit_tiny_baseline/slurm_logs"
 mkdir -p "${RUN_DIR}"
 export WANDB_DIR="${RUN_DIR}"
 
@@ -156,7 +164,7 @@ echo "  Task        : ${TASK}"
 echo "  Seed        : ${SEED}"
 echo "  Size        : ${VIT_SIZE}  (~5.5M params; ViT-B is ~86M)"
 echo "  Strategy    : ${STRATEGY} (random init, no MAE checkpoint)"
-echo "  Recipe      : lr=5e-4 | wd=5e-2 | ls=0.1 | aug=random  (matches ViT-B from-scratch)"
+echo "  Recipe      : lr=5e-4 | wd=5e-2 | ls=0.1 | aug=${AUGMENT}  (default 'random' matches ViT-B from-scratch)"
 echo "  Output dir  : ${RUN_DIR}"
 echo "  wandb       : offline -> project vit_tiny_scratch"
 echo "  Started     : $(date)"
@@ -198,7 +206,7 @@ python "${SCRIPT_DIR}/04_supervised_finetuning_ViT.py" \
     --lr                  5e-4 \
     --weight_decay        5e-2 \
     --label_smoothing     0.1 \
-    --augment             random \
+    --augment             "${AUGMENT}" \
     --epochs              100 \
     --warmup_epochs       10 \
     --patience            15 \

@@ -49,6 +49,9 @@ MODEL_TREES = [
     ("ViT-scratch",      "vit_baseline/ViT_B_scratch/*/seed_*/*/metrics.json"),
     # ViT-Tiny ablation (~5.5M params vs ViT-B's ~86M; from-scratch only --
     # the MAE pretrained checkpoint is ViT-B sized only).
+    # aug_* layer baked in so multiple augment policies can coexist; the
+    # legacy-flat path (no aug_*) is the fallback for any pre-aug-split runs.
+    ("ViT-Tiny",         "vit_tiny_baseline/aug_*/ViT_T_scratch/*/seed_*/*/metrics.json"),
     ("ViT-Tiny",         "vit_tiny_baseline/ViT_T_scratch/*/seed_*/*/metrics.json"),
     ("Spasov-CNN",       "cnn3d_outputs/Spasov3DCNN_*/*/seed_*/metrics.json"),
     # Legacy AG-MS3D run (pre-rescue separable backbone, collapsed on

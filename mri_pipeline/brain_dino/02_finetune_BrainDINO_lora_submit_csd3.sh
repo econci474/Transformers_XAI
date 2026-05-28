@@ -50,6 +50,20 @@ module load cuda/12.1
 source "$(conda info --base)/etc/profile.d/conda.sh"
 conda activate mri
 
+# -- Pre-flight: peft must be importable (silently no-op if already there) ---
+# The first rescue1 run (job 29738808) crashed every cell because peft wasn't
+# installed in the mri env. Install lazily so a missing peft is fixed once
+# without needing to re-trigger 45 array failures.
+python -c "import peft" 2>/dev/null || {
+    echo "[setup] peft not found -- installing 'peft>=0.7' into mri env..."
+    pip install --quiet 'peft>=0.7' || {
+        echo "[ERROR] pip install peft failed. Re-run interactively:"
+        echo "        conda activate mri && pip install 'peft>=0.7'"
+        exit 1
+    }
+    python -c "import peft; print(f'[setup] peft installed: {peft.__version__}')"
+}
+
 # -- Hardcoded paths ----------------------------------------------------------
 SCRIPT_DIR="/home/ec474/rds/hpc-work/Transformers_XAI/mri_pipeline/brain_dino"
 PRETRAINED_CKPT="/home/ec474/rds/hpc-work/brain_dino_model.pth"

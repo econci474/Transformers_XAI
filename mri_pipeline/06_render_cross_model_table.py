@@ -303,28 +303,38 @@ def _summarise(df):
         rec = dict(zip(["model", "variant", "augment", "task"], keys))
         rec["n_seeds"] = len(sub)
         rec["n_degenerate"] = int(sub["degenerate"].sum())
+        # Test metrics (from metrics.json `test_metrics` block).
         for m in ["balanced_acc", "auc", "f1", "accuracy"]:
             v = pd.to_numeric(sub[m], errors="coerce").dropna().to_numpy()
             rec[f"{m}_mean"] = float(v.mean()) if len(v) else None
             rec[f"{m}_std"]  = float(v.std())  if len(v) else None
+        # Val balanced acc (from metrics.json `config.best_val_balanced_acc`,
+        # the early-stop / checkpoint-selection metric the trainers track).
+        v = pd.to_numeric(sub["best_val_bacc"], errors="coerce").dropna().to_numpy()
+        rec["val_bacc_mean"] = float(v.mean()) if len(v) else None
+        rec["val_bacc_std"]  = float(v.std())  if len(v) else None
         summ.append(rec)
     return pd.DataFrame(summ)
 
 
-def _cell_str(row):
-    """Format the bal-acc cell shown in PNG / LaTeX: '0.784 ± 0.052 (3)'."""
+def _cell_str(row, metric: str = "balanced_acc"):
+    """Format the metric cell shown in PNG / LaTeX: '0.784 ± 0.052 (3)'."""
     if row is None or row.empty:
         return "—"
-    m, s, n = row["balanced_acc_mean"], row["balanced_acc_std"], int(row["n_seeds"])
+    m, s, n = row[f"{metric}_mean"], row[f"{metric}_std"], int(row["n_seeds"])
     if m is None or np.isnan(m):
         return "—"
     return f"{m:.3f} ± {s:.3f} ({n})"
 
 
-def _build_pivot(summ_df):
+def _build_pivot(summ_df, metric: str = "balanced_acc"):
     """Pivot: rows = (model, variant, augment), cols = tasks.
     Returns the pivot DataFrame whose cells are pre-formatted strings,
-    plus a parallel DataFrame of numeric bal_acc means (for highlighting)."""
+    plus a parallel DataFrame of numeric metric means (for highlighting).
+
+    `metric` selects which mean/std columns the pivot uses --
+    e.g. 'balanced_acc' for test bacc or 'val_bacc' for the early-stop /
+    checkpoint-selection metric."""
     # Establish a stable row ordering: model (paper-quality first), then
     # variant, then augment. The order list is fixed; new models can be
     # appended without disturbing the existing rows.
@@ -382,29 +392,31 @@ def _build_pivot(summ_df):
                 num.at[(m, v, a), task] = np.nan
             else:
                 r = cell.iloc[0]
-                fmt.at[(m, v, a), task] = _cell_str(r)
-                num.at[(m, v, a), task] = r["balanced_acc_mean"] or np.nan
+                fmt.at[(m, v, a), task] = _cell_str(r, metric=metric)
+                num.at[(m, v, a), task] = r[f"{metric}_mean"] or np.nan
 
     return fmt, num
 
 
 def _render_csv(summ_df, path):
-    """Long-form CSV with all metrics (not just bal_acc)."""
+    """Long-form CSV with all metrics (test + val), one row per (model,
+    variant, aug, task)."""
     cols = [
         "model", "variant", "augment", "task", "n_seeds", "n_degenerate",
         "balanced_acc_mean", "balanced_acc_std",
         "auc_mean", "auc_std",
         "f1_mean", "f1_std",
         "accuracy_mean", "accuracy_std",
+        "val_bacc_mean", "val_bacc_std",
     ]
     summ_df[cols].to_csv(path, index=False, float_format="%.4f")
     print(f"  CSV       : {path}")
 
 
-def _render_png(fmt, num, path):
+def _render_png(fmt, num, path, title_metric: str = "test balanced accuracy"):
     """Render a matplotlib `ax.table` mirroring the look of
     `outputs/ViT_B_mae75/vit_combined_table.png`. Best-per-column cells
-    are bolded; chance-row reference is drawn at the bottom."""
+    are bolded. `title_metric` shows which metric the cells represent."""
     try:
         import matplotlib
         matplotlib.use("Agg")
@@ -461,7 +473,7 @@ def _render_png(fmt, num, path):
         tab[i, 0].set_text_props(ha="left")
         tab[i, 0].PAD = 0.04
 
-    plt.title("MRI models — test balanced accuracy by task "
+    plt.title(f"MRI models — {title_metric} by task "
               "(mean ± std across seeds, n)", pad=14, fontsize=11)
 
     # ── Footnote: augment legend ────────────────────────────────────────
@@ -479,7 +491,7 @@ def _render_png(fmt, num, path):
     print(f"  PNG       : {path}")
 
 
-def _render_tex(fmt, num, path):
+def _render_tex(fmt, num, path, title_metric: str = "test balanced accuracy"):
     """Booktabs LaTeX table — drop into the thesis source tree directly."""
     n_tasks = len(TASK_ORDER)
     col_spec = "l" + "c" * n_tasks
@@ -487,7 +499,7 @@ def _render_tex(fmt, num, path):
     lines = [
         r"\begin{table}[ht]",
         r"\centering",
-        r"\caption{MRI models -- test balanced accuracy by task "
+        r"\caption{MRI models -- " + title_metric + r" by task "
         r"(mean $\pm$ std across seeds; n in parentheses). Best per task "
         r"in \textbf{bold}.}",
         r"\label{tab:mri_cross_model}",
@@ -613,11 +625,24 @@ def main():
     summ_df.loc[_vit_t_scratch, "model"]   = "ViT-scratch"
     summ_df.loc[_vit_t_scratch, "variant"] = "tiny"
 
-    fmt, num = _build_pivot(summ_df)
-
+    # ── Test metrics (legacy default) ─────────────────────────────────────
+    fmt_test, num_test = _build_pivot(summ_df, metric="balanced_acc")
     _render_csv(summ_df, os.path.join(args.out, "cross_model_table.csv"))
-    _render_png(fmt, num, os.path.join(args.out, "cross_model_table.png"))
-    _render_tex(fmt, num, os.path.join(args.out, "cross_model_table.tex"))
+    _render_png(fmt_test, num_test,
+                os.path.join(args.out, "cross_model_table.png"),
+                title_metric="test balanced accuracy")
+    _render_tex(fmt_test, num_test,
+                os.path.join(args.out, "cross_model_table.tex"),
+                title_metric="test balanced accuracy")
+
+    # ── Val metrics (early-stop / checkpoint-selection metric) ───────────
+    fmt_val, num_val = _build_pivot(summ_df, metric="val_bacc")
+    _render_png(fmt_val, num_val,
+                os.path.join(args.out, "cross_model_table_val.png"),
+                title_metric="val balanced accuracy (early-stop metric)")
+    _render_tex(fmt_val, num_val,
+                os.path.join(args.out, "cross_model_table_val.tex"),
+                title_metric="val balanced accuracy (early-stop metric)")
 
     _print_stdout_summary(summ_df)
 
