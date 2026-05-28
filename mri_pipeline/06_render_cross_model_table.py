@@ -35,11 +35,23 @@ from __future__ import annotations
 import argparse
 import glob
 import importlib.util
+import io
 import os
 import sys
 
 import numpy as np
 import pandas as pd
+
+# Windows cp1252 stdout can't print the Unicode superscripts used in the
+# augment legend. Re-bind stdout to a utf-8 buffer so the sanity-check dump
+# doesn't crash. (PNG/CSV/TeX renderers always write utf-8 to disk and are
+# unaffected by this.)
+if hasattr(sys.stdout, "buffer"):
+    try:
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8",
+                                      errors="replace", line_buffering=True)
+    except Exception:
+        pass
 
 # ---------------------------------------------------------------------------
 # Import helpers from the existing per-task aggregator (single source of
@@ -109,15 +121,50 @@ def _group_key(row) -> tuple:
 
 
 def _row_label(model, variant, augment) -> str:
-    """Render the row header. Augment dropped where it's the only one
-    a model has (e.g. ViT-MAE always trains under one fixed setting)."""
+    """Render the row header. Augment carries a Unicode-superscript marker
+    (see AUG_LEGEND_LINES under the table) so a reader can decode the
+    augmentation policy without checking source. Unknown augments are
+    rendered without a superscript -- the legend mapping is the source of
+    truth."""
     lab = f"{model} / {variant}"
     if augment not in ("-", None, ""):
-        lab += f" / {augment}"
+        sup = AUG_SUPERSCRIPT.get(augment, "")
+        lab += f" / {augment}{sup}"
     return lab
 
 
 # ---------------------------------------------------------------------------
+# Augment legend: each label below maps to a concrete MONAI pipeline. The
+# table cells get a Unicode-superscript marker after the aug name and a
+# matching footnote block under the PNG / a caption note in the TeX so the
+# reader can decode each label without having to read source.
+AUG_SUPERSCRIPT = {
+    "none":         "⁰",   # 0
+    "random":       "¹",   # 1
+    "stochastic":   "²",   # 2
+    "plus_original": "³",  # 3
+    "flips":        "⁴",   # 4
+    "flips+strong": "⁵",   # 5
+}
+AUG_LEGEND_LINES = [
+    "Augmentation key:",
+    "⁰ none = no train-time augmentation (frozen-encoder cached forward, "
+    "or --augment=none).",
+    "¹ random = ViT trainer default: RandFlip×3 + RandRotate90 + "
+    "RandScaleIntensity + RandShiftIntensity (each fires stochastically at "
+    "p≈0.2).",
+    "² stochastic = BrainMVP trainer: RandFlip×3 + RandAffine + "
+    "RandGaussianNoise + intensity jitter (BrainMVP-internal pipeline, "
+    "always-on stochastic).",
+    "³ plus_original = originals retained + K=1 deterministic augmented "
+    "copy (p=1.0); the inner aug ops are the SAME as the trainer's stochastic "
+    "set (ViT: random ops; BrainMVP: stochastic ops).",
+    "⁴ flips = RandFlipd along 3 axes only (AG-MS3D legacy, AG-MS3D "
+    "rescue1 vanilla, Spasov-CNN).",
+    "⁵ flips+strong = flips + RandAffine + RandGaussianNoise + "
+    "RandBiasField + RandAdjustContrast (AG-MS3D rescue2, --strong_aug).",
+]
+
 # Augment back-fill: the per-pipeline trainers were written independently and
 # do not all record an `augment` field in metrics.json. The values below are
 # derived from each trainer's own _train_transform (verified by inspecting
@@ -416,6 +463,16 @@ def _render_png(fmt, num, path):
 
     plt.title("MRI models — test balanced accuracy by task "
               "(mean ± std across seeds, n)", pad=14, fontsize=11)
+
+    # ── Footnote: augment legend ────────────────────────────────────────
+    # Placed below the table via fig.text so it doesn't compete with the
+    # cell grid. Reserves room at the bottom of the figure via subplots_
+    # adjust + figsize bump so bbox_inches='tight' doesn't clip it.
+    legend_text = "\n".join(AUG_LEGEND_LINES)
+    fig.text(0.02, -0.005, legend_text, ha="left", va="top",
+             fontsize=7, family="monospace",
+             linespacing=1.4)
+
     fig.tight_layout()
     fig.savefig(path, dpi=180, bbox_inches="tight")
     plt.close(fig)
@@ -462,8 +519,24 @@ def _render_tex(fmt, num, path):
         header = _row_label(m, v, a).replace("&", r"\&")
         lines.append(header + " & " + " & ".join(cells) + r" \\")
 
+    # ── Augment-legend footnote (matches PNG) ────────────────────────────
+    # Each line is a separate \footnotesize row beneath the table; we use
+    # text-mode superscripts via \textsuperscript so it renders without
+    # math mode and matches the Unicode markers in the cell labels.
+    def _tex_escape(s: str) -> str:
+        return (s.replace("\\", r"\textbackslash{}").replace("&", r"\&")
+                 .replace("%", r"\%").replace("_", r"\_")
+                 .replace("≈", r"$\approx$").replace("×", r"$\times$"))
+    sup_to_idx = {v: k for k, v in AUG_SUPERSCRIPT.items()}  # for ref only
+    legend_tex_lines = [
+        r"\multicolumn{" + str(n_tasks + 1) + r"}{l}{\footnotesize "
+        + _tex_escape(line) + r"} \\"
+        for line in AUG_LEGEND_LINES
+    ]
+
     lines += [
         r"\bottomrule",
+    ] + legend_tex_lines + [
         r"\end{tabular}",
         r"\end{table}",
     ]
@@ -529,6 +602,16 @@ def main():
     summ_df.loc[_braindino_cached, "model"]   = "BrainDINO"
     summ_df.loc[_braindino_cached, "variant"] = "frozen"
     summ_df.loc[_braindino_cached, "augment"] = "none"
+
+    # Merge the ViT-from-scratch family under one model name so the two sizes
+    # appear as sibling sub-rows in the table (apples-to-apples size ablation):
+    #   ViT-scratch / baseline / <aug>   <- existing ViT-B from-scratch sweep
+    #   ViT-scratch / tiny     / <aug>   <- new ViT-Ti ablation (vit_tiny_baseline/)
+    _vit_b_scratch = (summ_df["model"] == "ViT-scratch")
+    summ_df.loc[_vit_b_scratch, "variant"] = "baseline"
+    _vit_t_scratch = (summ_df["model"] == "ViT-Tiny")
+    summ_df.loc[_vit_t_scratch, "model"]   = "ViT-scratch"
+    summ_df.loc[_vit_t_scratch, "variant"] = "tiny"
 
     fmt, num = _build_pivot(summ_df)
 
