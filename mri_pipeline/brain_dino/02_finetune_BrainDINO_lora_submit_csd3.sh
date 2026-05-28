@@ -50,18 +50,28 @@ module load cuda/12.1
 source "$(conda info --base)/etc/profile.d/conda.sh"
 conda activate mri
 
-# -- Pre-flight: peft must be importable (silently no-op if already there) ---
-# The first rescue1 run (job 29738808) crashed every cell because peft wasn't
-# installed in the mri env. Install lazily so a missing peft is fixed once
-# without needing to re-trigger 45 array failures.
-python -c "import peft" 2>/dev/null || {
-    echo "[setup] peft not found -- installing 'peft>=0.7' into mri env..."
-    pip install --quiet 'peft>=0.7' || {
-        echo "[ERROR] pip install peft failed. Re-run interactively:"
-        echo "        conda activate mri && pip install 'peft>=0.7'"
-        exit 1
-    }
-    python -c "import peft; print(f'[setup] peft installed: {peft.__version__}')"
+# -- Pre-flight: peft's LoRA API must be importable -------------------------
+# Tests the EXACT import the trainer uses (apply_lora_to_encoder line 351).
+# A bare `import peft` is NOT enough -- peft pulls in transformers.auto,
+# which in modern transformers chain-imports `continuous_batching` ->
+# `torch.distributed.tensor.device_mesh`. That submodule only exists in
+# PyTorch >= 2.5, so an env with torch 2.3 + transformers >= 4.51 + peft
+# 0.19 will silently pass `import peft` (it doesn't trigger the chain)
+# but crash at `from peft import LoraConfig, get_peft_model` -- exactly
+# the failure the rescue1 sweep (job 29738808) hit on all 45 cells.
+python -c "from peft import LoraConfig, get_peft_model" 2>/dev/null || {
+    echo "[ERROR] 'from peft import LoraConfig, get_peft_model' failed."
+    echo "        Likely a torch/transformers/peft version mismatch."
+    python -c "import torch, transformers, peft; print(
+        f'         torch={torch.__version__}  '
+        f'transformers={transformers.__version__}  '
+        f'peft={peft.__version__}')" 2>/dev/null || true
+    echo "        Compatible pins for torch 2.3.x:"
+    echo "            pip install 'transformers==4.47.*' 'peft==0.10.*'"
+    echo "        Compatible pins for torch 2.4.x:"
+    echo "            pip install 'transformers==4.49.*' 'peft==0.12.*'"
+    echo "        Fix once interactively on the login node, then resubmit."
+    exit 1
 }
 
 # -- Hardcoded paths ----------------------------------------------------------
