@@ -156,31 +156,27 @@ AUG_SUPERSCRIPT = {
 # trainer run. _row_label strips this for the superscript lookup and re-appends
 # it as the final label-tail marker; the legend block below explains the sweep.
 HP_TUNED_MARKER = "†"
+# Each entry is one logical legend item. Long items are split across multiple
+# physical lines (subsequent lines indented by 4 spaces to match the marker
+# column) so the legend block fits comfortably within the table width at
+# fontsize=7 monospace. Keep each physical line <= ~130 chars.
 AUG_LEGEND_LINES = [
     "Augmentation key:",
-    "⁰ none = no train-time augmentation (frozen-encoder cached forward, "
-    "or --augment=none).",
-    "¹ random = ViT trainer default: RandFlip×3 + RandRotate90 + "
-    "RandScaleIntensity + RandShiftIntensity (each fires stochastically at "
-    "p≈0.2).",
-    "² stochastic = BrainMVP trainer: RandFlip×3 + RandAffine + "
-    "RandGaussianNoise + intensity jitter (BrainMVP-internal pipeline, "
-    "always-on stochastic).",
-    "³ plus_original = originals retained + K=1 deterministic augmented "
-    "copy (p=1.0); the inner aug ops are the SAME as the trainer's stochastic "
-    "set (ViT: random ops; BrainMVP: stochastic ops).",
-    "⁴ flips = RandFlipd along 3 axes only (AG-MS3D legacy, AG-MS3D "
-    "rescue1 vanilla, Spasov-CNN).",
-    "⁵ flips+strong = flips + RandAffine + RandGaussianNoise + "
-    "RandBiasField + RandAdjustContrast (AG-MS3D rescue2, --strong_aug).",
-    "† HP-tuned via the cached-head sweep (frozen encoder + linear head "
-    "on cached embeddings; trainer = 04_head_finetune_from_embeddings.py). "
-    "Grid: lr ∈ {1e-3, 1e-4, 1e-5} × drop_rate ∈ {0.1, 0.2, 0.3} × "
-    "label_smoothing ∈ {0.0, 0.1} = 18 HP combos per (task, seed); "
-    "epochs=50, wd=1e-5, patience=15, batch=full. HP winner selected per "
-    "task by mean val_bacc across 3 seeds (n=3 in the cell = 3 seeds at "
-    "the winning HP combo). Non-† rows are single-HP runs from the "
-    "on-the-fly trainer.",
+    "⁰ none          = no train-time augmentation (frozen-encoder cached forward, or --augment=none).",
+    "¹ random        = ViT trainer default; RandFlip×3 + RandRotate90 + RandScaleIntensity + RandShiftIntensity,",
+    "                  each fires stochastically at p ≈ 0.2.",
+    "² stochastic    = BrainMVP trainer; RandFlip×3 + RandAffine + RandGaussianNoise + intensity jitter,",
+    "                  always-on stochastic.",
+    "³ plus_original = originals retained + K=1 deterministic (p=1.0) augmented copy; inner ops match the",
+    "                  trainer's stochastic set (ViT: random ops; BrainMVP: stochastic ops).",
+    "⁴ flips         = RandFlipd along 3 axes only (AG-MS3D legacy, AG-MS3D rescue1 vanilla, Spasov-CNN).",
+    "⁵ flips+strong  = flips + RandAffine + RandGaussianNoise + RandBiasField + RandAdjustContrast",
+    "                  (AG-MS3D rescue2, --strong_aug).",
+    "† HP-tuned      = cached-head sweep (frozen encoder + linear head on cached embeddings; trainer =",
+    "                  04_head_finetune_from_embeddings.py). Grid: lr ∈ {1e-3, 1e-4, 1e-5} × drop_rate ∈",
+    "                  {0.1, 0.2, 0.3} × label_smoothing ∈ {0.0, 0.1} = 18 HP combos per (task, seed);",
+    "                  epochs=50, wd=1e-5, patience=15. HP winner selected per task by mean val_bacc across",
+    "                  3 seeds (n=3 = 3 seeds at the winning HP combo). Non-† rows are single-HP runs.",
 ]
 
 # Augment back-fill: the per-pipeline trainers were written independently and
