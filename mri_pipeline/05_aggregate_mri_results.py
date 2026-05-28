@@ -53,6 +53,8 @@ MODEL_TREES = [
     ("AG-MS3D-sep",      "agms3d_outputs/AGMS3DCNN/*/seed_*/metrics.json"),
     # Post-rescue vanilla-backbone run (--lr 1e-3, --label_smoothing 0.1).
     ("AG-MS3D-vanilla",  "agms3d_outputs/AGMS3DCNN_vanilla/*/seed_*/metrics.json"),
+    # Rescue #2: vanilla Conv3d + slim head + strong aug (--lr 5e-4 --ls 0.1).
+    ("AG-MS3D-r2",       "agms3d_outputs_rescue2/AGMS3DCNN_vanilla_slim/*/seed_*/metrics.json"),
     ("BrainMVP",         "brainmvp_debug/aug_*/BrainMVP_uniformer/*/seed_*/*/metrics.json"),
     # BrainDINO supervised finetune sweeps. Three globs cover (a) the legacy
     # un-nested layout (residual frozen+head runs predating the strategy-

@@ -251,13 +251,14 @@ class AGMS3DCNN(nn.Module):
 
     def __init__(self, in_channels: int = 1, n_outputs: int = 2,
                  dropout: float = DEFAULT_DROPOUT, base: int = 32,
-                 backbone: str = "separable"):
+                 backbone: str = "separable", head: str = "large"):
         super().__init__()
         kw = dict(base=base, dropout=dropout, backbone=backbone)
         self.fine   = Pathway(in_channels, **kw)
         self.medium = Pathway(in_channels, **kw)
         self.coarse = Pathway(in_channels, **kw)
         self.backbone = backbone
+        self.head_kind = head
 
         # Learnable pathway fusion weights (softmaxed in forward so they sum to 1).
         self.alpha = nn.Parameter(torch.ones(3) / 3.0)
@@ -265,21 +266,33 @@ class AGMS3DCNN(nn.Module):
         self.attn = SpatialAttention3D(kernel_size=7)
         self.gap = nn.AdaptiveAvgPool3d(1)
 
-        # Classification head per paper: GAP -> FC(1024) -> FC(256) -> FC(n_outputs).
+        # Classification head. Two variants:
+        #   'large' (paper-canonical): GAP -> FC(1024) -> FC(256) -> FC(n_outputs).
+        #       ~130k head params on top of a 2.9M backbone -- with ~600 train
+        #       subjects this has enough capacity to memorise the majority class
+        #       and the rescue1 sweep (lr=3e-3, ls=0) collapsed on 14/15 cells.
+        #   'slim' (rescue2): GAP -> FC(256) -> FC(128) -> FC(n_outputs). ~4x
+        #       fewer head params; reduces capacity for the constant-predictor
+        #       fixed point and frees gradient signal for the conv pathways.
         # LazyLinear adapts to whatever channel count the pathway emits
         # (initialised on the first forward; the training script does one
         # eval+no_grad() dummy forward before the optimiser is built).
-        # NOTE on capacity: the paper's 1024 -> 256 head adds ~393k params vs
-        # a 256 -> 128 head. With ~600 train subjects this may overfit; if
-        # validation balanced-acc plateaus low / train-val gap blows up,
-        # consider reducing the head to LazyLinear(256) -> Linear(128) ->
-        # Linear(n_outputs) and noting the deviation in the writeup.
-        self.head = nn.Sequential(
-            nn.Flatten(),
-            nn.LazyLinear(1024), nn.ELU(inplace=True), nn.Dropout(p=dropout),
-            nn.Linear(1024, 256), nn.ELU(inplace=True), nn.Dropout(p=dropout),
-            nn.Linear(256, n_outputs),
-        )
+        if head == "large":
+            self.head = nn.Sequential(
+                nn.Flatten(),
+                nn.LazyLinear(1024), nn.ELU(inplace=True), nn.Dropout(p=dropout),
+                nn.Linear(1024, 256), nn.ELU(inplace=True), nn.Dropout(p=dropout),
+                nn.Linear(256, n_outputs),
+            )
+        elif head == "slim":
+            self.head = nn.Sequential(
+                nn.Flatten(),
+                nn.LazyLinear(256), nn.ELU(inplace=True), nn.Dropout(p=dropout),
+                nn.Linear(256, 128), nn.ELU(inplace=True), nn.Dropout(p=dropout),
+                nn.Linear(128, n_outputs),
+            )
+        else:
+            raise ValueError(f"head must be 'large' or 'slim', got {head!r}")
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Args:

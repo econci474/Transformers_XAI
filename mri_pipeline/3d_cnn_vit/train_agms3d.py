@@ -216,15 +216,37 @@ def load_split(split_csv: Path, matched_df: pd.DataFrame, cnn_dir: Path,
 
 
 # ── Datasets (identical to train_3dcnn.py) ────────────────────────────────────
-def _train_transform() -> mt.Compose:
-    return mt.Compose([
+def _train_transform(strong_aug: bool = False) -> mt.Compose:
+    """Training pipeline.
+
+    Default ('strong_aug=False'): random axis flips only -- matches the
+    rescue1 sweep (--lr 3e-3) which collapsed on 14/15 cells.
+    'strong_aug=True' (rescue2): adds 4 MONAI augmentations on top --
+    small affine (rotation+translation), Gaussian noise, bias-field
+    inhomogeneity, and intensity contrast jitter. Augment params are
+    conservative (within-modality realistic) so the model sees novel
+    intensity/anatomy variation each epoch instead of memorising 580
+    fixed volumes."""
+    base = [
         mt.LoadImaged(keys=["image"]),
         mt.EnsureChannelFirstd(keys=["image"]),
         mt.RandFlipd(keys=["image"], prob=0.5, spatial_axis=0),
         mt.RandFlipd(keys=["image"], prob=0.5, spatial_axis=1),
         mt.RandFlipd(keys=["image"], prob=0.5, spatial_axis=2),
-        mt.ToTensord(keys=["image"]),
-    ])
+    ]
+    if strong_aug:
+        base += [
+            mt.RandAffined(keys=["image"], prob=0.5,
+                           rotate_range=(0.17, 0.17, 0.17),   # ~10 degrees
+                           translate_range=(8, 8, 8),         # ~5% of 193
+                           mode="bilinear", padding_mode="zeros"),
+            mt.RandGaussianNoised(keys=["image"], prob=0.3, mean=0.0, std=0.05),
+            mt.RandBiasFieldd(keys=["image"], prob=0.3,
+                              coeff_range=(0.0, 0.1), degree=3),
+            mt.RandAdjustContrastd(keys=["image"], prob=0.3, gamma=(0.85, 1.15)),
+        ]
+    base.append(mt.ToTensord(keys=["image"]))
+    return mt.Compose(base)
 
 
 def _eval_transform() -> mt.Compose:
@@ -235,11 +257,12 @@ def _eval_transform() -> mt.Compose:
     ])
 
 
-def build_dataset(df: pd.DataFrame, train: bool) -> Dataset:
+def build_dataset(df: pd.DataFrame, train: bool,
+                  strong_aug: bool = False) -> Dataset:
     items = [{"image": r.image_path, "label": int(r.label)}
              for r in df.itertuples()]
-    return Dataset(data=items,
-                   transform=_train_transform() if train else _eval_transform())
+    tf = _train_transform(strong_aug=strong_aug) if train else _eval_transform()
+    return Dataset(data=items, transform=tf)
 
 
 # ── Metrics (identical to train_3dcnn.py / ViT pipeline) ──────────────────────
@@ -386,6 +409,16 @@ def parse_args():
     p.add_argument("--base_filters", type=int, default=32,
                    help="Pathway base channel count (paper: 32). Channels "
                         "double only at downsample steps -> 4*base in B5.")
+    p.add_argument("--head", type=str, default="large",
+                   choices=["large", "slim"],
+                   help="Classification-head size. 'large' = paper-default "
+                        "1024->256->n_outputs (~130k head params). 'slim' "
+                        "= 256->128->n_outputs (~4x fewer, rescue2 config).")
+    p.add_argument("--strong_aug", action="store_true",
+                   help="Stack 4 MONAI augmentations (RandAffine, "
+                        "RandGaussianNoise, RandBiasField, RandAdjustContrast) "
+                        "on top of the default random axis flips. Rescue2 "
+                        "config -- needed for from-scratch on ~580 subjects.")
     p.add_argument("--num_workers", type=int, default=2)
     p.add_argument("--max_subjects", type=int, default=None,
                    help="Cap rows per split (smoke test).")
@@ -413,7 +446,15 @@ def main():
     # 'AGMS3DCNN' tree (separable, pre-rescue) is preserved verbatim;
     # the post-rescue sweeps will live under 'AGMS3DCNN_vanilla' /
     # 'AGMS3DCNN_separable' as appropriate.
-    model_slug = f"AGMS3DCNN_{args.backbone}"
+    # Bake backbone + head choice into the slug so vanilla-large, vanilla-slim,
+    # separable-large, etc. land in sibling output trees and the cross-model
+    # aggregator can read them all without collision. Keep 'AGMS3DCNN_vanilla'
+    # = vanilla+large (rescue1) for backwards compatibility with the rescue1
+    # outputs/metrics.json files already on disk.
+    if args.head == "large":
+        model_slug = f"AGMS3DCNN_{args.backbone}"
+    else:
+        model_slug = f"AGMS3DCNN_{args.backbone}_{args.head}"
     out_dir = Path(args.out_dir) / model_slug / args.task / f"seed_{args.seed}"
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -457,10 +498,11 @@ def main():
     manifest[["split", "Patient_ID", "bids_ses", "label", "image_path"]].to_csv(
         out_dir / "dataset_manifest.csv", index=False)
 
-    train_loader = DataLoader(build_dataset(train_df, train=True),
-                              batch_size=args.batch_size, shuffle=True,
-                              num_workers=args.num_workers, pin_memory=True,
-                              drop_last=True)
+    train_loader = DataLoader(
+        build_dataset(train_df, train=True, strong_aug=args.strong_aug),
+        batch_size=args.batch_size, shuffle=True,
+        num_workers=args.num_workers, pin_memory=True,
+        drop_last=True)
     val_loader = DataLoader(build_dataset(val_df, train=False), batch_size=1,
                             shuffle=False, num_workers=args.num_workers,
                             pin_memory=True)
@@ -472,7 +514,7 @@ def main():
     ModelCls = load_agms3d_class()
     model = ModelCls(in_channels=1, n_outputs=num_labels,
                      dropout=args.dropout, base=args.base_filters,
-                     backbone=args.backbone).to(device)
+                     backbone=args.backbone, head=args.head).to(device)
     # Materialise LazyLinear head with one dummy forward (eval+no_grad so
     # BatchNorm running stats are untouched). Without this, .numel() and
     # AdamW(model.parameters()) both fail on the UninitializedParameter.
@@ -511,6 +553,10 @@ def main():
                                     "epochs": args.epochs, "lr": args.lr,
                                     "batch_size": args.batch_size,
                                     "base_filters": args.base_filters,
+                                    "backbone": args.backbone,
+                                    "head": args.head,
+                                    "label_smoothing": args.label_smoothing,
+                                    "strong_aug": args.strong_aug,
                                     "n_params": n_params}, reinit=True)
         except ImportError:
             print("  [WARN] --wandb set but wandb not installed; local-only.")
@@ -667,6 +713,8 @@ def main():
             "patience":              args.patience,
             "dropout":               args.dropout,
             "base_filters":          args.base_filters,
+            "head":                  args.head,
+            "strong_aug":            bool(args.strong_aug),
             "label_smoothing":       args.label_smoothing,
             "class_weights":         {i: round(float(w), 4) for i, w in enumerate(cw.tolist())},
             "n_train":               int(len(train_df)),
