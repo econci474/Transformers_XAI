@@ -177,6 +177,35 @@ AUG_LEGEND_LINES = [
     "                  3 seeds (n=3 = 3 seeds at the winning HP combo). Non-† rows are single-HP runs.",
 ]
 
+# Per-row training HPs. Each line documents the trainer-config HPs used for
+# one (model, variant, aug-class) group in the table. HPs were verified by
+# cross-checking the W&B run configs against local metrics.json `config`
+# blocks (all matched). Augment doesn't change HPs except where it specifies
+# the pipeline (already in the aug legend); so rows here are grouped by
+# (model, variant, augment-class) rather than per individual aug.
+HP_KEY_LINES = [
+    "HP key (training HPs for the runs reported above; verified vs W&B run configs):",
+    "  BrainDINO  / full_ft / *           lr=1e-4, wd=1e-5, drop=0.2, ls=0.0, epochs=50,  patience=25, bs=2, Adam.",
+    "  BrainDINO  / lora    / *           lr=1e-4, wd=1e-5, drop=0.2, ls=0.0, epochs=8,   patience=25, bs=2, lora_rank=8, Adam.",
+    "  BrainDINO  / frozen  / {stoch., plus_orig}  lr=1e-4, wd=1e-5, drop=0.2, ls=0.0, epochs=100, patience=25, bs=2, Adam (encoder frozen).",
+    "  BrainDINO  / frozen  / none†       cached-head HP sweep; HP-winner picked per task from the † grid above.",
+    "  BrainMVP   / full_ft / *           lr=5e-5, wd=1e-4, drop=0.1, ls=0.0, epochs=200, patience=50, bs=4, AdamW.",
+    "  BrainMVP   / frozen  / {stoch., plus_orig}  lr=1e-3, wd=1e-4, drop=0.1, ls=0.0, epochs=100, patience=50, bs=4, AdamW.",
+    "  BrainMVP   / frozen  / none†       cached-head HP sweep; HP-winner picked per task from the † grid above.",
+    "  ViT-MAE75  / full_ft / *           lr=1e-4, wd=1e-4, drop_path=0.1, attn_drop=0.1, ls=0.0, llrd_gamma=1.0,",
+    "                                      epochs=50, patience=10, bs=4 (eff bs=32 via grad_accum=8), AdamW + 10-epoch warmup.",
+    "  ViT-MAE75  / frozen  / random      lr=1e-3, wd=1e-4, drop_path=0.1, attn_drop=0.1, ls=0.0, llrd_gamma=0.7",
+    "                                      (LLRD is a math no-op for frozen), epochs=70, patience=10, bs=4, grad_accum=8, AdamW.",
+    "  ViT-MAE75  / frozen  / plus_orig.  as ViT-MAE75/frozen/random but llrd_gamma=1.0 (sweep vit_outputs_hi_lr/aug_plus_original/).",
+    "  ViT-MAE75  / frozen  / none†       cached-head HP sweep; HP-winner picked per task from the † grid above.",
+    "  ViT-scratch / baseline / random    lr=1e-3, wd=1e-4, drop_path=0.1, attn_drop=0.1, ls=0.0, llrd_gamma=1.0,",
+    "                                      epochs=100, patience=10, bs=4 (eff bs=32 via grad_accum=8), AdamW + 10-epoch warmup, random init.",
+    "  AG-MS3D-vanilla / vanilla / flips  lr=3e-3, ls=0.0, epochs=60, bs=8, base_filters=32 (rescue1 vanilla Conv3d, RandFlipd×3).",
+    "  AG-MS3D-sep     / agms3d / flips   same HPs as AG-MS3D-vanilla, separable Conv3d backbone (legacy; collapsed 14/15 cells).",
+    "  Spasov-CNN / vanilla   / flips     lr=1e-3, wd=1e-4, drop=0.1, ls=0.0, epochs=60, patience=15, bs=8, warmup=5 (n_params≈518k).",
+    "  Spasov-CNN / separable / flips     same HPs as Spasov-CNN/vanilla, separable Conv3d backbone (n_params≈26k).",
+]
+
 # Augment back-fill: the per-pipeline trainers were written independently and
 # do not all record an `augment` field in metrics.json. The values below are
 # derived from each trainer's own _train_transform (verified by inspecting
@@ -438,8 +467,13 @@ def _render_png(fmt, num, path, title_metric: str = "test balanced accuracy"):
     n_rows = len(fmt)
     n_cols = len(TASK_ORDER) + 1  # +1 for the "Model / variant / augment" col
 
+    # Height calc: tight per-row estimate (0.22" / row) so the axes is sized
+    # to actually fit the table instead of leaving wasted whitespace above
+    # and below. `loc='upper center'` then anchors the table flush against
+    # the top of the axes, eliminating the centered-in-axes vertical gap
+    # that the title and footnote previously had to absorb.
     fig, ax = plt.subplots(
-        figsize=(2.2 + 2.4 * len(TASK_ORDER), 0.55 + 0.45 * (n_rows + 2))
+        figsize=(2.2 + 2.4 * len(TASK_ORDER), 0.15 + 0.22 * (n_rows + 2))
     )
     ax.axis("off")
 
@@ -455,13 +489,13 @@ def _render_png(fmt, num, path, title_metric: str = "test balanced accuracy"):
     tab = ax.table(
         cellText=body,
         colLabels=col_labels,
-        loc="center",
+        loc="upper center",   # was "center" -- anchors table flush to top
         cellLoc="center",
         colLoc="center",
     )
     tab.auto_set_font_size(False)
     tab.set_fontsize(8)
-    tab.scale(1.0, 1.35)
+    tab.scale(1.0, 1.15)      # was (1.0, 1.35) -- shorter cells
 
     # Bold the best (highest bal_acc) cell in each task column
     for j, task in enumerate(TASK_ORDER, start=1):
@@ -483,20 +517,24 @@ def _render_png(fmt, num, path, title_metric: str = "test balanced accuracy"):
         tab[i, 0].set_text_props(ha="left")
         tab[i, 0].PAD = 0.04
 
+    # pad=4 (was 14) pulls the title close to the table top edge.
     plt.title(f"MRI models — {title_metric} by task "
-              "(mean ± std across seeds, n)", pad=14, fontsize=11)
+              "(mean ± std across seeds, n)", pad=4, fontsize=11)
 
-    # ── Footnote: augment legend ────────────────────────────────────────
-    # Placed below the table via fig.text so it doesn't compete with the
-    # cell grid. Reserves room at the bottom of the figure via subplots_
-    # adjust + figsize bump so bbox_inches='tight' doesn't clip it.
-    legend_text = "\n".join(AUG_LEGEND_LINES)
-    fig.text(0.02, -0.005, legend_text, ha="left", va="top",
-             fontsize=7, family="monospace",
-             linespacing=1.4)
+    # ── Footnote: augment legend + per-row HP key ──────────────────────
+    # With loc='upper center' + tab.scale(1.0, 1.15), the table extends
+    # from y=1 down to y≈-0.15 in axes coords (the 1.15 scale overshoots
+    # axes height). Anchor the legend at y=-0.17 so it sits just below
+    # the table bottom with a small visual gap; bbox_inches='tight'
+    # crops the figure to fit. Blank line between blocks reads as a
+    # paragraph break.
+    legend_text = "\n".join(AUG_LEGEND_LINES + [""] + HP_KEY_LINES)
+    ax.text(0.0, -0.17, legend_text, transform=ax.transAxes,
+            ha="left", va="top", fontsize=7, family="monospace",
+            linespacing=1.4)
 
-    fig.tight_layout()
-    fig.savefig(path, dpi=180, bbox_inches="tight")
+    # pad_inches=0.05 (default 0.1) shaves another bit of outer crop.
+    fig.savefig(path, dpi=180, bbox_inches="tight", pad_inches=0.05)
     plt.close(fig)
     print(f"  PNG       : {path}")
 
@@ -555,10 +593,19 @@ def _render_tex(fmt, num, path, title_metric: str = "test balanced accuracy"):
         + _tex_escape(line) + r"} \\"
         for line in AUG_LEGEND_LINES
     ]
+    # Blank \multicolumn row visually separates the augment legend from
+    # the per-row HP key (matches the blank-line gap in the PNG block).
+    hp_key_tex_lines = [
+        r"\multicolumn{" + str(n_tasks + 1) + r"}{l}{} \\",
+    ] + [
+        r"\multicolumn{" + str(n_tasks + 1) + r"}{l}{\footnotesize "
+        + _tex_escape(line) + r"} \\"
+        for line in HP_KEY_LINES
+    ]
 
     lines += [
         r"\bottomrule",
-    ] + legend_tex_lines + [
+    ] + legend_tex_lines + hp_key_tex_lines + [
         r"\end{tabular}",
         r"\end{table}",
     ]
