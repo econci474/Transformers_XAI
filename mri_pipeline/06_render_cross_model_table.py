@@ -170,8 +170,6 @@ AUG_LEGEND_LINES = [
     "³ plus_original = originals retained + K=1 deterministic (p=1.0) augmented copy; inner ops match the",
     "                  trainer's stochastic set (ViT: random ops; BrainMVP: stochastic ops).",
     "⁴ flips         = RandFlipd along 3 axes only (AG-MS3D legacy, AG-MS3D rescue1 vanilla, Spasov-CNN).",
-    "⁵ flips+strong  = flips + RandAffine + RandGaussianNoise + RandBiasField + RandAdjustContrast",
-    "                  (AG-MS3D rescue2, --strong_aug).",
     "† HP-tuned      = cached-head sweep (frozen encoder + linear head on cached embeddings; trainer =",
     "                  04_head_finetune_from_embeddings.py). Grid: lr ∈ {1e-3, 1e-4, 1e-5} × drop_rate ∈",
     "                  {0.1, 0.2, 0.3} × label_smoothing ∈ {0.0, 0.1} = 18 HP combos per (task, seed);",
@@ -363,12 +361,10 @@ def _build_pivot(summ_df, metric: str = "balanced_acc"):
         "BrainMVP-cached":   3,
         "ViT-MAE75":         4,
         "ViT-MAE-cached":    5,
-        "ViT-Tiny":          6,
-        "ViT-scratch":       7,
-        "AG-MS3D-r2":        8,
-        "AG-MS3D-vanilla":   9,
-        "AG-MS3D-sep":      10,
-        "Spasov-CNN":       11,
+        "ViT-scratch":       6,
+        "AG-MS3D-vanilla":   7,
+        "AG-MS3D-sep":       8,
+        "Spasov-CNN":        9,
     }
     VARIANT_RANK = {
         "full_ft": 0, "lora": 1, "frozen": 2,
@@ -646,24 +642,23 @@ def main():
         (summ_df["augment"] == "none")
     )].reset_index(drop=True)
 
-    # Merge the ViT-from-scratch family under one model name so the two sizes
-    # appear as sibling sub-rows in the table (apples-to-apples size ablation):
-    #   ViT-scratch / baseline / <aug>   <- existing ViT-B from-scratch sweep
-    #   ViT-scratch / tiny     / <aug>   <- new ViT-Ti ablation (vit_tiny_baseline/)
-    _vit_b_scratch = (summ_df["model"] == "ViT-scratch")
-    summ_df.loc[_vit_b_scratch, "variant"] = "baseline"
-    _vit_t_scratch = (summ_df["model"] == "ViT-Tiny")
-    summ_df.loc[_vit_t_scratch, "model"]   = "ViT-scratch"
-    summ_df.loc[_vit_t_scratch, "variant"] = "tiny"
+    # ViT-from-scratch (ViT-B size only -- the ViT-Ti ablation was abandoned
+    # after seed_0 collapsed; see 05_aggregate_mri_results.py for the disabled
+    # ViT-Tiny MODEL_TREES entries). Relabel variant to "baseline" so the row
+    # header reads "ViT-scratch / baseline / <aug>" consistently.
+    summ_df.loc[summ_df["model"] == "ViT-scratch", "variant"] = "baseline"
 
-    # ── Test metrics (legacy default) ─────────────────────────────────────
+    # ── Test metrics ──────────────────────────────────────────────────────
+    # Filename suffix is _test (sibling of _val) so a quick glance at the
+    # outputs/ directory distinguishes the two -- avoids the prior trap where
+    # the unsuffixed `cross_model_table.png` got confused with the val table.
     fmt_test, num_test = _build_pivot(summ_df, metric="balanced_acc")
-    _render_csv(summ_df, os.path.join(args.out, "cross_model_table.csv"))
+    _render_csv(summ_df, os.path.join(args.out, "cross_model_table_test.csv"))
     _render_png(fmt_test, num_test,
-                os.path.join(args.out, "cross_model_table.png"),
+                os.path.join(args.out, "cross_model_table_test.png"),
                 title_metric="test balanced accuracy")
     _render_tex(fmt_test, num_test,
-                os.path.join(args.out, "cross_model_table.tex"),
+                os.path.join(args.out, "cross_model_table_test.tex"),
                 title_metric="test balanced accuracy")
 
     # ── Val metrics (early-stop / checkpoint-selection metric) ───────────

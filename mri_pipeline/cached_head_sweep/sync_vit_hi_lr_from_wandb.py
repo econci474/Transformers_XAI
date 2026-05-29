@@ -1,27 +1,28 @@
 """
 sync_vit_hi_lr_from_wandb.py
 ============================
-Synthesise per-run `metrics.json` shims for the ViT-MAE75 LLRD off (γ=1.0)
-full_ft sweep, from the `vit_debugging` W&B project. The "hi_lr" submit was
-mis-named: it didn't change LR, it tested LLRD off (γ=1.0) vs the default
-LLRD on (γ=0.7). For full_ft on all 5 tasks the γ=1.0 recipe consistently
-beats γ=0.7 by +0.017 to +0.037 test bacc, so we surface the γ=1.0 numbers
-as the new canonical ViT-MAE75 / full_ft row in the cross-model table.
+Synthesise per-run `metrics.json` shims for the ViT-MAE75 LLRD-off (γ=1.0)
+sweep from W&B project `vit_mae_hi_lr`. The "hi_lr" submit was mis-named:
+it didn't change LR, it tested LLRD off (γ=1.0) vs the legacy LLRD on
+(γ=0.7). The vit_mae_hi_lr project also covers aug=none and
+aug=plus_original variants that the legacy `vit_debugging` project doesn't.
 
-Writes shims at the canonical path the aggregator picks up:
+Writes shims at the canonical aggregator-matched paths:
 
-    D:/ADNI_BIDS_project/derivatives/vit_outputs_hi_lr/vit_outputs_hi_lr/
-        ViT_B_mae75/<task>/seed_<n>/full_ft/metrics.json
+    aug=random:        vit_outputs_hi_lr/ViT_B_mae75/<task>/seed_<n>/<strategy>/metrics.json
+    aug=<other>:       vit_outputs_hi_lr/aug_<aug>/ViT_B_mae75/<task>/seed_<n>/<strategy>/metrics.json
 
-(the double-nested layer matches what local rsync currently produces).
+(The aggregator's double-nest fallback also picks up
+`vit_outputs_hi_lr/vit_outputs_hi_lr/ViT_B_mae75/...` for already-rsynced
+files, so this script's shims don't duplicate those.)
+
 The _provenance flag in config marks these as shims; a future rsync of
 the canonical metrics.json from CSD3 will overwrite them safely.
 
 Usage:
     python mri_pipeline/cached_head_sweep/sync_vit_hi_lr_from_wandb.py
     python mri_pipeline/cached_head_sweep/sync_vit_hi_lr_from_wandb.py --task T1c_binary
-    # Override the LLRD or strategy filter
-    python mri_pipeline/cached_head_sweep/sync_vit_hi_lr_from_wandb.py --llrd_gamma 0.7
+    python mri_pipeline/cached_head_sweep/sync_vit_hi_lr_from_wandb.py --strategy frozen
 """
 
 from __future__ import annotations
@@ -33,11 +34,8 @@ from pathlib import Path
 import pandas as pd
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-WANDB_CSV = REPO_ROOT / "mri_pipeline" / "cached_head_sweep" / "wandb_vit_debugging.csv"
-# Double-nested path matches the current local rsync layout
-# (D:/.../vit_outputs_hi_lr/vit_outputs_hi_lr/ViT_B_mae75/...).
-# The aggregator's fallback glob also handles a flat layout.
-DERIV_ROOT = Path(r"D:/ADNI_BIDS_project/derivatives/vit_outputs_hi_lr/vit_outputs_hi_lr/ViT_B_mae75")
+WANDB_CSV = REPO_ROOT / "mri_pipeline" / "cached_head_sweep" / "wandb_vit_mae_hi_lr.csv"
+DERIV_BASE = Path(r"D:/ADNI_BIDS_project/derivatives/vit_outputs_hi_lr")
 
 
 def parse_args():
@@ -47,10 +45,11 @@ def parse_args():
                    help="Filter to runs with this llrd_gamma. Default 1.0 "
                         "(the LLRD-off variant that beats LLRD-on on every "
                         "full_ft task).")
-    p.add_argument("--strategy", default="full_ft",
-                   help="Filter to this strategy. Default 'full_ft' -- the "
-                        "only strategy where the LLRD difference is meaningful "
-                        "(frozen is functionally noise).")
+    p.add_argument("--strategy", default=None,
+                   help="Filter to this strategy (full_ft|frozen). Default: both.")
+    p.add_argument("--augment", default=None,
+                   help="Filter to this augment (none|random|plus_original). "
+                        "Default: all augments present in the CSV.")
     p.add_argument("--task", default=None,
                    help="Restrict to a single task. Default: all 5 tasks.")
     return p.parse_args()
@@ -121,7 +120,8 @@ def _row_to_metrics(row: pd.Series) -> dict:
             "n_train":               int(row["config/n_train"]),
             "n_val":                 int(row["config/n_val"]),
             "n_test":                int(row["config/n_test"]),
-            "best_val_balanced_acc": float(row["summary/best_val_balanced_acc"]),
+            "best_val_balanced_acc": float(row["summary/best_val_balanced_acc"])
+                                     if pd.notna(row.get("summary/best_val_balanced_acc")) else None,
             "_provenance":           "shim_from_wandb_summary",
         },
         "test_metrics":         test_metrics,
@@ -130,33 +130,55 @@ def _row_to_metrics(row: pd.Series) -> dict:
     }
 
 
+def _out_dir(row: pd.Series) -> Path:
+    """Mirror the 04h submit's aug-baked OUT_DIR layout:
+        aug=random        -> vit_outputs_hi_lr/ViT_B_mae75/<task>/seed_<n>/<strat>/
+        aug=<other>       -> vit_outputs_hi_lr/aug_<aug>/ViT_B_mae75/<task>/seed_<n>/<strat>/
+    Matches the aggregator's globs in 05_aggregate_mri_results.py."""
+    aug = row["config/augment"]
+    task = row["config/task"]
+    seed = int(row["config/seed"])
+    strat = row["config/strategy"]
+    if aug == "random":
+        return DERIV_BASE / "ViT_B_mae75" / task / f"seed_{seed}" / strat
+    return DERIV_BASE / f"aug_{aug}" / "ViT_B_mae75" / task / f"seed_{seed}" / strat
+
+
 def main():
     args = parse_args()
     if not WANDB_CSV.exists():
         raise SystemExit(f"W&B CSV not found: {WANDB_CSV}. Run "
-                         "06_fetch_wandb_tables.py --projects vit_debugging first.")
+                         "06_fetch_wandb_tables.py --projects vit_mae_hi_lr first.")
 
     df = pd.read_csv(WANDB_CSV)
     df = df[df["state"] == "finished"]
-    df = df[df["config/strategy"] == args.strategy]
     df = df[df["config/llrd_gamma"] == args.llrd_gamma]
+    # Drop runs where best_val_balanced_acc is NaN (incomplete / failed early).
+    df = df[df["summary/best_val_balanced_acc"].notna()]
+    if args.strategy:
+        df = df[df["config/strategy"] == args.strategy]
+    if args.augment:
+        df = df[df["config/augment"] == args.augment]
     if args.task:
         df = df[df["config/task"] == args.task]
-        if df.empty:
-            raise SystemExit(f"No finished runs for task={args.task}, "
-                             f"strategy={args.strategy}, llrd={args.llrd_gamma}")
 
-    print(f"Filter   : strategy={args.strategy}  llrd_gamma={args.llrd_gamma}"
+    print(f"Filter   : llrd_gamma={args.llrd_gamma}"
+          + (f"  strategy={args.strategy}" if args.strategy else "")
+          + (f"  augment={args.augment}" if args.augment else "")
           + (f"  task={args.task}" if args.task else ""))
-    print(f"Out tree : {DERIV_ROOT}")
+    print(f"Out base : {DERIV_BASE}")
     print(f"Found {len(df)} finished runs")
+
+    # If multiple runs share the same (task, seed, strategy, augment) -- e.g.
+    # a re-submit after a hang -- keep the one with the highest val_bacc.
+    df = df.sort_values("summary/best_val_balanced_acc", ascending=False)
+    df = df.drop_duplicates(
+        subset=["config/task", "config/seed", "config/strategy",
+                "config/augment"], keep="first")
 
     n_written = n_skipped = 0
     for _, row in df.iterrows():
-        task = row["config/task"]
-        seed = int(row["config/seed"])
-        strat = row["config/strategy"]
-        out_dir = DERIV_ROOT / task / f"seed_{seed}" / strat
+        out_dir = _out_dir(row)
         out_dir.mkdir(parents=True, exist_ok=True)
         out_file = out_dir / "metrics.json"
 
@@ -171,9 +193,12 @@ def main():
         with open(out_file, "w") as f:
             json.dump(payload, f, indent=2)
         n_written += 1
-        print(f"  [wrote-shim] {task}/seed_{seed}/{strat}  "
-              f"val={payload['config']['best_val_balanced_acc']:.3f}  "
-              f"test_bacc={payload['test_metrics']['balanced_acc']:.3f}")
+        bacc = payload["test_metrics"].get("balanced_acc")
+        bacc_s = f"{bacc:.3f}" if bacc is not None else "  -  "
+        val = payload["config"]["best_val_balanced_acc"]
+        val_s = f"{val:.3f}" if val is not None else "  -  "
+        rel = out_file.relative_to(DERIV_BASE)
+        print(f"  [wrote-shim] {rel}  val={val_s}  test_bacc={bacc_s}")
 
     print(f"\nWrote {n_written} shim(s); skipped {n_skipped} canonical metrics.json")
 

@@ -60,7 +60,11 @@ PROJECTS = {
     ),
     "braindino_frozen_cached": dict(
         csv="wandb_braindino_frozen_cached.csv",
-        tree=r"D:/ADNI_BIDS_project/derivatives/braindino_outputs/aug_none/BrainDINO_vitb16_frozen_cached",
+        # Local dir renamed from aug_none/ to aug_none_hp_tuned/ to disambiguate
+        # this cached-head HP sweep from the on-the-fly BrainDINO/frozen/aug_none
+        # cells in braindino_outputs/frozen/. Aggregator glob in
+        # 05_aggregate_mri_results.py matches the new name.
+        tree=r"D:/ADNI_BIDS_project/derivatives/braindino_outputs/aug_none_hp_tuned/BrainDINO_vitb16_frozen_cached",
         model_id_fallback="BrainDINO_vitb16",
     ),
 }

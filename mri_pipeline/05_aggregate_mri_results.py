@@ -71,20 +71,21 @@ MODEL_TREES = [
     ("ViT-MAE75",        "vit_outputs_hi_lr/aug_*/ViT_B_mae75/*/seed_*/full_ft/metrics.json"),
     ("ViT-MAE75",        "vit_outputs_hi_lr/aug_*/ViT_B_mae75/*/seed_*/frozen/metrics.json"),
     ("ViT-scratch",      "vit_baseline/ViT_B_scratch/*/seed_*/*/metrics.json"),
-    # ViT-Tiny ablation (~5.5M params vs ViT-B's ~86M; from-scratch only --
-    # the MAE pretrained checkpoint is ViT-B sized only).
-    # aug_* layer baked in so multiple augment policies can coexist; the
-    # legacy-flat path (no aug_*) is the fallback for any pre-aug-split runs.
-    ("ViT-Tiny",         "vit_tiny_baseline/aug_*/ViT_T_scratch/*/seed_*/*/metrics.json"),
-    ("ViT-Tiny",         "vit_tiny_baseline/ViT_T_scratch/*/seed_*/*/metrics.json"),
+    # NOTE: ViT-Tiny ablation and AG-MS3D rescue2 (flips+strong) were started
+    # but only got 1 W&B-uploaded run each before being abandoned. Their
+    # MODEL_TREES entries are commented out so the cross-model table doesn't
+    # surface the lone seed-0 cells. The on-disk shims (under
+    # vit_tiny_baseline/ and agms3d_outputs_rescue2/) are left in place in
+    # case the sweeps get revived later; revert this commit to re-enable.
+    #   ("ViT-Tiny",         "vit_tiny_baseline/aug_*/ViT_T_scratch/*/seed_*/*/metrics.json"),
+    #   ("ViT-Tiny",         "vit_tiny_baseline/ViT_T_scratch/*/seed_*/*/metrics.json"),
+    #   ("AG-MS3D-r2",       "agms3d_outputs_rescue2/AGMS3DCNN_vanilla_slim/*/seed_*/metrics.json"),
     ("Spasov-CNN",       "cnn3d_outputs/Spasov3DCNN_*/*/seed_*/metrics.json"),
     # Legacy AG-MS3D run (pre-rescue separable backbone, collapsed on
     # 14/15 cells) — kept in the aggregator as evidence-of-failure.
     ("AG-MS3D-sep",      "agms3d_outputs/AGMS3DCNN/*/seed_*/metrics.json"),
     # Post-rescue vanilla-backbone run (--lr 1e-3, --label_smoothing 0.1).
     ("AG-MS3D-vanilla",  "agms3d_outputs/AGMS3DCNN_vanilla/*/seed_*/metrics.json"),
-    # Rescue #2: vanilla Conv3d + slim head + strong aug (--lr 5e-4 --ls 0.1).
-    ("AG-MS3D-r2",       "agms3d_outputs_rescue2/AGMS3DCNN_vanilla_slim/*/seed_*/metrics.json"),
     ("BrainMVP",         "brainmvp_debug/aug_*/BrainMVP_uniformer/*/seed_*/*/metrics.json"),
     # BrainDINO supervised finetune sweeps. Three globs cover (a) the legacy
     # un-nested layout (residual frozen+head runs predating the strategy-
@@ -98,7 +99,12 @@ MODEL_TREES = [
     # Cached-embedding head sweeps (one row per pretrained encoder, all
     # under aug_none since the encoder forward is deterministic). HP
     # leaves: <task>/seed_<n>/lr<>_d<>_ls<>/metrics.json.
-    ("BrainDINO-cached", "braindino_outputs/aug_none/BrainDINO_vitb16_frozen_cached/*/seed_*/*/metrics.json"),
+    # Renamed dir from aug_none/ -> aug_none_hp_tuned/ to clarify that this
+    # tree is the cached-head HP sweep (18 HP combos per task/seed), distinct
+    # from the on-the-fly BrainDINO/frozen/aug_none cells under frozen/.
+    # See sync_brainmvp_cached_from_wandb.py if you need to update the shim
+    # writer's output path to match.
+    ("BrainDINO-cached", "braindino_outputs/aug_none_hp_tuned/BrainDINO_vitb16_frozen_cached/*/seed_*/*/metrics.json"),
     ("BrainMVP-cached",  "brainmvp_debug/aug_none/BrainMVP_uniformer_frozen_cached/*/seed_*/*/metrics.json"),
     ("ViT-MAE-cached",   "vit_outputs_debug/aug_none/ViT_B_mae75_frozen_cached/*/seed_*/*/metrics.json"),
 ]
