@@ -60,6 +60,7 @@ from sklearn.utils.class_weight import compute_class_weight
 from sklearn.metrics import (
     accuracy_score, balanced_accuracy_score, roc_auc_score,
     f1_score, average_precision_score, precision_score, recall_score,
+    confusion_matrix,
 )
 
 warnings.filterwarnings("ignore")
@@ -107,6 +108,49 @@ TASK_CONFIG = {
         "filter_non_ad": True,
         "description":   "Prognosis: conversion to AD within 10 years",
     },
+    "T3d_conv7y": {
+        "label_col":     "Label_7y",
+        "num_labels":    2,
+        "task_type":     "binary",
+        "label_map":     None,
+        "filter_non_ad": True,
+        "description":   "Prognosis: conversion to AD within 7 years",
+    },
+    # Stratified binary tasks: label derived from `conversion_group`. The label_map
+    # only matches the relevant baseline cohort (other groups -> NaN -> dropped in
+    # load_split), so no extra cohort filter is needed.
+    "T1d_pmci_smci": {
+        "label_col":     "conversion_group",
+        "num_labels":    2,
+        "task_type":     "binary",
+        "label_map":     {"sMCI": 0, "pMCI": 1},
+        "filter_non_ad": False,
+        "description":   "Binary: pMCI vs sMCI (baseline MCI)",
+    },
+    "T1e_scn_pcn": {
+        "label_col":     "conversion_group",
+        "num_labels":    2,
+        "task_type":     "binary",
+        "label_map":     {"sCN": 0, "pCN_to_MCI": 1, "pCN_to_AD": 1},
+        "filter_non_ad": False,
+        "description":   "Binary: sCN vs pCN (baseline CN, progression to MCI or AD)",
+    },
+    "T1b_cnmci_ad": {
+        "label_col":     "Label_bl_multi",
+        "num_labels":    2,
+        "task_type":     "binary",
+        "label_map":     {"CN": 0, "MCI": 0, "AD": 1},
+        "filter_non_ad": False,
+        "description":   "Binary: CN+MCI vs AD",
+    },
+    "T1c_scn_prog": {
+        "label_col":     "conversion_group",
+        "num_labels":    2,
+        "task_type":     "binary",
+        "label_map":     {"sCN": 0, "pCN_to_MCI": 1, "pCN_to_AD": 1, "pMCI": 1, "AD_bl": 1},
+        "filter_non_ad": False,
+        "description":   "Binary: sCN vs progressors+AD (pCN/pMCI/AD, excl. sMCI)",
+    },
 }
 
 
@@ -137,6 +181,9 @@ def parse_args():
                    default=r"C:\Users\elena\iCloudDrive\Desktop\ACS_MPhil\Thesis\git\Transformers_XAI\clinical_pipeline\outputs")
     p.add_argument("--hf_cache",        type=str,   default=None,
                    help="HuggingFace cache dir (overrides HF_HOME)")
+    p.add_argument("--wandb",           action="store_true",
+                   help="Log this run to Weights & Biases in OFFLINE mode (sync later)")
+    p.add_argument("--wandb_project",   type=str,   default="clinical-encoder-post-exclusion")
     return p.parse_args()
 
 
@@ -217,6 +264,10 @@ def make_compute_metrics(task_type):
             m["precision"] = float(precision_score(labels, preds, zero_division=0))
             m["recall"]    = float(recall_score(labels, preds, zero_division=0))
             m["f1"]        = float(f1_score(labels, preds, zero_division=0))
+            # Sensitivity = recall of the positive class; specificity = recall of the
+            # negative class. Measured directly via recall_score per class.
+            m["sensitivity"] = float(recall_score(labels, preds, pos_label=1, zero_division=0))
+            m["specificity"] = float(recall_score(labels, preds, pos_label=0, zero_division=0))
             try:
                 m["auc_roc"] = float(roc_auc_score(labels, probs[:, 1]))
                 m["auc_pr"]  = float(average_precision_score(labels, probs[:, 1]))
@@ -235,6 +286,54 @@ def make_compute_metrics(task_type):
                 m["auc_pr_macro"] = float("nan")
         return m
     return compute_metrics
+
+
+def full_metrics(labels, logits, task_type):
+    """
+    Full metric set for a final (val/test) evaluation, including the confusion matrix.
+    Used for reporting + wandb logging (not for per-epoch Trainer eval).
+    Returns (metrics_dict, preds, labels) so callers can log a wandb confusion matrix.
+    """
+    labels = np.asarray(labels)
+    probs = torch.softmax(torch.tensor(logits), dim=-1).numpy()
+    preds = np.argmax(logits, axis=-1)
+
+    m = {
+        "accuracy":     float(accuracy_score(labels, preds)),
+        "balanced_acc": float(balanced_accuracy_score(labels, preds)),
+    }
+    if task_type == "binary":
+        m["precision"]   = float(precision_score(labels, preds, zero_division=0))
+        m["recall"]      = float(recall_score(labels, preds, zero_division=0))
+        m["f1"]          = float(f1_score(labels, preds, zero_division=0))
+        # Directly measured per-class recalls.
+        m["sensitivity"] = float(recall_score(labels, preds, pos_label=1, zero_division=0))
+        m["specificity"] = float(recall_score(labels, preds, pos_label=0, zero_division=0))
+        try:
+            m["auc_roc"] = float(roc_auc_score(labels, probs[:, 1]))
+            m["auc_pr"]  = float(average_precision_score(labels, probs[:, 1]))
+        except Exception:
+            m["auc_roc"] = float("nan")
+            m["auc_pr"]  = float("nan")
+        cm = confusion_matrix(labels, preds, labels=[0, 1])
+        tn, fp, fn, tp = (int(x) for x in cm.ravel())
+        m["confusion_matrix"] = {"tn": tn, "fp": fp, "fn": fn, "tp": tp}
+    else:
+        m["macro_precision"] = float(precision_score(labels, preds, average="macro", zero_division=0))
+        m["macro_recall"]    = float(recall_score(labels, preds, average="macro", zero_division=0))
+        m["macro_f1"]        = float(f1_score(labels, preds, average="macro", zero_division=0))
+        m["per_class_recall"] = [float(x) for x in
+                                 recall_score(labels, preds, average=None, zero_division=0)]
+        try:
+            m["auc_roc_ovr"]  = float(roc_auc_score(labels, probs, multi_class="ovr", average="macro"))
+            m["auc_pr_macro"] = float(average_precision_score(labels, probs, average="macro"))
+        except Exception:
+            m["auc_roc_ovr"]  = float("nan")
+            m["auc_pr_macro"] = float("nan")
+        m["confusion_matrix"] = confusion_matrix(labels, preds).tolist()
+
+    m = {k: (round(v, 4) if isinstance(v, float) else v) for k, v in m.items()}
+    return m, preds, labels
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -316,6 +415,38 @@ def main():
     class_weights = torch.tensor(cw, dtype=torch.float)
     print(f"  Class weights: {dict(zip(classes.tolist(), cw.round(3).tolist()))}")
 
+    # ── Weights & Biases (offline) ────────────────────────────────────────────
+    use_wandb = args.wandb
+    if use_wandb:
+        try:
+            import wandb
+        except ImportError:
+            print("  [WARN] wandb not installed — disabling wandb logging.")
+            use_wandb = False
+    if use_wandb:
+        os.environ["WANDB_MODE"] = "offline"           # sync on HPC later
+        run_name = f"{model_slug}_{strategy}_{args.task}_seed{args.seed}"
+        wandb.init(
+            project=args.wandb_project,
+            name=run_name,
+            group=args.task,
+            job_type=strategy,
+            tags=[model_slug, args.task, strategy, f"seed{args.seed}"],
+            dir=os.environ.get("WANDB_DIR", str(out_dir)),
+            reinit=True,
+            config={
+                "model_id": args.model_id, "model": model_slug, "task": args.task,
+                "task_description": task_cfg["description"], "seed": args.seed,
+                "strategy": strategy, "epochs": args.epochs, "lr": args.lr,
+                "weight_decay": args.weight_decay, "batch_size": args.batch_size,
+                "max_length": args.max_length, "warmup_ratio": args.warmup_ratio,
+                "patience": args.patience, "num_labels": task_cfg["num_labels"],
+                "n_train": len(train_labels), "n_val": len(val_labels),
+                "n_test": len(test_labels),
+            },
+        )
+        print(f"  wandb offline run: {run_name}")
+
     # ── Training arguments ────────────────────────────────────────────────────
     training_args = TrainingArguments(
         output_dir=str(trainer_dir),
@@ -337,7 +468,7 @@ def main():
         # Logging
         logging_steps=10,
         logging_dir=str(out_dir / "tb_logs"),
-        report_to="none",            # disable wandb/tensorboard auto-reporting
+        report_to=(["wandb"] if use_wandb else "none"),   # offline wandb if enabled
         # Reproducibility
         seed=args.seed,
         data_seed=args.seed,
@@ -362,30 +493,42 @@ def main():
     print(f"\n  Starting training ...")
     train_result = trainer.train()
 
-    # ── Evaluate on test set ──────────────────────────────────────────────────
-    print(f"\n  Evaluating on test set ...")
-    test_metrics = trainer.evaluate(test_ds, metric_key_prefix="test")
+    # ── Final evaluation: full metrics on val + test (incl. confusion matrix) ──
+    print(f"\n  Final evaluation (val + test) ...")
+    val_out  = trainer.predict(val_ds,  metric_key_prefix="val")
+    test_out = trainer.predict(test_ds, metric_key_prefix="test")
 
-    # Clean up metric keys (remove "test_" prefix for cleaner output)
-    test_metrics_clean = {}
-    for k, v in test_metrics.items():
-        clean_key = k.replace("test_", "") if k.startswith("test_") else k
-        if isinstance(v, float):
-            test_metrics_clean[clean_key] = round(v, 4)
-        else:
-            test_metrics_clean[clean_key] = v
+    val_metrics,  _,         _          = full_metrics(
+        val_out.label_ids,  val_out.predictions,  task_cfg["task_type"])
+    test_metrics, test_preds, test_true = full_metrics(
+        test_out.label_ids, test_out.predictions, task_cfg["task_type"])
+    val_metrics["loss"]  = round(float(val_out.metrics.get("val_loss", float("nan"))), 4)
+    test_metrics["loss"] = round(float(test_out.metrics.get("test_loss", float("nan"))), 4)
 
     print(f"\n  Test metrics:")
-    for k, v in test_metrics_clean.items():
-        if k not in ("runtime", "samples_per_second", "steps_per_second"):
-            print(f"    {k}: {v}")
+    for k, v in test_metrics.items():
+        print(f"    {k}: {v}")
+
+    # ── wandb: log final val/test metrics + confusion matrices ─────────────────
+    if use_wandb:
+        wandb.summary.update({f"val/{k}":  v for k, v in val_metrics.items()
+                              if isinstance(v, (int, float))})
+        wandb.summary.update({f"test/{k}": v for k, v in test_metrics.items()
+                              if isinstance(v, (int, float))})
+        try:
+            cls = [str(c) for c in sorted(set(test_true.tolist()))]
+            wandb.log({"test/confusion_matrix": wandb.plot.confusion_matrix(
+                y_true=test_true.tolist(), preds=test_preds.tolist(), class_names=cls)})
+        except Exception as e:
+            print(f"  [WARN] wandb confusion-matrix log failed: {e}")
+        wandb.finish()
 
     # ── Save outputs ──────────────────────────────────────────────────────────
     # Training log from Trainer
     log_history = pd.DataFrame(trainer.state.log_history)
     log_history.to_csv(out_dir / "training_log.csv", index=False)
 
-    # Run config + test metrics
+    # Run config + val/test metrics
     config = {
         "model_id":         args.model_id,
         "task":             args.task,
@@ -407,7 +550,7 @@ def main():
         "timestamp":        datetime.now().isoformat(),
     }
 
-    results = {"config": config, "test_metrics": test_metrics_clean}
+    results = {"config": config, "val_metrics": val_metrics, "test_metrics": test_metrics}
     with open(out_dir / "metrics.json", "w") as f:
         json.dump(results, f, indent=2)
 
