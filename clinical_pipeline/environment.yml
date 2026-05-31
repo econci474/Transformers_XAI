@@ -34,3 +34,4 @@ dependencies:
       - tqdm
       - einops       # required by some ModernBERT internals
       - wandb         # offline experiment tracking (03_encoder_finetune.py --wandb)
+      - lifelines>=0.27   # Cox PH + Schoenfeld test (02i_ph_diagnostics)
