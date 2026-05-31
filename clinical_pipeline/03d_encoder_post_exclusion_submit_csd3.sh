@@ -48,9 +48,10 @@ export HF_HOME="/home/ec474/rds/hpc-work/hf_cache"
 SCRIPT_DIR="/home/ec474/rds/hpc-work/Transformers_XAI/clinical_pipeline"
 
 # Post-exclusion verbose baseline splits (seed_N/{train,val,test}.csv with Generated_Text).
-# Upload from local D:\ADNI_BIDS_project\derivatives\clinical\
+# 03_encoder_finetune.py appends seed_{N} itself, so DATA_DIR must be the dir CONTAINING
+# the seed_* folders. Local source: D:\ADNI_BIDS_project\derivatives\clinical\
 #   no_cdr_stratified_post_exclusion\verbose\baseline  ->  this RDS path.
-DATA_DIR="/home/ec474/rds/hpc-work/ADNI_CL/baseline_stratified_no_cdr_post_exclusion_verbose"
+DATA_DIR="/home/ec474/rds/hpc-work/ADNI_CL/no_cdr_stratified_post_exclusion/verbose/baseline"
 
 # Separate post-exclusion output directory
 OUT_DIR="/home/ec474/rds/hpc-work/ADNI_CL/encoder_outputs_no_cdr_post_exclusion"
