@@ -98,18 +98,22 @@ def main():
         if cph is None or en_prs.isna().all():
             print(f"  [seed {seed}] meta-EN fit skipped/failed — no output.")
             continue
-        # Export the TRAIN-fold subjects only (the fold the EN was fit on).
-        train_ids = parts["train"]["Patient_ID"].astype(str).tolist()
-        scored = en_prs.reindex([p for p in train_ids if p in en_prs.index]).dropna()
-        out = pd.DataFrame({"Patient_ID": scored.index,
-                            "meta_prs_EN_combined": scored.values})
-        out_path = OUT_DIR / f"meta_prs_en_combined_seed{seed}_train.tsv"
-        out.to_csv(out_path, sep="\t", index=False)
-        n_ev = int(parts["train"].set_index("Patient_ID")
-                   .reindex(scored.index)["e"].sum())
-        print(f"  [seed {seed}] wrote {len(out)} train subjects "
-              f"(events={n_ev}, score range [{scored.min():.3f}, {scored.max():.3f}]) "
-              f"-> {out_path}")
+        # Export TRAIN (in-sample for the EN fit) AND val/test (OUT-OF-SAMPLE
+        # predictions from the SAME train-fitted EN — leakage-safe: the model never
+        # saw val/test outcomes, so applying it to those subjects is a legitimate
+        # downstream feature, exactly as in 45/46's held-out evaluation).
+        for split in ("train", "val", "test"):
+            split_ids = parts[split]["Patient_ID"].astype(str).tolist()
+            scored = en_prs.reindex([p for p in split_ids if p in en_prs.index]).dropna()
+            out = pd.DataFrame({"Patient_ID": scored.index,
+                                "meta_prs_EN_combined": scored.values})
+            out_path = OUT_DIR / f"meta_prs_en_combined_seed{seed}_{split}.tsv"
+            out.to_csv(out_path, sep="\t", index=False)
+            n_ev = int(parts[split].set_index("Patient_ID")
+                       .reindex(scored.index)["e"].sum())
+            print(f"  [seed {seed}] {split:5s}: wrote {len(out):3d} subjects "
+                  f"(events={n_ev}, score range [{scored.min():.3f}, {scored.max():.3f}]) "
+                  f"-> {out_path.name}")
 
     print("\nDone.")
 
