@@ -14,10 +14,14 @@ Runs on either timescale (mirrors 02g's time_to_event vs age_to_event):
 
 Two complementary PH checks:
 
-1. CATEGORICAL covariates -> complementary log-log plots (full cohort).
+1. CATEGORICAL covariates -> complementary log-log plots + a FORMAL PH test
+   (the log-log is only a visual; crossings in small/tail subgroups are noisy).
    sex, APOE4 carrier, APOE4 3-way genotype, APOE2 carrier. log(-log S) vs log(time):
-   on the time axis S is the ordinary KM; on the age axis S is the left-truncated KM
-   conditioned at a floor age. Parallel curves ⇒ proportional hazards.
+   time axis S = ordinary KM; age axis S = left-truncated KM at a floor age. Parallel ⇒
+   PH. The formal test (categorical_ph_test.csv) is scaled-Schoenfeld on the time axis
+   and an indicator × log(age) interaction (left-truncated Cox) on the age axis; the
+   latter targets a smooth monotone trend in log(age), so it has limited power against
+   pure crossings — read it alongside subgroup sizes.
 
 2. CONTINUOUS covariates -> PH test.
    TIME axis: scaled-Schoenfeld residual test (lifelines proportional_hazard_test) +
@@ -257,13 +261,22 @@ def build_age_episodes(df, covars):
     return pd.DataFrame(recs)
 
 
-def tv_loghr_plot(b_const, b_int, fname, title, age_lo, age_hi):
-    """Plot the implied time-varying log-HR  β + β_int·log(age)  over the age range."""
+def tv_loghr_plot(b_const, b_int, cov2, fname, title, age_lo, age_hi):
+    """Time-varying log-HR  β + β_int·log(age)  with a 95% CI band.
+
+    cov2 = 2×2 covariance of (β, β_int); Var[g(age)] = V00 + (log age)²·V11
+    + 2·log age·V01. The band makes the PH question honest: if a flat line fits
+    inside it, the apparent slope is not distinguishable from no time trend."""
     aa = np.linspace(age_lo, age_hi, 200)
+    L = np.log(aa)
+    est = b_const + b_int * L
+    var = cov2[0, 0] + L ** 2 * cov2[1, 1] + 2 * L * cov2[0, 1]
+    se = np.sqrt(np.clip(var, 0.0, None))
     fig, ax = plt.subplots(figsize=(8, 5))
-    ax.axhline(0.0, color="grey", linewidth=0.9, linestyle="--", alpha=0.7,
-               label="no effect")
-    ax.plot(aa, b_const + b_int * np.log(aa), color="#d7191c", linewidth=2.2)
+    ax.axhline(0.0, color="grey", linewidth=0.9, linestyle="--", alpha=0.7, label="no effect")
+    ax.fill_between(aa, est - 1.96 * se, est + 1.96 * se, color="#d7191c",
+                    alpha=0.15, label="95% CI")
+    ax.plot(aa, est, color="#d7191c", linewidth=2.2)
     ax.set_xlabel("Age (years)", fontsize=11, fontweight="bold")
     ax.set_ylabel("log-HR per +1 SD  (β + β_int·log age)", fontsize=11, fontweight="bold")
     ax.set_title(title, fontsize=12, fontweight="bold", pad=10)
@@ -276,7 +289,7 @@ def tv_loghr_plot(b_const, b_int, fname, title, age_lo, age_hi):
     plt.close()
 
 
-def age_ph_test(df_fit, covars, age_hi):
+def age_ph_test(df_fit, covars, age_hi, plot=True):
     """Left-truncated counting-process Cox with covariate × log(age) interactions.
     Returns a per-covariate DataFrame (coef, coef_x_logage, PH Wald p, HR/SD)."""
     df = df_fit.copy()
@@ -289,6 +302,10 @@ def age_ph_test(df_fit, covars, age_hi):
     ctv.fit(long[keep], id_col="id", event_col="e",
             start_col="start", stop_col="stop", show_progress=False)
     sm = ctv.summary
+    try:
+        V = ctv.variance_matrix_
+    except Exception:
+        V = None
     rows = []
     age_lo = max(AGE_LO, float(df["entry_age"].min()))
     for c in covars:
@@ -296,12 +313,57 @@ def age_ph_test(df_fit, covars, age_hi):
         pi = float(sm.loc[c + "__xlog", "p"])
         rows.append({"covariate": c, "coef": b0, "coef_x_logage": bi,
                      "p_ph_interaction": pi, "hr_per_sd_at_logage0": float(np.exp(b0))})
-        tv_loghr_plot(b0, bi, f"phtv_{c}",
-                      f"Time-varying {c} effect — CN+MCI → AD (age axis)\n"
-                      f"β_int (·log age) = {bi:+.3f}, Wald p = {pi:.3f}  "
-                      f"({'non-PH' if pi < 0.05 else 'PH ok'})",
-                      age_lo, age_hi)
+        if plot:
+            try:
+                cov2 = V.loc[[c, c + "__xlog"], [c, c + "__xlog"]].values
+            except Exception:
+                se = ctv.standard_errors_
+                cov2 = np.diag([float(se[c]) ** 2, float(se[c + "__xlog"]) ** 2])
+            tv_loghr_plot(b0, bi, cov2, f"phtv_{c}",
+                          f"Time-varying {c} effect — CN+MCI → AD (age axis)\n"
+                          f"β_int (·log age) = {bi:+.3f}, Wald p = {pi:.3f}  "
+                          f"({'non-PH' if pi < 0.05 else 'PH ok'})",
+                          age_lo, age_hi)
     return pd.DataFrame(rows)
+
+
+def categorical_ph_test(cohort, age):
+    """Formal PH test for the categorical covariates (the log-log plots are only a
+    visual check). Time axis: scaled-Schoenfeld. Age axis: indicator × log(age)
+    interaction in a left-truncated Cox. p < 0.05 ⇒ non-proportional / crossing."""
+    enc = {
+        "sex_Male":      (cohort["sex"] == "Male").astype(float),
+        "apoe4_carrier": (cohort["apoe4"] == "carrier").astype(float),
+        "apoe2_carrier": (cohort["apoe2"] == "carrier").astype(float),
+        "apoe4_dosage":  pd.to_numeric(cohort["APOE4_Dosage"], errors="coerce"),
+    }
+    rows = []
+    for name, x in enc.items():
+        try:
+            if not age:
+                d = pd.DataFrame({"t": cohort["t"].values, "e": cohort["event"].values,
+                                  name: x.values}).dropna()
+                cph = CoxPHFitter(penalizer=1e-3); cph.fit(d, duration_col="t", event_col="e")
+                s = proportional_hazard_test(cph, d, time_transform="rank").summary.loc[name]
+                rows.append({"covariate": name, "test": "schoenfeld(rank)",
+                             "statistic": float(s["test_statistic"]), "p": float(s["p"])})
+            else:
+                d = pd.DataFrame({"entry_age": cohort["entry_age"].values,
+                                  "exit_age": cohort["exit_age"].values,
+                                  "e": cohort["event"].values, name: x.values}).dropna()
+                o = age_ph_test(d, [name], float(d["exit_age"].quantile(0.98)),
+                                plot=False).iloc[0]
+                rows.append({"covariate": name, "test": "X×log(age) Wald",
+                             "statistic": float(o["coef_x_logage"]), "p": float(o["p_ph_interaction"])})
+        except Exception as exc:
+            rows.append({"covariate": name, "test": "failed", "statistic": float("nan"),
+                         "p": float("nan")})
+            print(f"  [{name}] PH test failed ({exc}); likely too few events.")
+    out = pd.DataFrame(rows)
+    out.to_csv(OUT_DIR / "categorical_ph_test.csv", index=False)
+    print("  Categorical PH test (p<0.05 ⇒ non-proportional / crossing log-log):")
+    print(out.to_string(index=False))
+    return out
 
 
 def observed_continuous(cohort, age):
@@ -484,9 +546,10 @@ def main():
           f"events={int(cohort['event'].sum())}, median FU={cohort['t'].median():.1f} y")
 
     n_steps = 3 if age else 4
-    print(f"\n[1/{n_steps}] Categorical log-log plots ...")
+    print(f"\n[1/{n_steps}] Categorical log-log plots + formal PH test ...")
     for col, strata in CATEGORICAL.items():
         loglog_plot(cohort, col, strata, age)
+    categorical_ph_test(cohort, age)
 
     cog_note = "cognitive only — age is the timescale" if age else "age + cognitive"
     test_note = "covariate × log(age) interaction" if age else "scaled-Schoenfeld"
