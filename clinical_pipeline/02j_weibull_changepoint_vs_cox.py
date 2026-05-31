@@ -715,7 +715,14 @@ def _plot_cal_time(grid, S_w, S_c, dur, event, eq_text, wdir, cdir, strat=None):
     _finish_calibration(ax, fig, groups, "time", eq_text, fname, (wdir, cdir))
 
 
-def _plot_cal_age(c, wa, Xa, fine, M, eq_text, wdir, cdir, ref, strat=None):
+def _subset_design(design, m):
+    """Subset a Weibull design by a boolean mask (array design or per-param dict design)."""
+    if isinstance(design, dict):
+        return {k: v[m] for k, v in design.items()}
+    return design[m]
+
+
+def _plot_cal_age(c, wmodel, wdesign, fine, M, eq_text, wdir, cdir, ref, strat=None):
     entry = c["entry_age"].values; exitg = c["exit_age"].values; ev = c["event"].values
     a_hi = float(np.quantile(exitg, 0.92)); grid = np.linspace(ref, a_hi, 30)
     n_ref = int(np.sum((entry <= ref) & (exitg >= ref)))
@@ -728,7 +735,7 @@ def _plot_cal_age(c, wa, Xa, fine, M, eq_text, wdir, cdir, ref, strat=None):
                 continue
             xs, ss = _km_lt_cond(entry[m], exitg[m], ev[m], ref)
             ax.step(xs, ss, where="post", color=col, lw=2.3)
-            Sw = np.column_stack([wa["predict_S"](Xa[m], a, ref) for a in grid]).mean(axis=0)
+            Sw = np.column_stack([wmodel["predict_S"](_subset_design(wdesign, m), a, ref) for a in grid]).mean(axis=0)
             Sc = _cox_age_cond(M, fine, np.where(m)[0], grid, ref)
             ax.plot(grid, Sw, color=col, lw=1.7, ls="--"); ax.plot(grid, Sc, color=col, lw=1.7, ls=":")
             ax.plot([], [], color=col, lw=3, label=f"{lab} (n={int(m.sum())}, ev={int(ev[m].sum())})")
@@ -739,7 +746,7 @@ def _plot_cal_age(c, wa, Xa, fine, M, eq_text, wdir, cdir, ref, strat=None):
     else:
         xs, ss = _km_lt_cond(entry, exitg, ev, ref)
         ax.step(xs, ss, where="post", color="black", lw=2, label=f"Kaplan–Meier (cond. {ref:.0f}y)")
-        Sw = np.column_stack([wa["predict_S"](Xa, a, ref) for a in grid]).mean(axis=0)
+        Sw = np.column_stack([wmodel["predict_S"](wdesign, a, ref) for a in grid]).mean(axis=0)
         Sc = _cox_age_cond(M, fine, np.arange(len(c)), grid, ref)
         ax.plot(grid, Sw, color=RED, lw=2, ls="--", label="Weibull change-point (mean S)")
         ax.plot(grid, Sc, color=BLUE, lw=2, ls="-.", label="Cox PH (mean S)")
@@ -872,6 +879,52 @@ def _plot_variant_cal_strat(axis, c, cont_res, cont_X, var_models, strat, ref, w
     for d in (wdir, cdir):
         for ext in ("png", "pdf"):
             fig.savefig(d / f"{fname}.{ext}", bbox_inches="tight", dpi=300)
+    plt.close()
+
+
+def _plot_variant_grid_apoe_sex(c, wa, Xa, va_models, cox_eq, wdir, cdir):
+    """2×2 (APOE4 × Sex): KM vs Weibull with the covariate block on T-only (continuity),
+    T+γ₁, T+γ₂, and T+γ₁+γ₂ — to show which placement separates the strata."""
+    entry = c["entry_age"].values; exitg = c["exit_age"].values; ev = c["event"].values
+    apoe = c["apoe"].values; sexm = c["sex_M"].values
+    ref = 65.0; a_hi = float(np.quantile(exitg, 0.92)); grid = np.linspace(ref, a_hi, 30)
+    show = [("continuity (T only)", wa, Xa, "grey", "--"),
+            ("T + γ₁", va_models[1][1], va_models[1][2], "#1b9e77", "-"),
+            ("T + γ₂", va_models[2][1], va_models[2][2], "#d95f02", "-"),
+            ("T + γ₁ + γ₂", va_models[3][1], va_models[3][2], "#7570b3", "-")]
+    Smats = {lab: np.column_stack([model["predict_S"](design, a, ref) for a in grid])
+             for lab, model, design, _c, _ls in show}
+    fig, axes = plt.subplots(2, 2, figsize=(14, 11), sharex=True, sharey=True)
+    for r, (ga, alab) in enumerate([(0.0, "APOE4 non-carrier"), (1.0, "APOE4 carrier")]):
+        for ci, (gs, slab) in enumerate([(0.0, "Female"), (1.0, "Male")]):
+            ax = axes[r][ci]; mm = (apoe == ga) & (sexm == gs)
+            if mm.sum() == 0:
+                ax.set_visible(False); continue
+            xs, ss = _km_lt_cond(entry[mm], exitg[mm], ev[mm], ref)
+            ax.step(xs, ss, where="post", color="black", lw=2.2, label="KM (observed)")
+            for lab, _m, _d, ccol, ls in show:
+                ax.plot(grid, Smats[lab][mm].mean(0), color=ccol, lw=1.9, ls=ls, label=lab)
+            ax.set_title(f"{alab} · {slab} (n={int(mm.sum())}, ev={int(ev[mm].sum())})",
+                         fontsize=10, fontweight="bold")
+            ax.set_ylim(0, 1.02); ax.grid(alpha=0.3)
+            ax.spines["top"].set_visible(False); ax.spines["right"].set_visible(False)
+            if r == 1:
+                ax.set_xlabel("Age (years)", fontweight="bold")
+            if ci == 0:
+                ax.set_ylabel("Survival (AD-free)", fontweight="bold")
+    axes[0][1].legend(fontsize=8.5, loc="upper right")
+    fig.suptitle("Weibull change-point — covariate placement (T-only / γ₁ / γ₂ / all) on the hazard\n"
+                 "age axis (cond 65); stratified by APOE4 × Sex", fontsize=12, fontweight="bold")
+    cap = ("Variants place the covariate block on different parameters of  h(a|x)=p·γ₁·a^(p−1) [a<T], γ₂ [a≥T]:\n"
+           "  'continuity (T only)' shifts only the change-point T → barely separates the strata.\n"
+           "  'T + γ₁' adds covariates to the early Weibull level γ₁; 'T + γ₂' to the post-change level γ₂; "
+           "'T + γ₁ + γ₂' to both → these scale the hazard like Cox and separate the strata.\n"
+           "  " + cox_eq)
+    fig.subplots_adjust(bottom=0.15, top=0.91)
+    fig.text(0.012, 0.01, cap, ha="left", va="bottom", fontsize=8, family="DejaVu Sans", linespacing=1.5)
+    for d in (wdir, cdir):
+        for ext in ("png", "pdf"):
+            fig.savefig(d / "variant_placement_grid_apoe4_sex.{}".format(ext), bbox_inches="tight", dpi=300)
     plt.close()
 
 
@@ -1092,18 +1145,30 @@ def run_combo(c, name, covcols, covlabels, strat_cols):
     eq_a = eq_weibull(wa, "age", covlabels) + "\n" + eq_cox_age(cph_a, covcols, covlabels)
     _plot_weibull_haz_surv(wt, eq_t, "time", covcols, c, wdir)
     _plot_weibull_haz_surv(wa, eq_a, "age", covcols, c, wdir)
+    # 'all' variant (covariates on T, γ₁ AND γ₂) — scales the hazard like Cox, so it
+    # SEPARATES strata; use it for the stratified calibration (overall stays continuity).
+    all_t, all_a = vt_models[3], va_models[3]            # ("T + γ₁ + γ₂", res, D)
+    St_w_all = np.column_stack([all_t[1]["predict_S"](all_t[2], t0, 0.0) for t0 in grid_t])
+    eq_t_var = ("Weibull = 'T+γ₁+γ₂' variant (covariates on the change-point AND both hazard "
+                "levels → separates strata)\n" + eq_cox_time(ctv, covcols, covlabels))
+    eq_a_var = ("Weibull = 'T+γ₁+γ₂' variant (covariates on the change-point AND both hazard "
+                "levels → separates strata)\n" + eq_cox_age(cph_a, covcols, covlabels))
+
     _plot_cal_time(grid_t, St_w, St_c, dur_t, ev, eq_t, wdir, cdir, strat=None)
     for ref in (56.0, 65.0):
         _plot_cal_age(c, wa, Xa, fine_a, M_a, eq_a, wdir, cdir, ref, strat=None)
     for cc in strat_cols:                               # stratify ONLY by covariates new to this combo
         strat = (c[cc].values, *STRAT[cc])
-        _plot_cal_time(grid_t, St_w, St_c, dur_t, ev, eq_t, wdir, cdir, strat=strat)
+        _plot_cal_time(grid_t, St_w_all, St_c, dur_t, ev, eq_t_var, wdir, cdir, strat=strat)
         _plot_km_strat(c, "time", strat, wdir, cdir)    # clean observed KM by covariate
         _plot_variant_cal_strat("time", c, wt, Xt, vt_models, strat, None, wdir, cdir)
         _plot_variant_cal_strat("age", c, wa, Xa, va_models, strat, 65.0, wdir, cdir)
         for ref in (56.0, 65.0):
-            _plot_cal_age(c, wa, Xa, fine_a, M_a, eq_a, wdir, cdir, ref, strat=strat)
+            _plot_cal_age(c, all_a[1], all_a[2], fine_a, M_a, eq_a_var, wdir, cdir, ref, strat=strat)
             _plot_km_strat(c, "age", strat, wdir, cdir, ref=ref)
+
+    if "sex_M" in covcols:                               # 2×2 APOE4×Sex variant grid (γ₁ / γ₂ / all)
+        _plot_variant_grid_apoe_sex(c, wa, Xa, va_models, eq_cox_age(cph_a, covcols, covlabels), wdir, cdir)
 
     cmp = pd.DataFrame(rows)
     cmp.to_csv(wdir / "model_comparison.csv", index=False)
