@@ -460,7 +460,9 @@ def main():
         eval_strategy="epoch",
         save_strategy="epoch",
         load_best_model_at_end=True,
-        metric_for_best_model="loss",
+        # eval_dataset is a dict below, so HF prefixes metrics as eval_<key>_* .
+        # Select the best checkpoint on the VALIDATION loss specifically.
+        metric_for_best_model="eval_val_loss",
         greater_is_better=False,
         save_total_limit=2,           # keep only best + latest checkpoint
         # Mixed precision
@@ -484,7 +486,11 @@ def main():
         model=model,
         args=training_args,
         train_dataset=train_ds,
-        eval_dataset=val_ds,
+        # Evaluate BOTH train and val every epoch → wandb logs true train-vs-val
+        # learning curves (eval_train_* and eval_val_*) so over/under-fitting is
+        # visible. VAL drives early stopping + best-checkpoint selection; TRAIN is
+        # logged for the curve only. (Test is held out — evaluated once at the end.)
+        eval_dataset={"val": val_ds, "train": train_ds},
         compute_metrics=make_compute_metrics(task_cfg["task_type"]),
         callbacks=[EarlyStoppingCallback(early_stopping_patience=args.patience)],
     )

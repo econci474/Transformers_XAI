@@ -40,14 +40,18 @@ else:
     print('  WARNING: CUDA not available — check your CUDA module is loaded')
 "
 
-# --- 3. Verify transformers version (must be >= 4.47 for ModernBERT) ----------
-echo "[3/4] Verifying transformers version..."
+# --- 3. Verify transformers version (must be >= 4.47 AND < 5 for ModernBERT) ---
+# transformers 5.x is a breaking major release (new Trainer / checkpoint-save API)
+# that crashes 03_encoder_finetune.py. ModernBERT needs >= 4.47. Enforce 4.47 <= v < 5.
+echo "[3/4] Verifying transformers version (4.47 <= v < 5)..."
 conda run -n "${ENV_NAME}" python -c "
 import transformers
 v = transformers.__version__
 major, minor, *_ = v.split('.')
-assert int(major) > 4 or (int(major) == 4 and int(minor) >= 47), \
-    f'transformers {v} is too old — ModernBERT requires >= 4.47.0'
+major, minor = int(major), int(minor)
+assert major == 4 and minor >= 47, \
+    f'transformers {v} is incompatible — need >= 4.47.0 AND < 5.0 ' \
+    f'(5.x breaks the Trainer/checkpoint API used by 03_encoder_finetune.py)'
 print(f'  transformers  : {v}  OK')
 "
 

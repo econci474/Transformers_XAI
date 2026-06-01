@@ -10,10 +10,15 @@ dependencies:
       - torch==2.3.1 --index-url https://download.pytorch.org/whl/cu121
       - torchvision==0.18.1 --index-url https://download.pytorch.org/whl/cu121
 
-      # HuggingFace stack — ModernBERT needs >= 4.47.0
-      - transformers>=4.47.0
+      # HuggingFace stack — ModernBERT needs >= 4.47.0.
+      # PIN < 5: transformers 5.x is a breaking major release (new Trainer /
+      # checkpoint-save API) that crashes this script — the 2026-05 results were
+      # produced on 4.x and the post-exclusion sweep MUST match for comparability.
+      # Verified-good resolution: transformers 4.57.6 / tokenizers 0.22.2 / hub 0.36.2.
+      # Only transformers<5 + hub<1.0 need bounding; transformers pins tokenizers itself.
+      - transformers>=4.47.0,<5
       - accelerate>=0.30.0
-      - huggingface_hub>=0.24.0
+      - huggingface_hub>=0.24.0,<1.0
       - tokenizers>=0.20.0
       - safetensors>=0.4.0
 
@@ -25,7 +30,7 @@ dependencies:
       # ML / data
       - scikit-learn>=1.4.0
       - pandas>=2.0.0
-      - numpy>=1.26.0
+      - numpy>=1.26.0,<2   # transformers 4.x + torch 2.3.1 use the numpy 1.x ABI (NOT numpy 2)
       - scipy>=1.12.0
       - xgboost>=2.0.0      # clinical_pipeline/02a + snp_pipeline/19 heads
       - umap-learn>=0.5.5   # snp_pipeline/02_pca + 19c embedding UMAPs
