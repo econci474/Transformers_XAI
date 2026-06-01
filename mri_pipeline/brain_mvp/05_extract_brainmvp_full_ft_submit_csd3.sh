@@ -39,7 +39,10 @@
 # Submit:  sbatch mri_pipeline/brain_mvp/05_extract_brainmvp_full_ft_submit_csd3.sh
 # =============================================================================
 
-set -euo pipefail
+# NOTE: Do NOT use `set -euo pipefail` here. CSD3's conda.sh (sourced below)
+# touches PS1 which is unbound in SLURM non-interactive shells, so `-u`
+# trips and the job dies before any output. The default bash behaviour
+# is what every other submit script in this repo uses.
 
 module purge
 module load cuda/12.1
