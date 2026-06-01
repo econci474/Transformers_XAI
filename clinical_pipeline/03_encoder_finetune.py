@@ -184,6 +184,11 @@ def parse_args():
     p.add_argument("--wandb",           action="store_true",
                    help="Log this run to Weights & Biases in OFFLINE mode (sync later)")
     p.add_argument("--wandb_project",   type=str,   default="clinical-encoder-post-exclusion")
+    p.add_argument("--save_model",      action="store_true",
+                   help="Persist full weights to best_checkpoint/ (~0.6 GB base / ~1.6 GB large "
+                        "PER RUN). OFF by default to fit disk — per-patient embeddings are exported "
+                        "regardless (see _encoder_embed_lib). Re-run a single combo with this flag "
+                        "if you ever need the weights (e.g. for explainability).")
     return p.parse_args()
 
 
@@ -578,11 +583,39 @@ def main():
     print(f"\n  Saved → {out_dir / 'metrics.json'}")
     print(f"  Saved → {out_dir / 'training_log.csv'}")
 
-    # Save best model checkpoint
-    best_ckpt_dir = out_dir / "best_checkpoint"
-    model.save_pretrained(best_ckpt_dir)
-    tokenizer.save_pretrained(best_ckpt_dir)
-    print(f"  Best model saved → {best_ckpt_dir}")
+    # ── Export per-patient embeddings + probabilities (provenance-tagged) ──────
+    # Runs on the in-memory BEST model (load_best_model_at_end=True). Scores EVERY
+    # patient in this seed's split files (~616, task-independent split), tagging
+    # each with their fold so multimodal fusion can subselect without leakage.
+    # This is why we can keep NO weights on disk (--save_model OFF by default).
+    try:
+        import sys as _sys
+        _sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from _encoder_embed_lib import (build_seed_frame, pooled_predict,
+                                         make_provenance, write_run_embeddings)
+        print(f"\n  Exporting per-patient embeddings ...")
+        frame = build_seed_frame(args.data_dir, args.seed, task_cfg, args.text_col)
+        emb_pool, emb_head, probs, preds = pooled_predict(
+            model, tokenizer, frame["text"].tolist(),
+            max_length=args.max_length, batch_size=32, device=device)
+        prov = make_provenance(model, model_slug, args.model_id, args.task, strategy,
+                               args.seed, args.max_length, task_cfg.get("label_map"),
+                               args.text_col, args.data_dir, source="inline")
+        write_run_embeddings(out_dir / "embeddings", frame, emb_pool, emb_head,
+                             probs, preds, prov)
+        print(f"  Embeddings → {out_dir / 'embeddings'}  "
+              f"(N={len(frame)}, emb_pool={emb_pool.shape[1]}, emb_head={emb_head.shape[1]})")
+    except Exception as e:
+        print(f"  [WARN] embedding export failed: {e}")
+
+    # Save best model checkpoint (opt-in — OFF by default to fit disk)
+    if args.save_model:
+        best_ckpt_dir = out_dir / "best_checkpoint"
+        model.save_pretrained(best_ckpt_dir)
+        tokenizer.save_pretrained(best_ckpt_dir)
+        print(f"  Best model saved → {best_ckpt_dir}")
+    else:
+        print(f"  Skipping best_checkpoint save (--save_model not set; embeddings exported).")
 
     # Clean up intermediate Trainer checkpoints to save disk space
     import shutil

@@ -31,6 +31,7 @@ dependencies:
       - scikit-learn>=1.4.0
       - pandas>=2.0.0
       - numpy>=1.26.0,<2   # transformers 4.x + torch 2.3.1 use the numpy 1.x ABI (NOT numpy 2)
+      - pyarrow>=14.0.0    # parquet engine for the per-patient embeddings export (03/_encoder_embed_lib)
       - scipy>=1.12.0
       - xgboost>=2.0.0      # clinical_pipeline/02a + snp_pipeline/19 heads
       - umap-learn>=0.5.5   # snp_pipeline/02_pca + 19c embedding UMAPs
