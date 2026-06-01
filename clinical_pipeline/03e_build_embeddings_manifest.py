@@ -107,8 +107,10 @@ def harvest(out_root: Path, args):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out_dir", required=True, help="Root of the encoder run outputs.")
-    ap.add_argument("--data_dir", required=True,
-                    help="Verbose baseline dir containing seed_*/{train,val,test}.csv.")
+    ap.add_argument("--data_dir", default=None,
+                    help="Verbose baseline dir with seed_*/{train,val,test}.csv. Optional for "
+                         "manifest/verify (each run's own data_dir from meta is used); REQUIRED "
+                         "for --harvest.")
     ap.add_argument("--device", default=None)
     ap.add_argument("--max_length", type=int, default=1024)
     ap.add_argument("--harvest", action="store_true",
@@ -122,9 +124,13 @@ def main():
     out_root = Path(args.out_dir)
 
     if args.harvest:
+        if not args.data_dir:
+            ap.error("--harvest requires --data_dir")
         harvest(out_root, args)
 
-    # Leakage / provenance check per run
+    # Leakage / provenance check per run. Each run records its OWN data_dir (the split
+    # tree it was trained on) — tasks like T4 use a different tree (verbose/baseline_T4),
+    # so verify against meta["data_dir"], falling back to the CLI --data_dir.
     issues = []
     for meta_path in sorted(out_root.rglob("embeddings/embeddings_meta.json")):
         run_embed_dir = meta_path.parent
@@ -132,7 +138,11 @@ def main():
             meta = json.loads(meta_path.read_text())
         except Exception as e:
             issues.append((str(run_embed_dir), f"unreadable meta: {e}")); continue
-        ok, msg = verify_split_integrity(run_embed_dir, args.data_dir, meta.get("seed"))
+        run_data_dir = meta.get("data_dir") or args.data_dir
+        if not run_data_dir:
+            issues.append((str(run_embed_dir), "no data_dir in meta and no --data_dir given"))
+            continue
+        ok, msg = verify_split_integrity(run_embed_dir, run_data_dir, meta.get("seed"))
         if not ok:
             issues.append((str(run_embed_dir), msg))
 

@@ -151,6 +151,19 @@ TASK_CONFIG = {
         "filter_non_ad": False,
         "description":   "Binary: sCN vs progressors+AD (pCN/pMCI/AD, excl. sMCI)",
     },
+    # AD-conversion HORIZON (matches MRI 04_*ViT T4_conv_horizon). 3-class ordinal over
+    # CONVERTERS only (pMCI + pCN_to_AD): years_to_AD bucketed <3 / 3-7 / >=7 -> 0/1/2.
+    # `Label_T4` is precomputed by 01e_build_T4_labels_and_splits.py (direct column, so the
+    # standard label path handles it). Run via the SEPARATE 03f submit with its own
+    # baseline_T4 split tree (verbose/baseline_T4) — NOT part of the 03d 10-task grid.
+    "T4_conv_horizon": {
+        "label_col":     "Label_T4",
+        "num_labels":    3,
+        "task_type":     "multiclass",
+        "label_map":     None,
+        "filter_non_ad": False,
+        "description":   "Multiclass: AD-conversion horizon (<3y / 3-7y / >=7y), converters (pMCI + pCN_to_AD)",
+    },
 }
 
 
