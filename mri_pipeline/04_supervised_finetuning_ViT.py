@@ -214,6 +214,36 @@ TASK_CONFIG = {
         "label_anchor_max_months": 12,
         "description":            "Prognosis: conversion to AD within 5 years",
     },
+    "T3c_conv7y": {
+        # Extends T3a/T3b to a 7-year prognostic horizon. Label_7y is
+        # already in the master (01b_build_clinical_csv.py emits Label_1y
+        # through Label_10y); test-cohort positive rate ~29%.
+        # Cohort caveat: subjects need >= 7 y of follow-up to be labelled;
+        # ADNI3-late subjects with shorter FU will fall out (Label_7y NaN
+        # -> dropped by _resolve_labels).
+        "label_col":              "Label_7y",
+        "num_labels":             2,
+        "task_type":              "binary",
+        "label_map":              None,
+        "filter_non_ad":          True,
+        "session_policy":         "baseline_anchored",
+        "label_anchor_max_months": 12,
+        "description":            "Prognosis: conversion to AD within 7 years",
+    },
+    "T3d_conv10y": {
+        # 10-year prognostic horizon. Label_10y is already in the master.
+        # Cohort caveat: subjects need >= 10 y of follow-up to be labelled;
+        # T3d is effectively an ADNI1/GO/2 analysis since most ADNI3
+        # subjects only have 3-5 y of FU. Test-cohort positive rate ~33%.
+        "label_col":              "Label_10y",
+        "num_labels":             2,
+        "task_type":              "binary",
+        "label_map":              None,
+        "filter_non_ad":          True,
+        "session_policy":         "baseline_anchored",
+        "label_anchor_max_months": 12,
+        "description":            "Prognosis: conversion to AD within 10 years",
+    },
 }
 
 
