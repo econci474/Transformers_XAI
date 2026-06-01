@@ -168,6 +168,23 @@ TASK_CONFIG = {
         "neg_col":        "sMCI",
         "description":    "Binary: pMCI vs sMCI (MCI->AD conversion, earliest scan/subject)",
     },
+    "T1e_pcn_vs_scn": {
+        # Conversion task: among CN-baseline subjects, predict whether they
+        # progressed (pCN -- to MCI OR to AD) vs stayed stable (sCN). Labels
+        # come from pCN_to_AD + pCN_to_MCI + sCN columns in the matched CSV
+        # (present on the HPC `_extended_post_exclusion` variant only). The
+        # earliest scan per subject is kept (same rationale as T1d).
+        # Cohort: 60 pCN + 152 sCN = 212 subjects, ~555 scans.
+        "label_col":      None,
+        "num_labels":     2,
+        "task_type":      "binary",
+        "label_map":      None,
+        "filter_non_ad":  False,
+        "session_policy": "conversion",
+        "pos_cols":       ["pCN_to_AD", "pCN_to_MCI"],
+        "neg_col":        "sCN",
+        "description":    "Binary: pCN (CN->MCI or CN->AD) vs sCN, earliest scan/subject",
+    },
     "T2_multiclass": {
         "label_col":      "Label_bl_multi",
         "num_labels":     3,
@@ -388,10 +405,12 @@ def class_names_for(task_cfg: dict) -> list:
     falls back to pos_col/neg_col (conversion tasks) or generic 'class_{i}'.
     """
     n = task_cfg["num_labels"]
-    # Conversion tasks: pos_col=class 1, neg_col=class 0.
+    # Conversion tasks: pos_col(s)=class 1, neg_col(s)=class 0.
     if task_cfg.get("session_policy") == "conversion":
-        return [task_cfg.get("neg_col", "class_0"),
-                task_cfg.get("pos_col", "class_1")]
+        pos = task_cfg.get("pos_cols") or [task_cfg.get("pos_col", "class_1")]
+        neg = task_cfg.get("neg_cols") or [task_cfg.get("neg_col", "class_0")]
+        return ["|".join(c for c in neg if c is not None) or "class_0",
+                "|".join(c for c in pos if c is not None) or "class_1"]
     lm = task_cfg.get("label_map")
     if not lm:
         return [f"class_{i}" for i in range(n)]
@@ -502,9 +521,19 @@ def _resolve_labels(df: pd.DataFrame, task_cfg: dict) -> pd.DataFrame:
             return task_cfg["label_map"].get(v) if task_cfg["label_map"] else v
         df["label"] = df.apply(_label, axis=1)
     elif task_cfg["session_policy"] == "conversion":
-        pos = task_cfg["pos_col"]
-        neg = task_cfg["neg_col"]
-        for c in (pos, neg):
+        # Tasks support EITHER single pos_col/neg_col OR pos_cols/neg_cols
+        # (plural, list) for OR semantics across multiple positive/negative
+        # indicator columns. T1e uses pos_cols=["pCN_to_AD", "pCN_to_MCI"]
+        # because pCN is the union of two conversion subtypes.
+        pos_cols = list(task_cfg.get("pos_cols") or [task_cfg.get("pos_col")])
+        neg_cols = list(task_cfg.get("neg_cols") or [task_cfg.get("neg_col")])
+        pos_cols = [c for c in pos_cols if c is not None]
+        neg_cols = [c for c in neg_cols if c is not None]
+        if not pos_cols or not neg_cols:
+            raise KeyError(f"Conversion task {task_cfg.get('description', '?')!r} "
+                           f"needs at least one pos_col/pos_cols and neg_col/neg_cols.")
+        required = pos_cols + neg_cols
+        for c in required:
             if c not in df.columns:
                 raise KeyError(
                     f"matched_labels CSV is missing the {c!r} column "
@@ -513,9 +542,10 @@ def _resolve_labels(df: pd.DataFrame, task_cfg: dict) -> pd.DataFrame:
         # _is_one tolerates "1", "1.0", True, etc.
         def _is_one(v):
             return str(v).strip() in ("1", "1.0", "True", "true")
-        df = df.dropna(subset=[pos, neg], how="any").copy()
+        df = df.dropna(subset=required, how="any").copy()
         df["label"] = df.apply(
-            lambda r: 1 if _is_one(r[pos]) else (0 if _is_one(r[neg]) else None),
+            lambda r: (1 if any(_is_one(r[c]) for c in pos_cols)
+                       else (0 if any(_is_one(r[c]) for c in neg_cols) else None)),
             axis=1)
         df = df.dropna(subset=["label"]).copy()
         df["label"] = df["label"].astype(int)

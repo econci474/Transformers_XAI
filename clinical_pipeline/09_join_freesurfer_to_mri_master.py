@@ -277,10 +277,16 @@ def date_fallback_join(merged: pd.DataFrame, fs_pref: pd.DataFrame,
         if pd.isna(diffs.iloc[best_pos]) or diffs.iloc[best_pos].days > max_days:
             continue
         # Fill missing cells in `merged` row from the matched cand row.
+        # Convert Timestamps to string before assignment to avoid pandas dtype
+        # errors when the destination column is string-dtype (pandas >= 2.2
+        # is strict about Timestamp -> str column inserts).
         cand_row = cands.iloc[best_pos]
         for c in fill_cols:
             if c in cand_row.index:
-                merged.at[idx, c] = cand_row[c]
+                v = cand_row[c]
+                if isinstance(v, pd.Timestamp):
+                    v = v.strftime("%Y-%m-%d")
+                merged.at[idx, c] = v
         n_filled += 1
     print(f"  Date-fallback ({prefix}, <={max_days}d): filled {n_filled} rows")
     return merged
@@ -506,7 +512,10 @@ def main() -> int:
     if "VISCODE2" in merged.columns and "VISCODE_2" in merged.columns:
         merged = merged.drop(columns=["VISCODE2"])
     # Date-based fallback for VISCODE2-NaN rows (ADNI1-3T data quality issue).
-    merged = date_fallback_join(merged, fs_xs_pref, "xs", max_days=30)
+    # Exact-day only: empirically every row recovered by the fallback has
+    # EXAMDATE == mri_date (diff=0), so a wider window adds risk without
+    # adding recall.
+    merged = date_fallback_join(merged, fs_xs_pref, "xs", max_days=0)
 
     # ---- Left-join (Long) ------------------------------------------------
     merged = merged.merge(
@@ -520,8 +529,8 @@ def main() -> int:
     merged = merged.drop(columns=[c for c in ("RID", "VISCODE2_fs_long") if c in merged.columns])
     if "VISCODE2" in merged.columns and "VISCODE_2" in merged.columns:
         merged = merged.drop(columns=["VISCODE2"])
-    # Date-based fallback for the longitudinal join too.
-    merged = date_fallback_join(merged, fs_long_pref, "long", max_days=30)
+    # Date-based fallback for the longitudinal join too (exact-day only).
+    merged = date_fallback_join(merged, fs_long_pref, "long", max_days=0)
 
     # ---- Within-subject longitudinal deltas -----------------------------
     print("  Deriving within-subject deltas...")
