@@ -408,17 +408,22 @@ def main():
 
     # ── Model ─────────────────────────────────────────────────────────────────
     print(f"  Loading model ...")
-    # attn_implementation="sdpa": Flash-Attention-2's backward produces NaN gradients
-    # when fine-tuning ModernBERT (loss=0, grad_norm=NaN from step 1) — a known bug
-    # (huggingface/transformers#35988). flash-attn is installed in this env, so
-    # ModernBERT would auto-select FA2; force SDPA instead. Frozen runs were unaffected
-    # only because the backbone isn't back-propagated.
+    # ModernBERT full fine-tune NaN guards (loss=0 / grad_norm=NaN from step 1 — ONLY in full
+    # fine-tune, because frozen never back-props the backbone):
+    #   * reference_compile=False — PRIMARY FIX. ModernBERT torch.compiles its backbone by
+    #     default; that compiled BACKWARD NaNs under torch 2.4.1. The env drifted off
+    #     environment.yml's pinned torch==2.3.1, under which full-ft trained fine in May
+    #     (verified from May logs). Disabling compile sidesteps the torch-2.4.1 regression.
+    #   * attn_implementation="sdpa" — avoids the separate Flash-Attn-2 NaN bug
+    #     (huggingface/transformers#35988); a no-op here (flash-attn isn't installed, so SDPA
+    #     is already the default), kept defensively.
     model = AutoModelForSequenceClassification.from_pretrained(
         args.model_id,
         num_labels=task_cfg["num_labels"],
         cache_dir=hf_cache,
         ignore_mismatched_sizes=True,
         attn_implementation="sdpa",
+        reference_compile=False,
     )
 
     if args.freeze_backbone:
