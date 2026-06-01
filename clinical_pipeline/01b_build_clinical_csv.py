@@ -688,16 +688,42 @@ def format_summarised_text(d):
 # repeated across all their visit rows.  This makes them static predictors
 # rather than recomputing from each visit date.
 def compute_prognosis(ptid, years):
-    """Return 1 if patient converts to AD within `years` years of their baseline."""
+    """Censored-aware AD-conversion label for a fixed horizon `years`.
+
+    Returns:
+        1   if any AD diagnosis exists in (baseline, baseline + years]
+        0   if the subject was followed past `baseline + years` and no AD
+            diagnosis was recorded -- a true negative
+        NaN if (a) no baseline date, OR
+            (b) the subject's last visit is BEFORE `baseline + years` and
+                no AD diagnosis was recorded -- right-censored, unknown
+                later state. Downstream `_resolve_labels` drops NaN
+                labels, so censored subjects fall out of T3 training.
+
+    Replaces the original naive version (which returned 0 for both true
+    negatives AND censored subjects). For long horizons (7y, 10y) the
+    censored share was substantial, biasing T3c/T3d toward false
+    negatives.
+    """
     baseline = bl_date_map.get(ptid)
-    if baseline is None: return np.nan
-    future_dx = dx_df[
-        (dx_df["PTID"] == ptid) &
-        (dx_df["EXAMDATE"] > baseline) &
-        (dx_df["EXAMDATE"] <= baseline + pd.DateOffset(years=years)) &
-        (dx_df["_diag_bin"] == 1)
+    if baseline is None:
+        return np.nan
+    sub_dx = dx_df[dx_df["PTID"] == ptid]
+    horizon = baseline + pd.DateOffset(years=years)
+    # 1: any AD diagnosis in the horizon window
+    in_window_ad = sub_dx[
+        (sub_dx["EXAMDATE"] > baseline) &
+        (sub_dx["EXAMDATE"] <= horizon) &
+        (sub_dx["_diag_bin"] == 1)
     ]
-    return 1 if not future_dx.empty else 0
+    if not in_window_ad.empty:
+        return 1
+    # NaN: censored -- last visit before the horizon AND no AD seen
+    last_visit = sub_dx["EXAMDATE"].max()
+    if pd.isna(last_visit) or last_visit < horizon:
+        return np.nan
+    # 0: followed past the horizon, no AD seen -- true negative
+    return 0
 
 
 

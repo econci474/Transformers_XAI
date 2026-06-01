@@ -1,8 +1,8 @@
 #!/bin/bash
 #SBATCH -A COMPUTERLAB-SL3-CPU
-#SBATCH --job-name=bmvp_head_T3abcd
-#SBATCH --output=/home/ec474/rds/hpc-work/ADNI_MRI/brainmvp_debug/slurm_logs/bmvp_head_T3abcd_%A_%a.log
-#SBATCH --error=/home/ec474/rds/hpc-work/ADNI_MRI/brainmvp_debug/slurm_logs/bmvp_head_T3abcd_%A_%a.err
+#SBATCH --job-name=bdino_head_T3abcd
+#SBATCH --output=/home/ec474/rds/hpc-work/ADNI_MRI/braindino_outputs/slurm_logs/bdino_head_T3abcd_%A_%a.log
+#SBATCH --error=/home/ec474/rds/hpc-work/ADNI_MRI/braindino_outputs/slurm_logs/bdino_head_T3abcd_%A_%a.err
 #SBATCH -p icelake
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -11,24 +11,22 @@
 #SBATCH --time=01:00:00
 #SBATCH --array=0-215%4
 # =============================================================================
-# 04_brainmvp_head_sweep_T3abcd_submit_csd3.sh
+# 04_braindino_head_sweep_T3abcd_submit_csd3.sh
 # =============================================================================
-# Cached-embedding head HP sweep across the FULL T3 conversion-horizon
-# family: T3a (3y) + T3b (5y) + T3c (7y) + T3d (10y). The current
-# cross-model table has NO T3 cells for any architecture (the existing
-# 04_brainmvp_head_sweep_submit_csd3.sh covers only T1/T2 family), so this
-# is the first full T3 sweep. 4 tasks x 3 seeds x 3 LRs x 3 drops x
-# 2 LSs = 216 cells. ~1 h wall-clock on icelake at %4 throttle.
+# Mirror of 04_brainmvp_head_sweep_T3abcd_submit_csd3.sh but with BrainDINO
+# 768-d frozen embeddings. T3a/b/c/d prognostic horizons (3y/5y/7y/10y),
+# reusing the ORIGINAL baseline/ splits (NOT baseline_T4).
 #
-# IMPORTANT -- run AFTER applying the censoring fix
-# (clinical_pipeline/01f_apply_censoring_to_Label_Ny.py + scp the patched
-# masters/splits to CSD3). Otherwise Label_Ny=0 silently mixes true
-# negatives with right-censored subjects (significant bias at 7y/10y).
+# 4 tasks x 3 seeds x 3 LRs x 3 drops x 2 LSs = 216 cells.
 #
-# T3a/b/c/d are registered in TASK_CONFIG
-# (mri_pipeline/04_supervised_finetuning_ViT.py).
+# Censoring caveat (documented in TASK_CONFIG): Label_7y / Label_10y in
+# the current master use the naive compute_prognosis -- 0 includes both
+# true negatives and right-censored subjects. The patch script
+# clinical_pipeline/01f_apply_censoring_to_Label_Ny.py fixes this in
+# place; after applying + scp to CSD3, the T3abcd sweep will pick up
+# clean labels automatically (no submit-script change required).
 #
-# Submit:  sbatch mri_pipeline/cached_head_sweep/04_brainmvp_head_sweep_T3abcd_submit_csd3.sh
+# Submit:  sbatch mri_pipeline/cached_head_sweep/04_braindino_head_sweep_T3abcd_submit_csd3.sh
 # =============================================================================
 
 module purge
@@ -36,14 +34,14 @@ source "$(conda info --base)/etc/profile.d/conda.sh"
 conda activate mri
 
 SCRIPT_DIR="/home/ec474/rds/hpc-work/Transformers_XAI/mri_pipeline/cached_head_sweep"
-EMBEDDINGS_PT="/home/ec474/rds/hpc-work/ADNI_MRI/cached_embeddings/brainmvp/brainmvp_pooled.pt"
+EMBEDDINGS_PT="/home/ec474/rds/hpc-work/ADNI_MRI/cached_embeddings/braindino/braindino_pooled.pt"
 MATCHED_LABELS_CSV="/home/ec474/rds/hpc-work/ADNI_MRI/master_mri_clinical_matched_viscode2_extended_post_exclusion.csv"
 DATA_DIR="/home/ec474/rds/hpc-work/ADNI_CL/no_cdr_stratified_post_exclusion/tabular/baseline"
-OUT_DIR="/home/ec474/rds/hpc-work/ADNI_MRI/brainmvp_debug/aug_none/BrainMVP_uniformer_frozen_cached"
+OUT_DIR="/home/ec474/rds/hpc-work/ADNI_MRI/braindino_outputs/aug_none_hp_tuned/BrainDINO_vitb16_frozen_cached"
 
-MODEL_NAME="BrainMVP"
-EMBED_DIM=512
-WANDB_PROJECT="${WANDB_PROJECT:-brainmvp_frozen_cached_T3abcd}"
+MODEL_NAME="BrainDINO"
+EMBED_DIM=768
+WANDB_PROJECT="${WANDB_PROJECT:-braindino_frozen_cached_T3abcd}"
 export WANDB_MODE="${WANDB_MODE:-offline}"
 
 TASKS=("T3a_conv3y" "T3b_conv5y" "T3c_conv7y" "T3d_conv10y")
@@ -72,7 +70,7 @@ RUN_OUT_DIR="${OUT_DIR}/${TASK}/seed_${SEED}/lr$(printf '%.0e' $LR)_d${DROPOUT}_
 METRICS="${RUN_OUT_DIR}/metrics.json"
 
 mkdir -p "${RUN_OUT_DIR}"
-mkdir -p "/home/ec474/rds/hpc-work/ADNI_MRI/brainmvp_debug/slurm_logs"
+mkdir -p "/home/ec474/rds/hpc-work/ADNI_MRI/braindino_outputs/slurm_logs"
 export WANDB_DIR="${RUN_OUT_DIR}"
 
 echo "============================================================"
