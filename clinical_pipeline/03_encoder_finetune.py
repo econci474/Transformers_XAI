@@ -452,14 +452,23 @@ def main():
         )
         print(f"  wandb offline run: {run_name}")
 
-    # ── Mixed precision ───────────────────────────────────────────────────────
-    # ModernBERT (esp. -large) overflows in fp16 -> NaN logits/loss from step 1,
-    # which silently freezes training (GradScaler skips every step, LR stays 0).
-    # bf16 has fp32's exponent range, so no overflow; A100 and L4 both support it.
-    # Fall back to fp16 only on pre-Ampere GPUs, fp32 on CPU.
-    use_bf16 = torch.cuda.is_available() and torch.cuda.is_bf16_supported()
-    use_fp16 = torch.cuda.is_available() and not use_bf16
-    print(f"  Precision: {'bf16' if use_bf16 else 'fp16' if use_fp16 else 'fp32'}")
+    # ── Mixed precision (strategy-dependent — see below) ───────────────────────
+    # transformers 4.57's ModernBERT is numerically fragile in low precision:
+    #   * fp16 OVERFLOWS the backbone forward -> NaN (and with frozen heads the
+    #     GradScaler then freezes the LR at 0). Never use fp16 here.
+    #   * bf16 fixes the FROZEN case (only the head trains), but back-propagating
+    #     through the full backbone in bf16 yields NaN GRADIENTS from step 1 (no
+    #     GradScaler to skip them) -> the whole model is corrupted on the first step.
+    # So: FROZEN -> bf16 (fast, stable); FULL fine-tune -> fp32 (stable backward).
+    # (HYPERPARAMETERS are unchanged: lr/epochs/batch/wd/warmup/patience as before.)
+    bf16_ok = torch.cuda.is_available() and torch.cuda.is_bf16_supported()
+    if args.freeze_backbone:
+        use_bf16 = bf16_ok
+        use_fp16 = torch.cuda.is_available() and not bf16_ok
+    else:
+        use_bf16 = use_fp16 = False          # full fine-tune -> fp32
+    print(f"  Precision: {'bf16' if use_bf16 else 'fp16' if use_fp16 else 'fp32'}"
+          f"  (strategy={strategy})")
 
     # ── Training arguments ────────────────────────────────────────────────────
     training_args = TrainingArguments(
