@@ -54,7 +54,7 @@ SCRIPT_DIR="/home/ec474/rds/hpc-work/Transformers_XAI/mri_pipeline/brain_mvp"
 EXTRACTOR="${SCRIPT_DIR}/05_extract_brainmvp_full_ft_embeddings.py"
 
 INPUTS_DIR="/home/ec474/rds/hpc-work/ADNI_SMRIPREP/derivatives/brainmvp_inputs"
-CKPT_ROOT="/home/ec474/rds/hpc-work/ADNI_MRI/brainmvp_debug/brainmvp_debug"
+CKPT_ROOT="/home/ec474/rds/hpc-work/ADNI_MRI/brainmvp_debug"
 MRI_MASTER="/home/ec474/rds/hpc-work/ADNI_MRI/master_mri_clinical_matched_viscode2_extended_post_exclusion.csv"
 SPLITS_ROOT="/home/ec474/rds/hpc-work/ADNI_CL/no_cdr_stratified_post_exclusion/tabular/baseline"
 OUT_DIR="/home/ec474/rds/hpc-work/ADNI_MRI/brainmvp_embeddings"

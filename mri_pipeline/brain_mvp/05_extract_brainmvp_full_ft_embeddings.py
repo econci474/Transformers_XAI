@@ -95,7 +95,7 @@ DEFAULT_INPUTS_DIR = Path(
     "/home/ec474/rds/hpc-work/ADNI_SMRIPREP/derivatives/brainmvp_inputs"
 )
 DEFAULT_CKPT_ROOT = Path(
-    "/home/ec474/rds/hpc-work/ADNI_MRI/brainmvp_debug/brainmvp_debug"
+    "/home/ec474/rds/hpc-work/ADNI_MRI/brainmvp_debug"
 )
 DEFAULT_MRI_MASTER = Path(
     "/home/ec474/rds/hpc-work/ADNI_MRI/"
