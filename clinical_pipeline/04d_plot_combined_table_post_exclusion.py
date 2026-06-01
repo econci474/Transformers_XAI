@@ -183,7 +183,7 @@ FOOTNOTES = [
     r"All tabular models: median imputation + standardisation, seed=42.",
     r"$^{d}$ Encoders (ModernBERT / BioClinical-ModernBERT, base & large): AdamW, batch=16, "
     r"max_len=1024, weight_decay=1e-5, warmup_ratio=0.1, class-weighted cross-entropy, "
-    r"early-stopping patience=5, fp16.",
+    r"early-stopping patience=5, bf16.",
     r"      Frozen: lr=1e-3, 20 epochs (classifier head only).   "
     r"Full fine-tune: lr=2e-5, 10 epochs.   Seeds 0/1/2; 80/10/10 stratified split.",
 ]

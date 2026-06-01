@@ -447,6 +447,15 @@ def main():
         )
         print(f"  wandb offline run: {run_name}")
 
+    # ── Mixed precision ───────────────────────────────────────────────────────
+    # ModernBERT (esp. -large) overflows in fp16 -> NaN logits/loss from step 1,
+    # which silently freezes training (GradScaler skips every step, LR stays 0).
+    # bf16 has fp32's exponent range, so no overflow; A100 and L4 both support it.
+    # Fall back to fp16 only on pre-Ampere GPUs, fp32 on CPU.
+    use_bf16 = torch.cuda.is_available() and torch.cuda.is_bf16_supported()
+    use_fp16 = torch.cuda.is_available() and not use_bf16
+    print(f"  Precision: {'bf16' if use_bf16 else 'fp16' if use_fp16 else 'fp32'}")
+
     # ── Training arguments ────────────────────────────────────────────────────
     training_args = TrainingArguments(
         output_dir=str(trainer_dir),
@@ -465,8 +474,9 @@ def main():
         metric_for_best_model="eval_val_loss",
         greater_is_better=False,
         save_total_limit=2,           # keep only best + latest checkpoint
-        # Mixed precision
-        fp16=torch.cuda.is_available(),
+        # Mixed precision (bf16 preferred — see use_bf16 above; fp16 NaNs ModernBERT)
+        bf16=use_bf16,
+        fp16=use_fp16,
         # Logging
         logging_steps=10,
         logging_dir=str(out_dir / "tb_logs"),
