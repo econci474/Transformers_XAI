@@ -395,11 +395,17 @@ def main():
 
     # ── Model ─────────────────────────────────────────────────────────────────
     print(f"  Loading model ...")
+    # attn_implementation="sdpa": Flash-Attention-2's backward produces NaN gradients
+    # when fine-tuning ModernBERT (loss=0, grad_norm=NaN from step 1) — a known bug
+    # (huggingface/transformers#35988). flash-attn is installed in this env, so
+    # ModernBERT would auto-select FA2; force SDPA instead. Frozen runs were unaffected
+    # only because the backbone isn't back-propagated.
     model = AutoModelForSequenceClassification.from_pretrained(
         args.model_id,
         num_labels=task_cfg["num_labels"],
         cache_dir=hf_cache,
         ignore_mismatched_sizes=True,
+        attn_implementation="sdpa",
     )
 
     if args.freeze_backbone:
@@ -452,21 +458,13 @@ def main():
         )
         print(f"  wandb offline run: {run_name}")
 
-    # ── Mixed precision (strategy-dependent — see below) ───────────────────────
-    # transformers 4.57's ModernBERT is numerically fragile in low precision:
-    #   * fp16 OVERFLOWS the backbone forward -> NaN (and with frozen heads the
-    #     GradScaler then freezes the LR at 0). Never use fp16 here.
-    #   * bf16 fixes the FROZEN case (only the head trains), but back-propagating
-    #     through the full backbone in bf16 yields NaN GRADIENTS from step 1 (no
-    #     GradScaler to skip them) -> the whole model is corrupted on the first step.
-    # So: FROZEN -> bf16 (fast, stable); FULL fine-tune -> fp32 (stable backward).
-    # (HYPERPARAMETERS are unchanged: lr/epochs/batch/wd/warmup/patience as before.)
-    bf16_ok = torch.cuda.is_available() and torch.cuda.is_bf16_supported()
-    if args.freeze_backbone:
-        use_bf16 = bf16_ok
-        use_fp16 = torch.cuda.is_available() and not bf16_ok
-    else:
-        use_bf16 = use_fp16 = False          # full fine-tune -> fp32
+    # ── Mixed precision ───────────────────────────────────────────────────────
+    # bf16 on Ampere/L4; fp16 only as a pre-Ampere fallback (fp16 OVERFLOWS the
+    # ModernBERT forward -> NaN). The earlier full-ft NaN was NOT a precision problem
+    # — it was Flash-Attention-2 (now forced to SDPA at model load; HF #35988), so
+    # bf16 is stable for both frozen and full fine-tune.
+    use_bf16 = torch.cuda.is_available() and torch.cuda.is_bf16_supported()
+    use_fp16 = torch.cuda.is_available() and not use_bf16
     print(f"  Precision: {'bf16' if use_bf16 else 'fp16' if use_fp16 else 'fp32'}"
           f"  (strategy={strategy})")
 

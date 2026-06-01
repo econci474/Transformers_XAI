@@ -138,7 +138,9 @@ def load_encoder(ckpt_path, device=None):
     from transformers import AutoModelForSequenceClassification, AutoTokenizer
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
     tok = AutoTokenizer.from_pretrained(str(ckpt_path))
-    model = AutoModelForSequenceClassification.from_pretrained(str(ckpt_path))
+    # SDPA, not Flash-Attn-2 (FA2 NaNs ModernBERT — HF #35988); harmless for inference.
+    model = AutoModelForSequenceClassification.from_pretrained(
+        str(ckpt_path), attn_implementation="sdpa")
     model.to(device).eval()
     return model, tok
 
