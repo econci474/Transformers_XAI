@@ -244,6 +244,29 @@ TASK_CONFIG = {
         "label_anchor_max_months": 12,
         "description":            "Prognosis: conversion to AD within 10 years",
     },
+    "T4_conv_horizon": {
+        # Exploratory 3-class ordinal: predict the AD-conversion horizon
+        # bucket among confirmed converters (pMCI + pCN_to_AD). Buckets:
+        #   class 0: years_to_AD < 3
+        #   class 1: 3 <= years_to_AD < 7
+        #   class 2: years_to_AD >= 7
+        # Cohort: 146 subjects (121 pMCI + 25 pCN_to_AD). Label_T4 column
+        # is added to the MRI master by 01e_build_T4_labels_and_splits.py.
+        # The T4 splits live under
+        # derivatives/clinical/no_cdr_stratified_post_exclusion/tabular/
+        # baseline_T4/seed_{0,1,2}/{train,val,test}.csv (point --data_dir
+        # at this when submitting). Subjects outside the T4 cohort have
+        # Label_T4=NaN and are dropped automatically by _resolve_labels.
+        "label_col":              "Label_T4",
+        "num_labels":             3,
+        "task_type":              "multiclass",
+        "label_map":              None,
+        "filter_non_ad":          False,
+        "session_policy":         "baseline_anchored",
+        "label_anchor_max_months": 0,     # bl scans only (subject-level label)
+        "description":            "Multiclass: AD-conversion horizon "
+                                  "(3-bucket: <3y / 3-7y / >=7y) on pMCI + pCN_to_AD",
+    },
 }
 
 
