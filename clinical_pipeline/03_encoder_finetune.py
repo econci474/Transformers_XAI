@@ -473,7 +473,12 @@ def main():
         # Select the best checkpoint on the VALIDATION loss specifically.
         metric_for_best_model="eval_val_loss",
         greater_is_better=False,
-        save_total_limit=2,           # keep only best + latest checkpoint
+        # Keep ONLY the best checkpoint, and store model weights only (no optimizer/
+        # scheduler/RNG state). These runs train start-to-finish and never resume, so
+        # the optimizer state is dead weight — dropping it cuts a full_ft -large
+        # checkpoint from ~5 GB to ~1.6 GB and avoids the save-time memory blow-up.
+        save_total_limit=1,
+        save_only_model=True,
         # Mixed precision (bf16 preferred — see use_bf16 above; fp16 NaNs ModernBERT)
         bf16=use_bf16,
         fp16=use_fp16,
