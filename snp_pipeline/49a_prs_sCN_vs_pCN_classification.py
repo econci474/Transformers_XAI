@@ -340,21 +340,29 @@ def main():
         "test_auc":   [f"{m:.3f}+/-{s:.3f}" for m,s in zip(g["test_auc_mean"],  g["test_auc_std"])],
     })
     fig_h = max(4.5, 0.30 * len(show) + 3.5)
-    fig, ax = plt.subplots(figsize=(15, fig_h)); ax.axis("off")
+    fig, ax = plt.subplots(figsize=(18, fig_h)); ax.axis("off")
     ax.set_title(f"sCN vs pCN -- strict baseline-CN cohort   "
                   f"LD={args.ld_config}  beta={args.beta_source}  "
                   f"(mean +/- std over 3 seeds)\n"
                   f"FM rows: attention provenance annotated in [..] "
-                  f"-- see disclaimer at bottom",
+                  f"-- see footer for the labels each attention pool was trained on",
                   fontsize=10, fontweight="bold", pad=10, loc="left")
-    col_widths = [0.24, 0.18, 0.09, 0.09, 0.10, 0.10, 0.10, 0.10]
+    # First column widened from 0.24 -> 0.42 so the longest FM source name fits.
+    col_widths = [0.42, 0.16, 0.08, 0.08, 0.085, 0.085, 0.085, 0.085]
     tbl = ax.table(cellText=show.values.tolist(), colLabels=show.columns.tolist(),
                     loc="center", cellLoc="center", colWidths=col_widths)
     tbl.auto_set_font_size(False); tbl.set_fontsize(8); tbl.scale(1, 1.2)
     for j in range(len(show.columns)):
         c = tbl[(0, j)]; c.set_facecolor("#222"); c.set_text_props(color="white", weight="bold")
-    # Bold the best mean per metric column (val/test BalAcc + AUC), tie-aware
-    # at display precision (3 dp).
+    # Left-align the long source column so the variant name reads cleanly.
+    src_col = show.columns.get_loc("source")
+    for row_idx in range(len(show)):
+        cell = tbl[(row_idx + 1, src_col)]
+        cell.set_text_props(ha="left")
+        cell.PAD = 0.02
+    # Bold the TOP-3 means per metric column (val/test BalAcc + AUC). Tie-aware
+    # at display precision (3 dp): if a tied value sits at the boundary, all
+    # tied rows are bolded together so we don't arbitrarily pick one.
     BOLD_COLS = {
         "val_bacc":  ("val_bacc_mean",  show.columns.get_loc("val_bacc")),
         "test_bacc": ("test_bacc_mean", show.columns.get_loc("test_bacc")),
@@ -363,10 +371,13 @@ def main():
     }
     g_indexed = g.reset_index(drop=True)
     for _key, (mean_col, col_pos) in BOLD_COLS.items():
-        vals = g_indexed[mean_col]
-        top = round(float(vals.max()), 3)
+        vals_3dp = g_indexed[mean_col].round(3)
+        top3_threshold = sorted(vals_3dp.dropna().unique(), reverse=True)[:3]
+        if not top3_threshold: continue
+        cutoff = top3_threshold[-1]
         for row_idx in g_indexed.index:
-            if round(float(vals.iloc[row_idx]), 3) == top:
+            v = vals_3dp.iloc[row_idx]
+            if pd.notna(v) and v >= cutoff:
                 tbl[(row_idx + 1, col_pos)].set_text_props(weight="bold")
     # Per-seed cohort breakdown footer — same per source so use the first source.
     per_seed = (df[df["source"] == df["source"].iloc[0]]
@@ -383,11 +394,22 @@ def main():
             f"val n={int(r['val_n'])} (pCN={int(r['val_pos'])}, sCN={int(r['val_neg'])})    "
             f"test n={int(r['test_n'])} (pCN={int(r['test_pos'])}, sCN={int(r['test_neg'])})")
     footer_lines.append("")
-    footer_lines.append("FM attention provenance:")
-    # Wrap the long disclaimer for readability.
-    import textwrap as _tw
-    for ln in _tw.wrap(FM_ATTENTION_DISCLAIMER, width=170):
-        footer_lines.append(f"  {ln}")
+    footer_lines.append("FM attention provenance (the labels each ChromHierPool"
+                         " was trained on -- attn=... in row source):")
+    footer_lines.append("  [attn=T1_AD_CN]          ChromHierPool trained on the "
+                         "ORIGINAL Task 1 labels: AD_bl + pMCI + CN_to_AD (positive) "
+                         "vs sCN (negative).")
+    footer_lines.append("                            Softly biased toward AD-onset "
+                         "signal; included as a reference / leakage-style baseline.")
+    footer_lines.append("  [attn=fixed_aggregator]   Deterministic _fixed_aggregator_v3 "
+                         "(gamma=delta=1). No training -- task-independent. The XGB "
+                         "head still sees raw 771-d features.")
+    footer_lines.append("  [attn=sCN_vs_pCN]         ChromHierPool RE-TRAINED on this "
+                         "task's labels: sCN (negative) vs pCN_to_AD + pCN_to_MCI "
+                         "(positive). The fair task-conditioned comparison.")
+    footer_lines.append("")
+    footer_lines.append("Bold cells: top-3 within each of val_bacc / val_auc / "
+                         "test_bacc / test_auc (tie-aware at 3 dp).")
     fig.text(0.01, 0.01, "\n".join(footer_lines), fontsize=8,
               family="monospace", va="bottom")
     png = out_dir / "leaderboard.png"

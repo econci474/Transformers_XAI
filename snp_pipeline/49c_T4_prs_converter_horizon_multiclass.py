@@ -384,17 +384,42 @@ def main():
         "test_auc":   [f"{m:.3f}+/-{s:.3f}" for m,s in zip(g["test_auc_macro_mean"],  g["test_auc_macro_std"])],
     })
     fig_h = max(3.5, 0.30 * len(show) + 2.5)
-    fig, ax = plt.subplots(figsize=(14, fig_h)); ax.axis("off")
+    fig, ax = plt.subplots(figsize=(18, fig_h)); ax.axis("off")
     ax.set_title(f"T4 horizon multiclass -- converter cohort   "
                   f"LD={args.ld_config}  beta={args.beta_source}  "
-                  f"(macro mean +/- std over 3 seeds)",
-                  fontsize=11, fontweight="bold", pad=10, loc="left")
-    col_widths = [0.28, 0.22, 0.12, 0.12, 0.12, 0.12]
+                  f"(macro mean +/- std over 3 seeds)\n"
+                  f"FM rows: attention provenance annotated in [..] "
+                  f"-- see footer for the labels each attention pool was trained on",
+                  fontsize=10, fontweight="bold", pad=10, loc="left")
+    col_widths = [0.42, 0.18, 0.10, 0.10, 0.10, 0.10]
     tbl = ax.table(cellText=show.values.tolist(), colLabels=show.columns.tolist(),
                     loc="center", cellLoc="center", colWidths=col_widths)
     tbl.auto_set_font_size(False); tbl.set_fontsize(8); tbl.scale(1, 1.2)
     for j in range(len(show.columns)):
         c = tbl[(0, j)]; c.set_facecolor("#222"); c.set_text_props(color="white", weight="bold")
+    # Left-align source column so the variant name reads cleanly.
+    src_col = show.columns.get_loc("source")
+    for row_idx in range(len(show)):
+        cell = tbl[(row_idx + 1, src_col)]
+        cell.set_text_props(ha="left")
+        cell.PAD = 0.02
+    # Bold top-3 means for val/test bacc + auc (tie-aware at 3 dp).
+    BOLD_COLS = {
+        "val_bacc":  ("val_bacc_macro_mean",  show.columns.get_loc("val_bacc")),
+        "test_bacc": ("test_bacc_macro_mean", show.columns.get_loc("test_bacc")),
+        "val_auc":   ("val_auc_macro_mean",   show.columns.get_loc("val_auc")),
+        "test_auc":  ("test_auc_macro_mean",  show.columns.get_loc("test_auc")),
+    }
+    g_indexed = g.reset_index(drop=True)
+    for _key, (mean_col, col_pos) in BOLD_COLS.items():
+        vals_3dp = g_indexed[mean_col].round(3)
+        top3 = sorted(vals_3dp.dropna().unique(), reverse=True)[:3]
+        if not top3: continue
+        cutoff = top3[-1]
+        for row_idx in g_indexed.index:
+            v = vals_3dp.iloc[row_idx]
+            if pd.notna(v) and v >= cutoff:
+                tbl[(row_idx + 1, col_pos)].set_text_props(weight="bold")
     # Per-seed cohort breakdown (use PRS source as reference; FM rows may
     # differ in cohort if some PTIDs are missing from the FM anchor).
     src0 = next((s for s in df["source"].unique()
@@ -415,10 +440,20 @@ def main():
             f"test n={int(r['test_n'])} "
             f"({int(r['test_n_class0'])}/{int(r['test_n_class1'])}/{int(r['test_n_class2'])})")
     footer_lines.append("")
-    footer_lines.append("FM attention provenance:")
-    import textwrap as _tw
-    for ln in _tw.wrap(FM_ATTENTION_DISCLAIMER, width=170):
-        footer_lines.append(f"  {ln}")
+    footer_lines.append("FM attention provenance (the labels each ChromHierPool"
+                         " was trained on -- attn=... in row source):")
+    footer_lines.append("  [attn=T1_AD_CN]          ChromHierPool trained on the "
+                         "ORIGINAL Task 1 labels: AD_bl + pMCI + CN_to_AD (positive) "
+                         "vs sCN (negative).  Softly biased toward AD-onset signal.")
+    footer_lines.append("  [attn=fixed_aggregator]   Deterministic _fixed_aggregator_v3 "
+                         "(gamma=delta=1). No training -- task-independent. The XGB "
+                         "head still sees raw 771-d features.")
+    footer_lines.append("  [attn=T4_3class]          ChromHierPool RE-TRAINED on this "
+                         "task's labels: converters partitioned by years-to-AD bins  "
+                         "(class 0: <3 y;  class 1: 3-7 y;  class 2: >=7 y).")
+    footer_lines.append("")
+    footer_lines.append("Bold cells: top-3 within each of val_bacc / val_auc / "
+                         "test_bacc / test_auc (tie-aware at 3 dp).")
     fig.text(0.01, 0.01, "\n".join(footer_lines), fontsize=8,
               family="monospace", va="bottom")
     png = out_dir / "leaderboard.png"

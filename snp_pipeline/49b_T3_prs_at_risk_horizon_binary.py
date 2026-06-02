@@ -365,7 +365,11 @@ def main():
     metric_cols = ["val_auc","val_bacc","val_f1","val_sens","val_spec",
                     "val_prec","val_pr_auc",
                     "test_auc","test_bacc","test_f1"]
-    g = df.groupby(["task","source","covar_mode"]).agg(
+    # observed=True drops empty (task, source, covar_mode) groups; otherwise
+    # the categorical 'task' fans out into a 4-task x all-sources cartesian
+    # product, leaving the leaderboard full of NaN cells for Wave-2 FM
+    # variants that only exist at their own horizon.
+    g = df.groupby(["task","source","covar_mode"], observed=True).agg(
         n_seeds=("seed","count"),
         val_n=("val_n","mean"),  val_pos=("val_pos","mean"), val_neg=("val_neg","mean"),
         test_n=("test_n","mean"), test_pos=("test_pos","mean"), test_neg=("test_neg","mean"),
@@ -392,20 +396,31 @@ def main():
         "test_auc":   [f"{m:.3f}+/-{s:.3f}" for m,s in zip(g["test_auc_mean"],  g["test_auc_std"])],
     })
     fig_h = max(3.5, 0.22 * len(show) + 2.5)
-    fig, ax = plt.subplots(figsize=(17, fig_h)); ax.axis("off")
+    fig, ax = plt.subplots(figsize=(20, fig_h)); ax.axis("off")
     ax.set_title(f"T3 horizon -- at-risk CN+MCI cohort   "
                   f"LD={args.ld_config}  beta={args.beta_source}  "
-                  f"(mean +/- std over 3 seeds)",
-                  fontsize=11, fontweight="bold", pad=10, loc="left")
-    col_widths = [0.07, 0.20, 0.16, 0.08, 0.08, 0.10, 0.10, 0.10, 0.10]
+                  f"(mean +/- std over 3 seeds)\n"
+                  f"FM rows: attention provenance annotated in [..] "
+                  f"-- see footer for the labels each attention pool was trained on",
+                  fontsize=10, fontweight="bold", pad=10, loc="left")
+    # First column ('task') is short; widen 'source' (col 1) so the FM names
+    # fit on one line.
+    col_widths = [0.06, 0.36, 0.16, 0.07, 0.07, 0.07, 0.07, 0.07, 0.07]
     tbl = ax.table(cellText=show.values.tolist(), colLabels=show.columns.tolist(),
                     loc="center", cellLoc="center", colWidths=col_widths)
     tbl.auto_set_font_size(False); tbl.set_fontsize(7); tbl.scale(1, 1.15)
     for j in range(len(show.columns)):
         c = tbl[(0, j)]; c.set_facecolor("#222"); c.set_text_props(color="white", weight="bold")
-    # Bold the top cell per (horizon, metric column) — best performance per
-    # horizon. Tie-aware at 3 dp (display precision); bold every row that ties
-    # the max within its horizon block.
+    # Left-align source column so the variant name reads cleanly.
+    src_col = show.columns.get_loc("source")
+    for row_idx in range(len(show)):
+        cell = tbl[(row_idx + 1, src_col)]
+        cell.set_text_props(ha="left")
+        cell.PAD = 0.02
+    # Bold the TOP-3 means per (horizon, metric column). One horizon block at
+    # a time so we don't compare a horizon_3y test_bacc against a horizon_10y
+    # test_bacc (different cohorts, different chance levels).  Tie-aware at
+    # 3 dp.
     METRIC_COLS = {
         "val_bacc":  ("val_bacc_mean",  show.columns.get_loc("val_bacc")),
         "val_auc":   ("val_auc_mean",   show.columns.get_loc("val_auc")),
@@ -417,11 +432,13 @@ def main():
         block_rows = g_indexed[g_indexed["task"] == task_name].index.tolist()
         if not block_rows: continue
         for _key, (mean_col, col_pos) in METRIC_COLS.items():
-            vals = g_indexed.loc[block_rows, mean_col]
-            top = round(float(vals.max()), 3)
+            vals_3dp = g_indexed.loc[block_rows, mean_col].round(3)
+            top3 = sorted(vals_3dp.dropna().unique(), reverse=True)[:3]
+            if not top3: continue
+            cutoff = top3[-1]
             for row_idx in block_rows:
-                if round(float(g_indexed.loc[row_idx, mean_col]), 3) == top:
-                    # +1 because table row 0 is the header row.
+                v = vals_3dp.loc[row_idx]
+                if pd.notna(v) and v >= cutoff:
                     tbl[(row_idx + 1, col_pos)].set_text_props(weight="bold")
     # Per-seed cohort breakdown by horizon (counts identical across source x
     # covar_mode for the same task+seed, so use the first PRS source — FM
@@ -448,10 +465,20 @@ def main():
                 f"test={int(r['test_n'])}({int(r['test_pos'])})")
         footer_lines.append(f"  {task_name:<12s}  " + "    ".join(parts))
     footer_lines.append("")
-    footer_lines.append("FM attention provenance:")
-    import textwrap as _tw
-    for ln in _tw.wrap(FM_ATTENTION_DISCLAIMER, width=170):
-        footer_lines.append(f"  {ln}")
+    footer_lines.append("FM attention provenance (the labels each ChromHierPool"
+                         " was trained on -- attn=... in row source):")
+    footer_lines.append("  [attn=T1_AD_CN]          ChromHierPool trained on the "
+                         "ORIGINAL Task 1 labels: AD_bl + pMCI + CN_to_AD (positive) "
+                         "vs sCN (negative).  Softly biased toward AD-onset signal.")
+    footer_lines.append("  [attn=fixed_aggregator]   Deterministic _fixed_aggregator_v3 "
+                         "(gamma=delta=1). No training -- task-independent. The XGB "
+                         "head still sees raw 771-d features.")
+    footer_lines.append("  [attn=horizon_Ny]         ChromHierPool RE-TRAINED on the "
+                         "matching N-year horizon labels: no AD at follow-up N y (neg) "
+                         "vs AD by N y (pos); right-censored before N y dropped.")
+    footer_lines.append("")
+    footer_lines.append("Bold cells: top-3 within each (horizon, metric) block "
+                         "(tie-aware at 3 dp).")
     fig.text(0.01, 0.01, "\n".join(footer_lines), fontsize=8,
               family="monospace", va="bottom")
     png = out_dir / "leaderboard.png"

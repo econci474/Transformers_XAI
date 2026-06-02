@@ -153,10 +153,20 @@ def _cross_task_summary(all_df: pd.DataFrame, metric: str) -> pd.DataFrame:
     fm = all_df[all_df["arm"].astype(str).str.startswith("FM")].copy()
     if fm.empty:
         return pd.DataFrame()
-    fm["_variant"] = (fm["model_family"].astype(str) + " | "
+    # Row labels carry a symbol marking the attention provenance, with the
+    # symbols defined in the heatmap footer:
+    #   §  ChromHierPool trained on Task 1 (AD_bl+pMCI+CN_to_AD vs sCN).
+    #   *  ChromHierPool trained on the row's matching task's labels.
+    #   #  Deterministic fixed_aggregator (gamma=delta=1); task-independent.
+    def _attn_symbol(attn_src: str) -> str:
+        if attn_src == "T1_AD_CN":         return "S"   # §
+        if attn_src == "fixed_aggregator": return "#"
+        return "*"
+    fm["_attn_sym"] = fm["attn_source"].astype(str).apply(_attn_symbol)
+    fm["_variant"] = (fm["_attn_sym"] + "  "
+                       + fm["model_family"].astype(str) + " | "
                        + fm["attn_mode"].astype(str) + " | "
-                       + fm["covar_mode"].astype(str) + " | "
-                       + fm["arm"].astype(str))
+                       + fm["covar_mode"].astype(str))
     pv = fm.pivot_table(index="_variant", columns="_task_label",
                           values=metric, aggfunc="mean")
     pv = pv.reindex(columns=[t for t in TASK_ORDER if t in pv.columns])
@@ -194,10 +204,27 @@ def _render_heatmap(pv: pd.DataFrame, out_png: Path, metric: str,
     ax.set_title(
         f"FM variant best-by-task summary -- new-task leaderboards\n"
         f"metric = {metric}   LD = {ld_config}   beta = {beta_source}\n"
-        f"rows: <model_family> | <attn_mode> | <covar_mode> | <arm>;  "
-        f"arm = FM_wave1 (Task-1 attn) | FM_wave2 (task-conditioned attn)",
+        f"rows: <attn_symbol>  <model_family> | <attn_mode> | <covar_mode>",
         fontsize=10, loc="left")
-    plt.tight_layout()
+    # Attention-provenance legend.  The footer is anchored below the heatmap
+    # at figure coordinates so it sits under all rows regardless of fig_h.
+    legend = "\n".join([
+        "Attention provenance symbol (preceding each row label):",
+        "  S   ChromHierPool trained on Task 1 labels:  "
+            "AD_bl + pMCI + CN_to_AD (pos)  vs  sCN (neg).",
+        "  #   Deterministic fixed_aggregator_v3 (gamma=delta=1).  "
+            "No training -- task-independent.",
+        "  *   ChromHierPool RE-TRAINED on the row's matching task's labels.  "
+            "Per-task definitions:",
+        "        sCN_vs_pCN    sCN (neg)  vs  pCN_to_AD + pCN_to_MCI (pos)",
+        "        horizon_Ny    no AD at follow-up N y (neg)  vs  "
+            "AD by N y (pos);  right-censored before N y dropped",
+        "        T4_3class     converters partitioned by years-to-AD bins:  "
+            "<3 y / 3-7 y / >=7 y",
+    ])
+    fig.text(0.01, 0.0, legend, fontsize=7, family="monospace",
+              va="bottom", ha="left")
+    plt.tight_layout(rect=(0, 0.18, 1, 1))
     plt.savefig(out_png, dpi=180, bbox_inches="tight")
     plt.close(fig)
     print(f"  wrote: {out_png}")
