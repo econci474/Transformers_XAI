@@ -131,6 +131,31 @@ def build_seed_frame(data_dir, seed, task_cfg, text_col=TEXT_COL) -> pd.DataFram
     return out
 
 
+# ── Attention backend selection ───────────────────────────────────────────────
+def pick_attn_impl():
+    """Choose ModernBERT's attention backend — the crux of the full-ft NaN.
+
+    The documented working clinical env (environment.yml ships flash-attn>=2.5.0) trained
+    full fine-tune cleanly in May on **FlashAttention-2**. When the env was rebuilt WITHOUT
+    flash-attn (its CUDA compile failed — the comment in environment.yml warns of exactly
+    this), ModernBERT fell back to **SDPA**, whose BACKWARD NaNs ModernBERT full fine-tune
+    (loss/grad NaN from step 1). Frozen is spared (backbone never back-props); it is
+    dtype-independent (NaN in fp32 too), so it is NOT precision — it is an SDPA-backward bug.
+
+    Rule: FlashAttention-2 if installed, else **eager** (the reference attention — a plain,
+    numerically-stable backward). NEVER SDPA for full fine-tune. eager == FA2 mathematically
+    (just slower), and these datasets are tiny, so eager is a fine permanent default.
+    """
+    try:
+        import torch
+        import flash_attn  # noqa: F401
+        if torch.cuda.is_available():
+            return "flash_attention_2"
+    except Exception:
+        pass
+    return "eager"
+
+
 # ── Model loading + embedding extraction ──────────────────────────────────────
 def load_encoder(ckpt_path, device=None):
     """Load (model, tokenizer) from a best_checkpoint/ dir (or HF id)."""
@@ -138,10 +163,13 @@ def load_encoder(ckpt_path, device=None):
     from transformers import AutoModelForSequenceClassification, AutoTokenizer
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
     tok = AutoTokenizer.from_pretrained(str(ckpt_path))
-    # Match the training-time model load: SDPA + reference_compile=False (ModernBERT's
-    # torch.compile backward NaNs under torch 2.4.1; harmless to disable for inference).
-    model = AutoModelForSequenceClassification.from_pretrained(
-        str(ckpt_path), attn_implementation="sdpa", reference_compile=False)
+    # Match the training-time attention backend (see pick_attn_impl): FA2 if installed,
+    # else eager — NOT SDPA. reference_compile=False keeps torch.compile out of the path.
+    attn_impl = pick_attn_impl()
+    load_kwargs = dict(attn_implementation=attn_impl, reference_compile=False)
+    if attn_impl == "flash_attention_2":
+        load_kwargs["torch_dtype"] = torch.bfloat16   # FA2 requires fp16/bf16
+    model = AutoModelForSequenceClassification.from_pretrained(str(ckpt_path), **load_kwargs)
     model.to(device).eval()
     return model, tok
 

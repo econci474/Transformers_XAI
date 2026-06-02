@@ -408,21 +408,23 @@ def main():
 
     # ── Model ─────────────────────────────────────────────────────────────────
     print(f"  Loading model ...")
-    # ModernBERT full fine-tune NaN guards (loss=0 / grad_norm=NaN from step 1 — ONLY in full
-    # fine-tune, because frozen never back-props the backbone):
-    #   * reference_compile=False — PRIMARY FIX. ModernBERT torch.compiles its backbone by
-    #     default; that compiled BACKWARD NaNs under torch 2.4.1. The env drifted off
-    #     environment.yml's pinned torch==2.3.1, under which full-ft trained fine in May
-    #     (verified from May logs). Disabling compile sidesteps the torch-2.4.1 regression.
-    #   * attn_implementation="sdpa" — avoids the separate Flash-Attn-2 NaN bug
-    #     (huggingface/transformers#35988); a no-op here (flash-attn isn't installed, so SDPA
-    #     is already the default), kept defensively.
+    # ModernBERT full fine-tune NaN guard (loss/grad_norm=NaN from step 1 — ONLY full
+    # fine-tune; frozen never back-props the backbone). ROOT CAUSE: ModernBERT's **SDPA
+    # backward** NaNs in full fine-tune (dtype-independent — NaN in fp32 too, so NOT
+    # precision; NOT torch version; NOT reference_compile). The working May runs used
+    # FlashAttention-2 (environment.yml ships flash-attn>=2.5.0); the env was later rebuilt
+    # without flash-attn → it silently fell back to SDPA → NaN. pick_attn_impl() picks FA2
+    # if installed else **eager** (the reference attention; stable backward) — never SDPA.
+    # reference_compile=False keeps torch.compile out of the backward path (belt-and-braces).
+    from _encoder_embed_lib import pick_attn_impl
+    attn_impl = pick_attn_impl()
+    print(f"  Attention impl: {attn_impl}")
     model = AutoModelForSequenceClassification.from_pretrained(
         args.model_id,
         num_labels=task_cfg["num_labels"],
         cache_dir=hf_cache,
         ignore_mismatched_sizes=True,
-        attn_implementation="sdpa",
+        attn_implementation=attn_impl,
         reference_compile=False,
     )
 
@@ -478,9 +480,9 @@ def main():
 
     # ── Mixed precision ───────────────────────────────────────────────────────
     # bf16 on Ampere/L4; fp16 only as a pre-Ampere fallback (fp16 OVERFLOWS the
-    # ModernBERT forward -> NaN). The earlier full-ft NaN was NOT a precision problem
-    # — it was Flash-Attention-2 (now forced to SDPA at model load; HF #35988), so
-    # bf16 is stable for both frozen and full fine-tune.
+    # ModernBERT forward -> NaN). NB the full-ft NaN was NOT precision (it reproduced in
+    # fp32) — it was the SDPA attention backward; the fix is the attn backend chosen at
+    # model load (pick_attn_impl: FA2 else eager, never SDPA). bf16 is stable for both.
     use_bf16 = torch.cuda.is_available() and torch.cuda.is_bf16_supported()
     use_fp16 = torch.cuda.is_available() and not use_bf16
     print(f"  Precision: {'bf16' if use_bf16 else 'fp16' if use_fp16 else 'fp32'}"
