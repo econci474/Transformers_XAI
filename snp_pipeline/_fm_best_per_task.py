@@ -122,9 +122,11 @@ def _read_one(label: str, subdir: str, task_filter: str | None,
     df["attn_mode"]    = [d["attn_mode"] for d in parsed]
     df["attn_source"]  = [d["attn_source"] for d in parsed]
     if metric not in df.columns:
-        # T4 may have val_macro_balAcc instead of val_bacc; fall back.
-        for alt in ("val_macro_balAcc_mean", "val_macro_bacc_mean",
-                     "val_bacc_mean"):
+        # T4 multiclass leaderboard uses 'val_bacc_macro_mean' (macro suffix);
+        # binary uses 'val_bacc_mean'. Alias whichever is present so the
+        # cross-task pivot can use a single column name.
+        for alt in ("val_bacc_macro_mean", "val_macro_bacc_mean",
+                     "val_macro_balAcc_mean", "val_bacc_mean"):
             if alt in df.columns:
                 df[metric] = df[alt]; break
     return df
@@ -217,7 +219,10 @@ def main():
 
     all_frames: list[pd.DataFrame] = []
     metric_binary = args.metric
-    metric_multi  = args.metric if "macro" in args.metric else "val_macro_balAcc_mean"
+    # 49c's multiclass leaderboard uses val_bacc_macro_mean (note: macro suffix
+    # comes AFTER bacc), not val_macro_balAcc_mean. Auto-fallback if the user
+    # passed the binary metric name.
+    metric_multi  = args.metric if "macro" in args.metric else "val_bacc_macro_mean"
 
     for label, subdir, task_filter in TASKS_BINARY:
         df = _read_one(label, subdir, task_filter,
