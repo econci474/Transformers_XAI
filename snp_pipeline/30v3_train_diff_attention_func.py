@@ -199,14 +199,21 @@ def _load_labels_T3_horizon(splits_root: Path, seed: int, split: str,
                                 base: Path, N: int) -> pd.DataFrame:
     """T3 binary horizon at threshold N years. Cohort drops AD_bl + Excluded.
     y=1 if `ever_conversion_AD AND years_to_AD <= N`; y=0 if (no AD AND
-    FU_years >= N) or (years_to_AD > N); drop if (no AD AND FU_years < N)."""
+    FU_years >= N) or (years_to_AD > N); drop if (no AD AND FU_years < N).
+
+    Only merges in `conversion_labels.tsv` columns that are not already
+    present in the split CSV — the baseline split CSV already carries
+    conversion_group / years_to_AD / FU_years for most subjects."""
     df = _read_split_csv(splits_root, seed, split, base, "splits")
-    conv = _load_conv_meta(base)
-    conv["Patient_ID"] = conv["Patient_ID"].astype(str)
     df["Patient_ID"] = df["Patient_ID"].astype(str)
-    df = df.merge(conv[["Patient_ID", "conversion_group", "ever_conversion_AD",
-                          "years_to_AD", "FU_years"]],
-                    on="Patient_ID", how="left")
+    needed = ["conversion_group", "ever_conversion_AD", "years_to_AD",
+               "FU_years"]
+    missing = [c for c in needed if c not in df.columns]
+    if missing:
+        conv = _load_conv_meta(base)
+        conv["Patient_ID"] = conv["Patient_ID"].astype(str)
+        df = df.merge(conv[["Patient_ID"] + missing],
+                        on="Patient_ID", how="left")
     df = df[~df["conversion_group"].isin(T3_DROPPED_GROUPS)].copy()
     ev = pd.to_numeric(df["ever_conversion_AD"], errors="coerce")
     yta = pd.to_numeric(df["years_to_AD"], errors="coerce")
@@ -414,6 +421,12 @@ class DiffAttnV3(nn.Module):
         abs_dosbeta = dosage_x_beta.abs()
         if chrom_idx is None:
             chrom_idx = torch.zeros(S, dtype=torch.long, device=x.device)
+        # Defensively put modality_abs / func_imp_abs on x.device (== self.eps
+        # device) so the bias computation never hits a CPU/CUDA mismatch.
+        if modality_abs is not None:
+            modality_abs = modality_abs.to(x.device)
+        if func_imp_abs is not None:
+            func_imp_abs = func_imp_abs.to(x.device)
         # Extra bias is per-SNP (S,); broadcast to (B, S)
         extra_bias_snp = self._compute_extra_bias(modality_abs, func_imp_abs)
         extra_bias = extra_bias_snp.unsqueeze(0).expand(B, S) if extra_bias_snp is not None else None
