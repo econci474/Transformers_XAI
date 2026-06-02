@@ -50,6 +50,8 @@ from _per_patient_io import (capture_predictions, save_per_patient_parquet,
 from _fm_arm import (FM_VARIANTS, FM_ATTENTION_DISCLAIMER,
                        run_fm_head_binary, save_per_task_anchor,
                        task_conditioned_variants_for)  # noqa: E402
+from _covars_only_new_tasks import (COVAR_SETS_BINARY,
+                                       fit_binary as _covars_only_fit_binary)  # noqa: E402
 from _wandb_io import init_wandb, safe_log, safe_finish  # noqa: E402
 
 SPLITS_ROOT = Path("D:/ADNI_BIDS_project/derivatives/clinical/"
@@ -230,6 +232,24 @@ def main():
                     rows.append(r)
                     safe_log(wandb_run, {"arm": "PRS", **{k: v for k, v in r.items()
                                                               if not isinstance(v, (dict, list))}})
+
+    # ── Covariates-only baseline arms (no PRS, no FM feature) ───────────
+    # Floor reference: what does age+sex+APOE alone get on this cohort?
+    print(f"\n[49a] Covariates-only baseline arms ({len(COVAR_SETS_BINARY)} sets)")
+    for covar_name, covars_list in COVAR_SETS_BINARY.items():
+        for seed in SEEDS:
+            parts = {sp: _load_labels(seed, sp) for sp in ("train","val","test")}
+            fold_ptid = {sp: parts[sp]["Patient_ID"].astype(str).tolist()
+                          for sp in ("train","val","test")}
+            fold_y = {sp: parts[sp]["y"].astype(int).values
+                       for sp in ("train","val","test")}
+            r = _covars_only_fit_binary(cov, covars_list, covar_name, seed,
+                                          fold_ptid=fold_ptid, fold_y=fold_y)
+            if r is not None:
+                rows.append(r)
+                safe_log(wandb_run, {"arm": "covars_only",
+                                      **{k: v for k, v in r.items()
+                                          if not isinstance(v, (dict, list))}})
 
     # ── FM arms (Task-1-conditioned attention; SEE DISCLAIMER) ───────────
     print(f"\n[49a] FM arms — DISCLAIMER:\n  {FM_ATTENTION_DISCLAIMER}\n")

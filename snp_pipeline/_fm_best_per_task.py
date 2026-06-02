@@ -78,9 +78,14 @@ _RE_ATTN = re.compile(r"\[attn=([^\]]+)\]")
 def _parse_source(s: str) -> dict:
     """Recover (arm, model_family, attn_mode, attn_source) from a leaderboard
     source string. PRS rows return all-None except `arm='PRS'`. FM rows are
-    annotated `<MODEL> <mode> chrom_hier <head> [attn=<src>]`."""
+    annotated `<MODEL> <mode> chrom_hier <head> [attn=<src>]`. The
+    'covariates_only' source is its own arm so the cross-task summary can
+    show it as a floor reference."""
     out = {"arm": None, "model_family": None,
             "attn_mode": None, "attn_source": None}
+    if s == "covariates_only":
+        out["arm"] = "covars_only"
+        return out
     m = _RE_ATTN.search(s)
     if m is None:
         out["arm"] = "PRS"
@@ -149,24 +154,33 @@ def _per_task_best_fm(df: pd.DataFrame, metric: str, top_n: int = 3
 
 def _cross_task_summary(all_df: pd.DataFrame, metric: str) -> pd.DataFrame:
     """Pivot: rows = (arm, model_family, attn_mode, covar_mode);
-    cols = task; values = `metric`. Sorted by mean across tasks (desc)."""
-    fm = all_df[all_df["arm"].astype(str).str.startswith("FM")].copy()
+    cols = task; values = `metric`. Sorted by mean across tasks (desc).
+    Includes FM rows + covariates_only floor rows."""
+    keep = all_df["arm"].astype(str).isin(["FM_wave1", "FM_wave2", "covars_only"])
+    fm = all_df[keep].copy()
     if fm.empty:
         return pd.DataFrame()
     # Row labels carry a symbol marking the attention provenance, with the
     # symbols defined in the heatmap footer:
-    #   §  ChromHierPool trained on Task 1 (AD_bl+pMCI+CN_to_AD vs sCN).
+    #   S  ChromHierPool trained on Task 1 (AD_bl+pMCI+CN_to_AD vs sCN).
     #   *  ChromHierPool trained on the row's matching task's labels.
     #   #  Deterministic fixed_aggregator (gamma=delta=1); task-independent.
-    def _attn_symbol(attn_src: str) -> str:
-        if attn_src == "T1_AD_CN":         return "S"   # §
+    #   c  Covariates-only baseline (no PRS, no FM).
+    def _attn_symbol(arm: str, attn_src: str) -> str:
+        if arm == "covars_only":           return "c"
+        if attn_src == "T1_AD_CN":         return "S"
         if attn_src == "fixed_aggregator": return "#"
         return "*"
-    fm["_attn_sym"] = fm["attn_source"].astype(str).apply(_attn_symbol)
-    fm["_variant"] = (fm["_attn_sym"] + "  "
-                       + fm["model_family"].astype(str) + " | "
-                       + fm["attn_mode"].astype(str) + " | "
-                       + fm["covar_mode"].astype(str))
+    fm["_attn_sym"] = [
+        _attn_symbol(a, s) for a, s in
+        zip(fm["arm"].astype(str), fm["attn_source"].astype(str))
+    ]
+    def _variant_label(r):
+        if r["arm"] == "covars_only":
+            return f"{r['_attn_sym']}  {r['covar_mode']}"
+        return (f"{r['_attn_sym']}  "
+                 f"{r['model_family']} | {r['attn_mode']} | {r['covar_mode']}")
+    fm["_variant"] = fm.apply(_variant_label, axis=1)
     pv = fm.pivot_table(index="_variant", columns="_task_label",
                           values=metric, aggfunc="mean")
     pv = pv.reindex(columns=[t for t in TASK_ORDER if t in pv.columns])
@@ -209,18 +223,19 @@ def _render_heatmap(pv: pd.DataFrame, out_png: Path, metric: str,
     # Attention-provenance legend.  The footer is anchored below the heatmap
     # at figure coordinates so it sits under all rows regardless of fig_h.
     legend = "\n".join([
-        "Attention provenance symbol (preceding each row label):",
+        "Row prefix symbol:",
         "  S   ChromHierPool trained on Task 1 labels:  "
             "AD_bl + pMCI + CN_to_AD (pos)  vs  sCN (neg).",
         "  #   Deterministic fixed_aggregator_v3 (gamma=delta=1).  "
             "No training -- task-independent.",
-        "  *   ChromHierPool RE-TRAINED on the row's matching task's labels.  "
-            "Per-task definitions:",
+        "  *   ChromHierPool RE-TRAINED on the row's matching task's labels:",
         "        sCN_vs_pCN    sCN (neg)  vs  pCN_to_AD + pCN_to_MCI (pos)",
         "        horizon_Ny    no AD at follow-up N y (neg)  vs  "
             "AD by N y (pos);  right-censored before N y dropped",
         "        T4_3class     converters partitioned by years-to-AD bins:  "
             "<3 y / 3-7 y / >=7 y",
+        "  c   Covariates-only baseline (no PRS, no FM).  "
+            "Floor reference for what age+sex+APOE alone get.",
     ])
     fig.text(0.01, 0.0, legend, fontsize=7, family="monospace",
               va="bottom", ha="left")
