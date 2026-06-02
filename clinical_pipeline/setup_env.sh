@@ -28,16 +28,25 @@ conda env create -f "${SCRIPT_DIR}/environment.yml" --name "${ENV_NAME}" -y \
     || conda env update -f "${SCRIPT_DIR}/environment.yml" --name "${ENV_NAME}"
 
 # --- 2. Activate and verify torch + CUDA ---------------------------------------
-echo "[2/4] Verifying torch + CUDA..."
+# torch is PINNED to 2.3.x: torch 2.4.x NaNs ModernBERT full fine-tune (a compiled/
+# SDPA backward regression — frozen runs are spared, full_ft NaNs from step 1). The
+# env once silently drifted 2.3.1 -> 2.4.1 and broke the sweep; ASSERT, don't just print.
+echo "[2/4] Verifying torch + CUDA (torch must be 2.3.x)..."
 conda run -n "${ENV_NAME}" python -c "
 import torch
-print(f'  torch version : {torch.__version__}')
+v = torch.__version__
+print(f'  torch version : {v}')
 print(f'  CUDA available: {torch.cuda.is_available()}')
+assert v.startswith('2.3.'), (
+    f'torch {v} != pinned 2.3.x — torch 2.4+ NaNs ModernBERT full fine-tune. '
+    'Reinstall: pip install torch==2.3.1 torchvision==0.18.1 '
+    '--index-url https://download.pytorch.org/whl/cu121')
+print('  torch pin     : 2.3.x  OK')
 if torch.cuda.is_available():
     print(f'  GPU           : {torch.cuda.get_device_name(0)}')
     print(f'  CUDA version  : {torch.version.cuda}')
 else:
-    print('  WARNING: CUDA not available — check your CUDA module is loaded')
+    print('  NOTE: CUDA not available here (expected on a login node).')
 "
 
 # --- 3. Verify transformers version (must be >= 4.47 AND < 5 for ModernBERT) ---
