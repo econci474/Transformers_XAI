@@ -220,33 +220,40 @@ def build_d(diff: np.ndarray, beta: np.ndarray,
 # Models: β-biased attention pooling (NEW) + reused MLP heads
 # ════════════════════════════════════════════════════════════════════════════
 class MLPHead(nn.Module):
-    """2-layer head — verbatim 15_train_classification_head.py L172-183."""
+    """2-layer head. Default out_dim=1 for binary (single logit, squeezed in
+    forward). For multiclass tasks pass out_dim=K and the forward returns
+    (B, K) logits (no squeeze)."""
 
-    def __init__(self, in_dim: int, hidden: int = 256, dropout: float = 0.3):
+    def __init__(self, in_dim: int, hidden: int = 256, dropout: float = 0.3,
+                 out_dim: int = 1):
         super().__init__()
+        self.out_dim = out_dim
         self.net = nn.Sequential(
             nn.Linear(in_dim, hidden), nn.GELU(), nn.Dropout(dropout),
-            nn.Linear(hidden, 1),
+            nn.Linear(hidden, out_dim),
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.net(x).squeeze(-1)
+        y = self.net(x)
+        return y.squeeze(-1) if self.out_dim == 1 else y
 
 
 class MLP3Head(nn.Module):
-    """3-layer head — verbatim 19_compare_frozen_models.py L112-124."""
+    """3-layer head. out_dim=1 default; >1 for multiclass."""
 
     def __init__(self, in_dim: int, h1: int = 256, h2: int = 128,
-                 dropout: float = 0.3):
+                 dropout: float = 0.3, out_dim: int = 1):
         super().__init__()
+        self.out_dim = out_dim
         self.net = nn.Sequential(
             nn.Linear(in_dim, h1), nn.GELU(), nn.Dropout(dropout),
             nn.Linear(h1, h2), nn.GELU(), nn.Dropout(dropout),
-            nn.Linear(h2, 1),
+            nn.Linear(h2, out_dim),
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.net(x).squeeze(-1)
+        y = self.net(x)
+        return y.squeeze(-1) if self.out_dim == 1 else y
 
 
 class SNPEncoder(nn.Module):

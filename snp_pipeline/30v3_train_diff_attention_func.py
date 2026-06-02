@@ -139,6 +139,125 @@ def _load_labels_for_split(splits_root: Path, seed: int, split: str,
     return df
 
 
+# ── Per-task label loaders (added 2026-06-02 for task-conditioned re-extract) ─
+#
+# Each loader takes (splits_root, seed, split, base) and returns DataFrame
+# with columns [PTID, y]. y is int (binary or multiclass class index).
+#
+# `splits_root` semantics match the original `--splits-root` flag:
+#   - For sCN-vs-pCN and T3 horizons: pass `splits_root` pointing at
+#     baseline/seed_{s}/ (or `/nonexistent/force-fallback` to fall back to
+#     `<base>/splits/`).
+#   - For T4 multiclass: pass `splits_root` pointing at baseline_T4/seed_{s}/
+#     (different seeds; fall back to `<base>/splits_T4/` if the path doesn't
+#     exist locally).
+
+POS_GROUPS_SCN_VS_PCN = ("pCN_to_AD", "pCN_to_MCI")
+T3_DROPPED_GROUPS = ("AD_bl", "Excluded")
+
+
+def _read_split_csv(splits_root: Path, seed: int, split: str,
+                      base: Path | None, fallback_subdir: str) -> pd.DataFrame:
+    """Locate the split CSV. Tries `splits_root/seed_{s}/{split}.csv` first;
+    falls back to `<base>/<fallback_subdir>/seed_{s}/{split}.csv`."""
+    p = splits_root / f"seed_{seed}/{split}.csv"
+    if not p.exists() and base is not None:
+        fb = base / fallback_subdir / f"seed_{seed}/{split}.csv"
+        if fb.exists():
+            p = fb
+    return pd.read_csv(p, dtype=str)
+
+
+def _load_labels_sCN_vs_pCN(splits_root: Path, seed: int, split: str,
+                                base: Path | None = None) -> pd.DataFrame:
+    """sCN (neg) vs pCN_to_AD ∪ pCN_to_MCI (pos). Strict baseline-CN cohort."""
+    df = _read_split_csv(splits_root, seed, split, base, "splits")
+    for col in ("sCN", "pCN_to_AD", "pCN_to_MCI"):
+        df[col] = pd.to_numeric(df.get(col, 0), errors="coerce").fillna(0).astype(int)
+    y_pos = ((df["pCN_to_AD"] == 1) | (df["pCN_to_MCI"] == 1)).astype(int)
+    y_neg = (df["sCN"] == 1).astype(int)
+    df = df[(y_pos == 1) | (y_neg == 1)].copy()
+    df["y"] = y_pos.loc[df.index].astype(int)
+    return df.rename(columns={"Patient_ID": "PTID"})[["PTID", "y"]]
+
+
+def _load_conv_meta(base: Path) -> pd.DataFrame:
+    """Read conversion_labels.tsv. Looks at <base>/conversion_labels.tsv first
+    (Colab convention), then <base>/conversion_labels/conversion_labels.tsv
+    (local D: layout)."""
+    for rel in ("conversion_labels.tsv",
+                "conversion_labels/conversion_labels.tsv"):
+        p = base / rel
+        if p.exists():
+            return pd.read_csv(p, sep="\t")
+    raise FileNotFoundError(
+        f"conversion_labels.tsv not found under {base}. Push the file to "
+        f"{base / 'conversion_labels.tsv'} before running T3 tasks.")
+
+
+def _load_labels_T3_horizon(splits_root: Path, seed: int, split: str,
+                                base: Path, N: int) -> pd.DataFrame:
+    """T3 binary horizon at threshold N years. Cohort drops AD_bl + Excluded.
+    y=1 if `ever_conversion_AD AND years_to_AD <= N`; y=0 if (no AD AND
+    FU_years >= N) or (years_to_AD > N); drop if (no AD AND FU_years < N)."""
+    df = _read_split_csv(splits_root, seed, split, base, "splits")
+    conv = _load_conv_meta(base)
+    conv["Patient_ID"] = conv["Patient_ID"].astype(str)
+    df["Patient_ID"] = df["Patient_ID"].astype(str)
+    df = df.merge(conv[["Patient_ID", "conversion_group", "ever_conversion_AD",
+                          "years_to_AD", "FU_years"]],
+                    on="Patient_ID", how="left")
+    df = df[~df["conversion_group"].isin(T3_DROPPED_GROUPS)].copy()
+    ev = pd.to_numeric(df["ever_conversion_AD"], errors="coerce")
+    yta = pd.to_numeric(df["years_to_AD"], errors="coerce")
+    fu  = pd.to_numeric(df["FU_years"], errors="coerce")
+    label = np.full(len(df), -1, dtype=np.int64)   # -1 = drop sentinel
+    pos_mask = (ev == 1) & yta.notna() & (yta <= N)
+    label[pos_mask.values] = 1
+    neg_mask_a = (ev == 0) & fu.notna() & (fu >= N)
+    neg_mask_b = (ev == 1) & yta.notna() & (yta > N)
+    label[(neg_mask_a | neg_mask_b).values] = 0
+    df["y"] = label
+    df = df[df["y"] != -1].copy()
+    return df.rename(columns={"Patient_ID": "PTID"})[["PTID", "y"]]
+
+
+def _load_labels_T4_3class(splits_root: Path, seed: int, split: str,
+                                base: Path | None = None) -> pd.DataFrame:
+    """T4 3-class horizon (0=<3y, 1=3-7y, 2=>=7y). Cohort already restricted
+    to converters (pMCI ∪ pCN_to_AD) by baseline_T4 split builder."""
+    df = _read_split_csv(splits_root, seed, split, base, "splits_T4")
+    df["y"] = pd.to_numeric(df["Label_T4"], errors="coerce").astype("Int64")
+    df = df[df["y"].notna()].copy()
+    df["y"] = df["y"].astype(int)
+    return df.rename(columns={"Patient_ID": "PTID"})[["PTID", "y"]]
+
+
+TASK_REGISTRY = {
+    "ad_vs_cn":         {"num_classes": 1,
+                          "loader": lambda sr, s, sp, base, exclude_cn_to_ad=False:
+                              _load_labels_for_split(sr, s, sp, base, exclude_cn_to_ad)},
+    "sCN_vs_pCN":       {"num_classes": 1,
+                          "loader": lambda sr, s, sp, base, **_:
+                              _load_labels_sCN_vs_pCN(sr, s, sp, base)},
+    "T3_horizon_3y":    {"num_classes": 1,
+                          "loader": lambda sr, s, sp, base, **_:
+                              _load_labels_T3_horizon(sr, s, sp, base, 3)},
+    "T3_horizon_5y":    {"num_classes": 1,
+                          "loader": lambda sr, s, sp, base, **_:
+                              _load_labels_T3_horizon(sr, s, sp, base, 5)},
+    "T3_horizon_7y":    {"num_classes": 1,
+                          "loader": lambda sr, s, sp, base, **_:
+                              _load_labels_T3_horizon(sr, s, sp, base, 7)},
+    "T3_horizon_10y":   {"num_classes": 1,
+                          "loader": lambda sr, s, sp, base, **_:
+                              _load_labels_T3_horizon(sr, s, sp, base, 10)},
+    "T4_3class":        {"num_classes": 3,
+                          "loader": lambda sr, s, sp, base, **_:
+                              _load_labels_T4_3class(sr, s, sp, base)},
+}
+
+
 def _resolve_ag_parent(base: Path) -> Path:
     """Find the dir containing alphagenome_<modality>/ subdirs and tidy_long.tsv.gz."""
     for rel in ("fm_embeddings_short_seq_1kb_with_alphagenome",
@@ -242,25 +361,26 @@ class DiffAttnV3(nn.Module):
 
     def __init__(self, in_dim: int, n_chroms: int, aggregation: str,
                  head: str, mode: str, attn_hidden: int = 128,
-                 mlp_width: int = 256, mlp_dropout: float = 0.3):
+                 mlp_width: int = 256, mlp_dropout: float = 0.3,
+                 out_dim: int = 1):
         super().__init__()
         self.mode = mode
         self.aggregation = aggregation
+        self.out_dim = out_dim
         if aggregation == "global_attn":
             self.pool = fl.GlobalAttnPool(in_dim, use_delta=True, attn_hidden=attn_hidden)
         else:
             self.pool = fl.ChromHierPool(in_dim, n_chroms=n_chroms, use_delta=True,
                                           attn_hidden=attn_hidden)
         self.norm = nn.LayerNorm(in_dim)
-        # MLP-head width/dropout now configurable for the HP sweep.
-        # mlp2: single hidden layer (width = mlp_width)
-        # mlp3: two hidden layers (h1 = mlp_width, h2 = mlp_width // 2 to keep
-        #       the tapered shape from the original verbatim head)
+        # MLP-head width/dropout now configurable for the HP sweep. out_dim=K
+        # for multiclass (T4); MLPHead emits (B, K) logits when out_dim>1.
         if head == "mlp2":
-            self.head = fl.MLPHead(in_dim, hidden=mlp_width, dropout=mlp_dropout)
+            self.head = fl.MLPHead(in_dim, hidden=mlp_width, dropout=mlp_dropout,
+                                     out_dim=out_dim)
         elif head == "mlp3":
             self.head = fl.MLP3Head(in_dim, h1=mlp_width, h2=max(mlp_width // 2, 32),
-                                     dropout=mlp_dropout)
+                                     dropout=mlp_dropout, out_dim=out_dim)
         else:
             raise ValueError(f"Unsupported head for end-to-end: {head}")
         # Learnable ε's
@@ -342,17 +462,57 @@ def _metrics(y_true, prob, pred, loss_val=None) -> dict:
     return m
 
 
+def _metrics_multi(y_true, proba, pred, loss_val=None,
+                     num_classes: int = 3) -> dict:
+    """K-class metrics: macro BalAcc / AUC / F1 / precision / recall + per-class
+    confusion-matrix counts (flatten KxK)."""
+    labels = list(range(num_classes))
+    bacc = balanced_accuracy_score(y_true, pred)
+    try:
+        auc = roc_auc_score(y_true, proba, multi_class="ovr", labels=labels)
+    except Exception:
+        auc = 0.5
+    f1m   = f1_score(y_true, pred, average="macro", zero_division=0, labels=labels)
+    precm = precision_score(y_true, pred, average="macro", zero_division=0,
+                             labels=labels)
+    recm  = recall_score(y_true, pred, average="macro", zero_division=0,
+                          labels=labels)
+    cm = confusion_matrix(y_true, pred, labels=labels)
+    m = {
+        "balanced_accuracy": bacc,    # MACRO BalAcc (sklearn handles this natively)
+        "roc_auc":           auc,     # macro-OVR AUC
+        "f1":                f1m,
+        "precision":         precm,
+        "recall":            recm,
+    }
+    for i in range(num_classes):
+        for j in range(num_classes):
+            m[f"cm_{i}{j}"] = int(cm[i, j]) if cm.size == num_classes*num_classes else 0
+    if loss_val is not None:
+        m["loss"] = float(loss_val)
+    return m
+
+
 def _train_mlp(model, train_data, val_data, *,
                 epochs: int, batch_size: int, lr: float, weight_decay: float,
                 patience: int, device: str, pos_weight: float,
                 modality_abs_t, func_imp_abs_t,
-                wandb_run=None) -> dict:
+                wandb_run=None, num_classes: int = 1,
+                class_weights: np.ndarray | None = None) -> dict:
     model = model.to(device)
     opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
     Xtr, beta_tr, dxb_tr, chrom_tr, ytr = train_data
     Xva, beta_va, dxb_va, chrom_va, yva = val_data
-    pos_w = torch.tensor([pos_weight], device=device)
-    loss_fn = nn.BCEWithLogitsLoss(pos_weight=pos_w)
+    # Binary path: BCEWithLogitsLoss with pos_weight (original behaviour).
+    # Multiclass path: CrossEntropyLoss with per-class weights.
+    is_multiclass = (num_classes > 1)
+    if is_multiclass:
+        cw = torch.tensor(class_weights, dtype=torch.float32, device=device) \
+                if class_weights is not None else None
+        loss_fn = nn.CrossEntropyLoss(weight=cw)
+    else:
+        pos_w = torch.tensor([pos_weight], device=device)
+        loss_fn = nn.BCEWithLogitsLoss(pos_weight=pos_w)
     if modality_abs_t is not None: modality_abs_t = modality_abs_t.to(device)
     if func_imp_abs_t is not None: func_imp_abs_t = func_imp_abs_t.to(device)
 
@@ -372,17 +532,28 @@ def _train_mlp(model, train_data, val_data, *,
                             chrom_tr.to(device) if chrom_tr is not None else None,
                             modality_abs=modality_abs_t,
                             func_imp_abs=func_imp_abs_t)
-            loss = loss_fn(logits, ytr[b].float().to(device))
+            if is_multiclass:
+                loss = loss_fn(logits, ytr[b].long().to(device))
+            else:
+                loss = loss_fn(logits, ytr[b].float().to(device))
             loss.backward()
             opt.step()
             train_loss_sum += loss.item() * len(b)
             train_loss_n += len(b)
-            tr_probs_chunks.append(torch.sigmoid(logits.detach()).cpu().numpy())
+            if is_multiclass:
+                tr_probs_chunks.append(
+                    torch.softmax(logits.detach(), dim=-1).cpu().numpy())
+            else:
+                tr_probs_chunks.append(torch.sigmoid(logits.detach()).cpu().numpy())
             tr_y_chunks.append(ytr[b].cpu().numpy())
         train_loss = train_loss_sum / max(1, train_loss_n)
         tr_probs = np.concatenate(tr_probs_chunks)
         tr_y = np.concatenate(tr_y_chunks)
-        tr_balacc = balanced_accuracy_score(tr_y, (tr_probs > 0.5).astype(int))
+        if is_multiclass:
+            tr_pred = tr_probs.argmax(axis=1)
+            tr_balacc = balanced_accuracy_score(tr_y, tr_pred)
+        else:
+            tr_balacc = balanced_accuracy_score(tr_y, (tr_probs > 0.5).astype(int))
 
         model.eval()
         with torch.no_grad():
@@ -391,10 +562,17 @@ def _train_mlp(model, train_data, val_data, *,
                               chrom_va.to(device) if chrom_va is not None else None,
                               modality_abs=modality_abs_t,
                               func_imp_abs=func_imp_abs_t)
-            v_loss = loss_fn(v_logits, yva.float().to(device)).item()
-            v_prob = torch.sigmoid(v_logits).cpu().numpy()
-            v_pred = (v_prob > 0.5).astype(int)
-            v_m = _metrics(yva.cpu().numpy(), v_prob, v_pred, v_loss)
+            if is_multiclass:
+                v_loss = loss_fn(v_logits, yva.long().to(device)).item()
+                v_prob = torch.softmax(v_logits, dim=-1).cpu().numpy()
+                v_pred = v_prob.argmax(axis=1)
+                v_m = _metrics_multi(yva.cpu().numpy(), v_prob, v_pred,
+                                       v_loss, num_classes)
+            else:
+                v_loss = loss_fn(v_logits, yva.float().to(device)).item()
+                v_prob = torch.sigmoid(v_logits).cpu().numpy()
+                v_pred = (v_prob > 0.5).astype(int)
+                v_m = _metrics(yva.cpu().numpy(), v_prob, v_pred, v_loss)
         history.append({"epoch": ep, "train_loss": train_loss,
                           "train_balanced_accuracy": tr_balacc,
                           **{f"val_{k}": v for k, v in v_m.items()}})
@@ -431,7 +609,8 @@ def _train_mlp(model, train_data, val_data, *,
     return {"epochs_run": ep + 1, "best_epoch": best_epoch, "history": history}
 
 
-def _eval_mlp(model, data, device, modality_abs_t, func_imp_abs_t) -> tuple[dict, np.ndarray]:
+def _eval_mlp(model, data, device, modality_abs_t, func_imp_abs_t,
+                num_classes: int = 1) -> tuple[dict, np.ndarray]:
     Xe, beta_e, dxb_e, chrom_e, y_e = data
     if modality_abs_t is not None: modality_abs_t = modality_abs_t.to(device)
     if func_imp_abs_t is not None: func_imp_abs_t = func_imp_abs_t.to(device)
@@ -440,13 +619,24 @@ def _eval_mlp(model, data, device, modality_abs_t, func_imp_abs_t) -> tuple[dict
         logits = model(Xe.to(device), beta_e.to(device), dxb_e.to(device),
                         chrom_e.to(device) if chrom_e is not None else None,
                         modality_abs=modality_abs_t, func_imp_abs=func_imp_abs_t)
-        prob = torch.sigmoid(logits).cpu().numpy()
-        pred = (prob > 0.5).astype(int)
+        if num_classes == 1:
+            prob = torch.sigmoid(logits).cpu().numpy()
+            pred = (prob > 0.5).astype(int)
+        else:
+            prob = torch.softmax(logits, dim=-1).cpu().numpy()
+            pred = prob.argmax(axis=1)
     y = y_e.cpu().numpy()
-    pos_w = max(1.0, (y == 0).sum() / max(1, (y == 1).sum()))
-    loss = log_loss(y, np.clip(prob, 1e-7, 1 - 1e-7),
-                     sample_weight=np.where(y == 1, pos_w, 1.0))
-    return _metrics(y, prob, pred, loss_val=loss), prob
+    if num_classes == 1:
+        pos_w = max(1.0, (y == 0).sum() / max(1, (y == 1).sum()))
+        loss = log_loss(y, np.clip(prob, 1e-7, 1 - 1e-7),
+                         sample_weight=np.where(y == 1, pos_w, 1.0))
+        return _metrics(y, prob, pred, loss_val=loss), prob
+    else:
+        # Macro log-loss (no class weighting at eval time).
+        loss = log_loss(y, np.clip(prob, 1e-7, 1 - 1e-7),
+                         labels=list(range(num_classes)))
+        return _metrics_multi(y, prob, pred, loss_val=loss,
+                                 num_classes=num_classes), prob
 
 
 def _fit_tree(head: str, train_emb, train_y, val_emb, val_y, seed: int,
@@ -541,6 +731,22 @@ def main() -> None:
                     action="store_true", dest="save_predictions",
                     help="Write per-patient val + test predictions to "
                           "<out_dir>/predictions.tsv (cols: Patient_ID, split, y, prob).")
+    # ── New-task re-extraction args (2026-06-02) ───────────────────────────
+    ap.add_argument("--task", default="ad_vs_cn",
+                    choices=list(TASK_REGISTRY.keys()),
+                    help="Which task's labels to train on. Default 'ad_vs_cn' "
+                          "matches the original v3 sweep. Other choices "
+                          "(sCN_vs_pCN, T3_horizon_{3,5,7,10}y, T4_3class) "
+                          "select task-specific label loaders + cohort filters.")
+    ap.add_argument("--num-classes", "--num_classes", type=int, default=None,
+                    dest="num_classes",
+                    help="Override the task registry's num_classes (1=binary, "
+                          ">1=multiclass softmax). Defaults to the registry value.")
+    ap.add_argument("--save-embeddings", "--save_embeddings",
+                    action="store_true", dest="save_embeddings",
+                    help="After training, run forward passes with hooks and "
+                          "save embeddings.npz (per-PTID embedding_771 + "
+                          "embedding_256 + attn_weights) alongside model.pt.")
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     ap.add_argument("--wandb-project", "--wandb_project", default=None,
                     dest="wandb_project")
@@ -607,14 +813,21 @@ def main() -> None:
         for k, v in summaries.items():
             print(f"  {k}: shape={v.shape}, nonzero={int((v!=0).sum())}")
 
-    # ── Labels per split ────────────────────────────────────────────────
-    print(f"[labels] splits_root={args.splits_root}, seed={args.seed}")
-    labels = {sp: _load_labels_for_split(args.splits_root, args.seed, sp,
-                                            base=args.base,
-                                            exclude_cn_to_ad=args.exclude_cn_to_ad)
+    # ── Labels per split (per-task dispatcher; ad_vs_cn is the original) ──
+    print(f"[labels] task={args.task} splits_root={args.splits_root}, seed={args.seed}")
+    task_entry = TASK_REGISTRY[args.task]
+    task_loader = task_entry["loader"]
+    num_classes = (args.num_classes if args.num_classes is not None
+                    else task_entry["num_classes"])
+    labels = {sp: task_loader(args.splits_root, args.seed, sp,
+                                args.base, exclude_cn_to_ad=args.exclude_cn_to_ad)
                for sp in ("train", "val", "test")}
     for sp, df in labels.items():
-        print(f"  {sp}: n={len(df)}, pos={(df.y==1).sum()}, neg={(df.y==0).sum()}")
+        if num_classes == 1:
+            print(f"  {sp}: n={len(df)}, pos={(df.y==1).sum()}, neg={(df.y==0).sum()}")
+        else:
+            counts = df["y"].value_counts().sort_index().to_dict()
+            print(f"  {sp}: n={len(df)}, by_class={counts}")
 
     dos_by_ptid = dos_df.set_index("PTID")
     splits = {}
@@ -706,13 +919,24 @@ def main() -> None:
         modality_abs_t = torch.from_numpy(modality_abs_np) if modality_abs_np is not None else None
         func_imp_abs_t = torch.from_numpy(func_imp_abs_np) if func_imp_abs_np is not None else None
 
-        pos = int((ytr == 1).sum()); neg = int((ytr == 0).sum())
-        pos_weight = neg / max(1, pos)
-        print(f"  pos_weight (neg/pos): {pos_weight:.3f}")
+        if num_classes == 1:
+            pos = int((ytr == 1).sum()); neg = int((ytr == 0).sum())
+            pos_weight = neg / max(1, pos)
+            print(f"  pos_weight (neg/pos): {pos_weight:.3f}")
+            class_weights = None
+        else:
+            # Inverse-frequency class weights for CrossEntropyLoss.
+            pos_weight = 1.0  # unused
+            ytr_arr = np.asarray(ytr)
+            counts = np.bincount(ytr_arr, minlength=num_classes).astype(float)
+            counts = np.where(counts == 0, 1.0, counts)
+            class_weights = (counts.sum() / (num_classes * counts)).astype(np.float32)
+            print(f"  class_weights (1/freq, normalised): {class_weights.tolist()}")
 
         model = DiffAttnV3(in_dim=F, n_chroms=n_chroms,
                             aggregation=args.aggregation, head=args.head, mode=mode,
-                            mlp_width=args.mlp_width, mlp_dropout=args.mlp_dropout)
+                            mlp_width=args.mlp_width, mlp_dropout=args.mlp_dropout,
+                            out_dim=num_classes)
         fit_info = _train_mlp(model,
                                 (Xtr_t, beta_t, dxb_tr_t, chrom_t, ytr_t),
                                 (Xva_t, beta_t, dxb_va_t, chrom_t, yva_t),
@@ -722,11 +946,15 @@ def main() -> None:
                                 pos_weight=pos_weight,
                                 modality_abs_t=modality_abs_t,
                                 func_imp_abs_t=func_imp_abs_t,
-                                wandb_run=wb)
+                                wandb_run=wb,
+                                num_classes=num_classes,
+                                class_weights=class_weights)
         val_m, val_prob = _eval_mlp(model, (Xva_t, beta_t, dxb_va_t, chrom_t, yva_t),
-                              args.device, modality_abs_t, func_imp_abs_t)
+                              args.device, modality_abs_t, func_imp_abs_t,
+                              num_classes=num_classes)
         test_m, test_prob = _eval_mlp(model, (Xte_t, beta_t, dxb_te_t, chrom_t, yte_t),
-                              args.device, modality_abs_t, func_imp_abs_t)
+                              args.device, modality_abs_t, func_imp_abs_t,
+                              num_classes=num_classes)
         torch.save(model.state_dict(), out_dir / "model.pt")
     else:
         # Tree path: build patient embeddings with fixed γ=δ=ε=1 aggregator
@@ -756,29 +984,111 @@ def main() -> None:
     metrics = {"val": val_m, "test": test_m, "config": vars(args)}
     (out_dir / "metrics.json").write_text(json.dumps(metrics, default=str, indent=2))
 
-    # Per-patient predictions for downstream quantile / Lee R² plots.
+    # Per-patient predictions. Binary: single `prob` column (original).
+    # Multiclass: `prob_class0..K-1` columns.
     if args.save_predictions and val_prob is not None and test_prob is not None:
+        def _common_meta():
+            return {"seed": args.seed, "model": args.model, "task": args.task,
+                     "num_classes": num_classes,
+                     "func_integration_mode": args.func_integration_mode,
+                     "head": args.head, "seq_length": args.seq_length,
+                     "aggregation": args.aggregation,
+                     "mlp_width": args.mlp_width,
+                     "mlp_dropout": args.mlp_dropout, "lr": args.lr}
         pred_rows = []
-        for ptid, y, p in zip(splits["val"]["ptid"], yva, np.asarray(val_prob).ravel()):
-            pred_rows.append({"Patient_ID": str(ptid), "split": "val",
-                                "y": int(y), "prob": float(p),
-                                "seed": args.seed, "model": args.model,
-                                "func_integration_mode": args.func_integration_mode,
-                                "head": args.head, "seq_length": args.seq_length,
-                                "aggregation": args.aggregation,
-                                "mlp_width": args.mlp_width,
-                                "mlp_dropout": args.mlp_dropout, "lr": args.lr})
-        for ptid, y, p in zip(splits["test"]["ptid"], yte, np.asarray(test_prob).ravel()):
-            pred_rows.append({"Patient_ID": str(ptid), "split": "test",
-                                "y": int(y), "prob": float(p),
-                                "seed": args.seed, "model": args.model,
-                                "func_integration_mode": args.func_integration_mode,
-                                "head": args.head, "seq_length": args.seq_length,
-                                "aggregation": args.aggregation,
-                                "mlp_width": args.mlp_width,
-                                "mlp_dropout": args.mlp_dropout, "lr": args.lr})
+        for sp_name, sp_ptids, sp_y, sp_prob in [
+                ("val",  splits["val"]["ptid"],  yva, np.asarray(val_prob)),
+                ("test", splits["test"]["ptid"], yte, np.asarray(test_prob))]:
+            for i, (ptid, y) in enumerate(zip(sp_ptids, sp_y)):
+                row = {"Patient_ID": str(ptid), "split": sp_name,
+                        "y": int(y), **_common_meta()}
+                if num_classes == 1:
+                    row["prob"] = float(np.asarray(sp_prob).ravel()[i])
+                else:
+                    for k in range(num_classes):
+                        row[f"prob_class{k}"] = float(sp_prob[i, k])
+                pred_rows.append(row)
         pd.DataFrame(pred_rows).to_csv(out_dir / "predictions.tsv",
                                           sep="\t", index=False)
+
+    # ── Post-training embedding extraction (--save-embeddings) ──────────
+    # Runs forward passes with hooks on the trained pool + MLP penultimate.
+    # Saves per-PTID embedding_771 + embedding_256 (None for tree heads).
+    if args.save_embeddings and args.head in ("mlp2", "mlp3"):
+        print(f"[embeddings] extracting per-PTID embedding_771 + embedding_256...")
+        captured = {sp: {"pool_out": None, "pool_attn": None,
+                          "head_hidden": None, "prob": None}
+                     for sp in ("train", "val", "test")}
+        device_t = args.device
+        cur_sp = {"value": None}    # closure-mutable
+
+        def _h_pool(_m, _inp, output):
+            sp = cur_sp["value"]
+            if isinstance(output, tuple):
+                captured[sp]["pool_out"]  = output[0].detach().cpu().numpy()
+                attn = output[1]
+                if isinstance(attn, dict):
+                    if "a_snp" in attn and attn["a_snp"] is not None:
+                        captured[sp]["pool_attn"] = attn["a_snp"].detach().cpu().numpy()
+                elif attn is not None:
+                    captured[sp]["pool_attn"] = attn.detach().cpu().numpy()
+            else:
+                captured[sp]["pool_out"] = output.detach().cpu().numpy()
+
+        def _h_head(_m, _inp, output):
+            sp = cur_sp["value"]
+            captured[sp]["head_hidden"] = output.detach().cpu().numpy()
+
+        h1 = model.pool.register_forward_hook(_h_pool)
+        h2 = model.head.net[2].register_forward_hook(_h_head)
+        try:
+            model.eval()
+            for sp_name, (Xe, be, dxbe, ye) in (
+                    ("train", (Xtr_t, beta_t, dxb_tr_t, ytr_t)),
+                    ("val",   (Xva_t, beta_t, dxb_va_t, yva_t)),
+                    ("test",  (Xte_t, beta_t, dxb_te_t, yte_t))):
+                cur_sp["value"] = sp_name
+                with torch.no_grad():
+                    logits = model(Xe.to(device_t), be.to(device_t),
+                                     dxbe.to(device_t),
+                                     chrom_t.to(device_t) if chrom_t is not None else None,
+                                     modality_abs=modality_abs_t,
+                                     func_imp_abs=func_imp_abs_t)
+                    if num_classes == 1:
+                        captured[sp_name]["prob"] = torch.sigmoid(logits).cpu().numpy()
+                    else:
+                        captured[sp_name]["prob"] = torch.softmax(
+                            logits, dim=-1).cpu().numpy()
+        finally:
+            h1.remove(); h2.remove()
+        # Concat all folds + write embeddings.npz
+        ptids_all, fold_all, y_all, prob_all = [], [], [], []
+        emb771_all, emb256_all, attn_all = [], [], []
+        for sp_name, y_arr in (("train", ytr), ("val", yva), ("test", yte)):
+            cap = captured[sp_name]
+            n = cap["pool_out"].shape[0]
+            ptids_all.extend(splits[sp_name]["ptid"])
+            fold_all.extend([sp_name] * n)
+            y_all.append(np.asarray(y_arr, dtype=np.int8))
+            prob_all.append(np.asarray(cap["prob"], dtype=np.float32))
+            emb771_all.append(cap["pool_out"].astype(np.float32))
+            emb256_all.append(cap["head_hidden"].astype(np.float32))
+            if cap["pool_attn"] is not None:
+                attn_all.append(cap["pool_attn"].astype(np.float32))
+        save_kwargs = dict(
+            ptids=np.array(ptids_all),
+            fold=np.array(fold_all),
+            y_true=np.concatenate(y_all),
+            proba=np.concatenate(prob_all, axis=0),
+            embedding_771=np.concatenate(emb771_all, axis=0),
+            embedding_256=np.concatenate(emb256_all, axis=0),
+        )
+        if attn_all:
+            save_kwargs["attn_weights"] = np.concatenate(attn_all, axis=0)
+        np.savez_compressed(out_dir / "embeddings.npz", **save_kwargs)
+        print(f"  wrote {out_dir/'embeddings.npz'}  "
+              f"e771={save_kwargs['embedding_771'].shape}  "
+              f"e256={save_kwargs['embedding_256'].shape}")
 
     log_payload = {f"val_{k}": v for k, v in val_m.items()}
     log_payload.update({f"test_{k}": v for k, v in test_m.items()})
