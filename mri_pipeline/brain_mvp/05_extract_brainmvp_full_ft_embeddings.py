@@ -69,6 +69,11 @@ import torch  # noqa: E402
 import torch.nn as nn  # noqa: E402
 import torch.nn.functional as F  # noqa: E402
 
+# CSD3: many DataLoader workers + pin_memory exhausts the open-FD ulimit, which
+# surfaces as "received 0 items of ancdata" / "Pin memory thread exited". The
+# file_system sharing strategy avoids passing storages as file descriptors.
+torch.multiprocessing.set_sharing_strategy("file_system")
+
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 
@@ -231,17 +236,30 @@ def extract(task: str, aug: str, seed: int, device: torch.device,
     K = n_classes_for_task(task)
     model = BrainMVPClassifier(n_classes=K, drop_rate=0.1)
     sd = torch.load(ckpt, map_location="cpu", weights_only=False)
-    # finetune script saves either a raw state_dict or {'model': sd, ...}
-    if isinstance(sd, dict) and "model" in sd:
+    # 04_supervised_finetuning_BrainMVP.py saves {"net": state_dict, "epoch": ...}.
+    # Other/older checkpoints may use "model"/"state_dict" or be a raw state_dict.
+    if isinstance(sd, dict) and "net" in sd:
+        state = sd["net"]
+    elif isinstance(sd, dict) and "model" in sd:
         state = sd["model"]
     elif isinstance(sd, dict) and "state_dict" in sd:
         state = sd["state_dict"]
     else:
         state = sd
     missing, unexpected = model.load_state_dict(state, strict=False)
-    if missing or unexpected:
-        print(f"  [warn] load_state_dict: missing={missing[:5]} "
-              f"unexpected={unexpected[:5]}", file=sys.stderr)
+    # best_model.pt INCLUDES the task-specific head, so a correct checkpoint loads
+    # with NO missing keys. Any missing key means we unwrapped the wrong container
+    # key and the model would run on RANDOM weights -- fail loud rather than emit
+    # meaningless probabilities (this previously slipped through as a warning).
+    if missing:
+        ck = list(sd.keys()) if isinstance(sd, dict) else type(sd).__name__
+        raise RuntimeError(
+            f"load_state_dict missing {len(missing)} keys (e.g. {missing[:5]}); "
+            f"checkpoint top-level keys were {ck}. Refusing to run on "
+            f"partially-initialised weights.")
+    if unexpected:
+        print(f"  [warn] load_state_dict ignored unexpected keys: {unexpected[:5]}",
+              file=sys.stderr)
     model.to(device).eval()
 
     # 3. Hook pool layer for embedding capture
