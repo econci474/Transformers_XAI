@@ -134,23 +134,28 @@ def main():
     print(f"  remote = {host}   local dest root = {dest}")
     print("=" * 78)
 
-    def _xfer(src_rel, note=""):
+    def _xfer(src_rel, dest_rel=None, note=""):
+        # CSD3 source is single-nested; some local trees differ (dest_rel overrides).
+        dest_rel = dest_rel or src_rel
         src = f"{b}/{src_rel}"
-        dparent = f"{dest}/{os.path.dirname(src_rel)}"
+        dparent = f"{dest}/{os.path.dirname(dest_rel)}"
         print(f"\n  # {src_rel}{('   ' + note) if note else ''}")
         print(f"  mkdir -p {dparent}")
-        print(f"  rsync -av {host}:{src}/ {dest}/{src_rel}/")
+        print(f"  rsync -av {host}:{src}/ {dest}/{dest_rel}/")
         print(f"  # scp alt: scp -r {host}:{src} {dparent}/")
 
-    # cached-head sweeps: one subtree per (arch, task) we need for fusion
+    # cached-head sweeps: single-nested locally (frozen_cached) -> dest_rel == src_rel
     for arch, rel in CACHED.items():
         tasks = T3_TASKS + (["T4_conv_horizon", "T1e_pcn_vs_scn"] if arch != "vit_mae" else [])
         for task in tasks:
             _xfer(f"{rel}/{task}")
-    # BrainMVP T4 full_ft, the three augmentation folders
+    # BrainMVP T4 full_ft: CSD3 single-nested brainmvp_debug/aug_<aug>/..., but LOCAL full_ft tree is
+    # DOUBLE-NESTED at brainmvp_debug/brainmvp_debug/aug_<aug>/BrainMVP_uniformer/ -- land it there so
+    # it sits with the existing full_ft runs (and the 05_extract --ckpt-root = .../brainmvp_debug/brainmvp_debug).
     for aug in ("none", "stochastic", "plus_original"):
         _xfer(f"brainmvp_debug/aug_{aug}/BrainMVP_uniformer/T4_conv_horizon",
-              note=f"(T4 full_ft, aug={aug})")
+              dest_rel=f"brainmvp_debug/brainmvp_debug/aug_{aug}/BrainMVP_uniformer/T4_conv_horizon",
+              note=f"(T4 full_ft, aug={aug}) -> LOCAL double-nest brainmvp_debug/brainmvp_debug/")
     print()
 
 
