@@ -35,6 +35,7 @@ Exit code 0 iff all expected runs are present AND valid; else 1.
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import sys
 from pathlib import Path
@@ -66,8 +67,9 @@ def csv_split_counts(data_dir: Path, seed: int) -> dict | None:
         f = data_dir / f"seed_{seed}" / f"{sp}.csv"
         if not f.exists():
             return None
-        with open(f, "r", encoding="utf-8", errors="replace") as fh:
-            n = sum(1 for _ in fh) - 1            # minus header
+        # csv.reader (NOT naive line count) -- Generated_Text has newlines in quoted fields
+        with open(f, "r", encoding="utf-8", errors="replace", newline="") as fh:
+            n = sum(1 for _ in csv.reader(fh)) - 1            # minus header
         out[sp] = max(n, 0)
     return out
 
@@ -198,7 +200,7 @@ def main() -> int:
         for r in bad:
             print(f"    - {r}")
         return 1
-    print("  All expected embeddings present and valid. ✓")
+    print("  All expected embeddings present and valid.")
     return 0
 
 
