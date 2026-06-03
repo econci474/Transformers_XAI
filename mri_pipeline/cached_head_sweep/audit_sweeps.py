@@ -1,16 +1,16 @@
 """
 audit_sweeps.py
 ===============
-Completion audit for the cached-head HP sweeps + the BrainMVP T4 full_ft job. For each submit script
-it enumerates the exact HP grid, checks whether each cell's `metrics.json` exists, and reports
-found/expected/% complete plus the SLURM **array indices** of any missing cells (so you can resubmit
-just those -- though every submit also has a `metrics.json` skip-guard, so a plain re-`sbatch` only
-re-runs the missing cells anyway).
+Per-TASK completion audit for the cached-head HP sweeps + the BrainMVP T4 full_ft job. For each task
+it checks whether every cell's `metrics.json` exists and prints, inline:
+  - if INCOMPLETE -> the exact `sbatch --array=<missing ids>%4 <submit script>` to resubmit just those
+    (the `metrics.json` skip-guard also makes a plain re-`sbatch` idempotent), OR
+  - if COMPLETE   -> the `rsync`/`scp` command to pull that task's outputs CSD3 -> local D:.
+So for each task you either RESUBMIT or TRANSFER.
 
 Run on CSD3 (where the outputs live):
     python mri_pipeline/cached_head_sweep/audit_sweeps.py
-Or after scp'ing the trees to local D:, point --base at the local root:
-    python mri_pipeline/cached_head_sweep/audit_sweeps.py --base D:/ADNI_BIDS_project/derivatives/ADNI_MRI
+Override paths if needed: --base (CSD3 root), --remote (user@host), --local-dest (local derivatives/).
 
 Array decode (matches the submit scripts):
   T3abcd : id = TASK + 4*(SEED + 3*(DROP + 3*(LS + 2*LR)))   [N_TASKS=4]
@@ -23,146 +23,116 @@ from __future__ import annotations
 import argparse
 import os
 
-# CSD3 base that all OUT_DIRs share; override with --base after scp to local.
-DEFAULT_BASE = "/home/ec474/rds/hpc-work/ADNI_MRI"
-
+DEFAULT_BASE = "/home/ec474/rds/hpc-work/ADNI_MRI"     # CSD3 root shared by all OUT_DIRs
 SEEDS = [0, 1, 2]
 DROPS = [0.1, 0.2, 0.3]
 LSS = [0.0, 0.1]
 LRS = [1e-3, 1e-4, 1e-5]
 T3_TASKS = ["T3a_conv3y", "T3b_conv5y", "T3c_conv7y", "T3d_conv10y"]
 
-# Cached-head OUT_DIRs (relative to --base)
-CACHED = {
+CACHED = {  # cached-head OUT_DIR (relative to --base) per arch
     "brainmvp": "brainmvp_debug/aug_none/BrainMVP_uniformer_frozen_cached",
     "braindino": "braindino_outputs/aug_none_hp_tuned/BrainDINO_vitb16_frozen_cached",
     "vit_mae": "vit_outputs_debug/aug_none/ViT_B_mae75_frozen_cached",
 }
+SUB = "mri_pipeline/cached_head_sweep"                  # cached-head submit-script dir
 
 
 def _hp_dir(lr, drop, ls):
     return f"lr{lr:.0e}_d{drop}_ls{ls}"
 
 
-def _cached_cells(tasks, n_tasks_for_decode):
-    """Yield (array_id, rel_runpath) for a cached-head sweep grid."""
+def _cells_by_task(tasks, n_tasks):
+    """Return {task: [(array_id, rel_metrics_path)]} for a cached-head sweep grid."""
+    out = {t: [] for t in tasks}
     for ti, task in enumerate(tasks):
         for si, seed in enumerate(SEEDS):
             for di, drop in enumerate(DROPS):
                 for li, ls in enumerate(LSS):
                     for ri, lr in enumerate(LRS):
-                        if n_tasks_for_decode == 1:
-                            aid = si + 3 * (di + 3 * (li + 2 * ri))
-                        else:
-                            aid = ti + n_tasks_for_decode * (si + 3 * (di + 3 * (li + 2 * ri)))
-                        rel = f"{task}/seed_{seed}/{_hp_dir(lr, drop, ls)}/metrics.json"
-                        yield aid, rel
+                        inner = si + 3 * (di + 3 * (li + 2 * ri))
+                        aid = inner if n_tasks == 1 else ti + n_tasks * inner
+                        out[task].append((aid, f"{task}/seed_{seed}/{_hp_dir(lr, drop, ls)}/metrics.json"))
+    return out
 
 
-def _audit(label, out_dir, cells, submit):
-    found, missing = 0, []
-    for aid, rel in cells:
-        if os.path.isfile(os.path.join(out_dir, rel)):
-            found += 1
-        else:
-            missing.append(aid)
-    total = found + len(missing)
+def _xfer(b, host, dest, src_rel, dest_rel=None):
+    """rsync (+ scp alt) lines to pull a subtree CSD3 -> local. dest_rel overrides for odd layouts."""
+    dest_rel = dest_rel or src_rel
+    dparent = f"{dest}/{os.path.dirname(dest_rel)}"
+    return [f"mkdir -p {dparent}",
+            f"rsync -av {host}:{b}/{src_rel}/ {dest}/{dest_rel}/",
+            f"# scp alt: scp -r {host}:{b}/{src_rel} {dparent}/"]
+
+
+def _audit(label, out_dir, cells, submit, xfer_lines):
+    found = sum(os.path.isfile(os.path.join(out_dir, rel)) for _, rel in cells)
+    missing = [aid for aid, rel in cells if not os.path.isfile(os.path.join(out_dir, rel))]
+    total = len(cells)
     pct = 100.0 * found / total if total else 0.0
     status = "COMPLETE" if not missing else f"{len(missing)} MISSING"
     print(f"\n[{label}]  {found}/{total}  ({pct:5.1f}%)  {status}")
     print(f"    dir: {out_dir}")
     if missing:
         ids = ",".join(map(str, sorted(set(missing))))
-        print(f"    missing array ids ({len(missing)}): {ids}")
-        print(f"    resubmit: sbatch --array={ids}%4 {submit}")
+        print(f"    -> RESUBMIT: sbatch --array={ids}%4 {submit}")
+    else:
+        print(f"    -> TRANSFER:")
+        for ln in xfer_lines:
+            print(f"        {ln}")
     return found, total
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--base", default=DEFAULT_BASE,
-                    help="Root containing brainmvp_debug/, braindino_outputs/, vit_outputs_debug/ "
-                         "(CSD3 default; override after scp).")
-    ap.add_argument("--remote", default="ec474@login-cpu.hpc.cam.ac.uk",
-                    help="user@host for the transfer commands printed after the audit.")
+    ap.add_argument("--base", default=DEFAULT_BASE)
+    ap.add_argument("--remote", default="ec474@login-cpu.hpc.cam.ac.uk")
     ap.add_argument("--local-dest", default="/d/ADNI_BIDS_project/derivatives",
-                    help="Local destination root for the printed transfer commands. The CSD3 "
-                         "ADNI_MRI/<tree> maps to derivatives/<tree> (brainmvp_debug/, "
-                         "braindino_outputs/, vit_outputs_debug/ already live here).")
+                    help="Local derivatives/ root. CSD3 ADNI_MRI/<tree> -> derivatives/<tree>.")
     args = ap.parse_args()
-    b = args.base
+    b, host, dest = args.base, args.remote, args.local_dest
 
     print("=" * 78)
-    print(f"  Cached-head + full_ft sweep audit   base={b}")
+    print(f"  Per-task sweep audit (resubmit if incomplete / transfer if complete)   base={b}")
     print("=" * 78)
 
-    SUB = "mri_pipeline/cached_head_sweep"      # submit-script dir for cached-head sweeps
-    specs = []
-    # T3abcd (216 each), 3 archs
+    specs = []  # (label, out_dir, cells, submit_cmd, xfer_lines)
+
+    # T3a-d cached, 3 archs (one block per horizon)
     for arch, rel in CACHED.items():
-        specs.append((f"T3abcd / {arch}", os.path.join(b, rel),
-                      list(_cached_cells(T3_TASKS, 4)),
-                      f"{SUB}/04_{arch}_head_sweep_T3abcd_submit_csd3.sh"))
-    # T4 (54 each), brainmvp + braindino
-    for arch in ("brainmvp", "braindino"):
-        specs.append((f"T4 / {arch}", os.path.join(b, CACHED[arch]),
-                      list(_cached_cells(["T4_conv_horizon"], 1)),
-                      f"{SUB}/04_{arch}_head_sweep_T4_submit_csd3.sh"))
-    # T1e (54 each), brainmvp + braindino
-    for arch in ("brainmvp", "braindino"):
-        specs.append((f"T1e / {arch}", os.path.join(b, CACHED[arch]),
-                      list(_cached_cells(["T1e_pcn_vs_scn"], 1)),
-                      f"{SUB}/04_{arch}_head_sweep_T1e_submit_csd3.sh"))
-    # 04i BrainMVP T4 full_ft: 3 seeds per AUGMENT (submit includes the AUGMENT export)
+        buckets = _cells_by_task(T3_TASKS, 4)
+        submit = f"{SUB}/04_{arch}_head_sweep_T3abcd_submit_csd3.sh"
+        for task in T3_TASKS:
+            specs.append((f"{task} / {arch}", os.path.join(b, rel), buckets[task], submit,
+                          _xfer(b, host, dest, f"{rel}/{task}")))
+    # T4 cached + T1e cached, brainmvp + braindino
+    for task, tag in [("T4_conv_horizon", "T4"), ("T1e_pcn_vs_scn", "T1e")]:
+        for arch in ("brainmvp", "braindino"):
+            rel = CACHED[arch]
+            submit = f"{SUB}/04_{arch}_head_sweep_{tag}_submit_csd3.sh"
+            cells = _cells_by_task([task], 1)[task]
+            specs.append((f"{task} / {arch}", os.path.join(b, rel), cells, submit,
+                          _xfer(b, host, dest, f"{rel}/{task}")))
+    # BrainMVP T4 full_ft per AUGMENT (CSD3 single-nest; LOCAL double-nest brainmvp_debug/brainmvp_debug/)
     for aug in ("none", "stochastic", "plus_original"):
-        cells = [(s, f"BrainMVP_uniformer/T4_conv_horizon/seed_{s}/full_ft/metrics.json")
-                 for s in SEEDS]
-        specs.append((f"T4 full_ft / brainmvp aug={aug}",
-                      os.path.join(b, f"brainmvp_debug/aug_{aug}"), cells,
-                      f"--export=ALL,AUGMENT={aug} "
-                      f"mri_pipeline/brain_mvp/04i_finetune_BrainMVP_T4_full_ft_submit_csd3.sh"))
+        cells = [(s, f"BrainMVP_uniformer/T4_conv_horizon/seed_{s}/full_ft/metrics.json") for s in SEEDS]
+        src_rel = f"brainmvp_debug/aug_{aug}/BrainMVP_uniformer/T4_conv_horizon"
+        dst_rel = f"brainmvp_debug/brainmvp_debug/aug_{aug}/BrainMVP_uniformer/T4_conv_horizon"
+        submit = f"--export=ALL,AUGMENT={aug} mri_pipeline/brain_mvp/04i_finetune_BrainMVP_T4_full_ft_submit_csd3.sh"
+        specs.append((f"T4_conv_horizon full_ft / aug={aug}",
+                      os.path.join(b, f"brainmvp_debug/aug_{aug}"), cells, submit,
+                      _xfer(b, host, dest, src_rel, dest_rel=dst_rel)))
 
-    grand_f = grand_t = 0
-    for label, out_dir, cells, submit in specs:
-        f, t = _audit(label, out_dir, cells, submit)
-        grand_f += f; grand_t += t
+    gf = gt = 0
+    for label, out_dir, cells, submit, xfer in specs:
+        f, t = _audit(label, out_dir, cells, submit, xfer)
+        gf += f; gt += t
 
     print("\n" + "=" * 78)
-    print(f"  TOTAL: {grand_f}/{grand_t} cells complete "
-          f"({100.0 * grand_f / grand_t if grand_t else 0:.1f}%)")
+    print(f"  TOTAL: {gf}/{gt} cells complete ({100.0 * gf / gt if gt else 0:.1f}%)")
+    print("  Per task above: RESUBMIT line if incomplete, TRANSFER (rsync/scp) line if complete.")
     print("=" * 78)
-
-    # ---- transfer commands: pull each task subtree CSD3 -> local (run LOCALLY) ----
-    host, dest = args.remote, args.local_dest
-    print("\n" + "=" * 78)
-    print("  TRANSFER COMMANDS  (run from your LOCAL machine; rsync = resumable, recommended)")
-    print(f"  remote = {host}   local dest root = {dest}")
-    print("=" * 78)
-
-    def _xfer(src_rel, dest_rel=None, note=""):
-        # CSD3 source is single-nested; some local trees differ (dest_rel overrides).
-        dest_rel = dest_rel or src_rel
-        src = f"{b}/{src_rel}"
-        dparent = f"{dest}/{os.path.dirname(dest_rel)}"
-        print(f"\n  # {src_rel}{('   ' + note) if note else ''}")
-        print(f"  mkdir -p {dparent}")
-        print(f"  rsync -av {host}:{src}/ {dest}/{dest_rel}/")
-        print(f"  # scp alt: scp -r {host}:{src} {dparent}/")
-
-    # cached-head sweeps: single-nested locally (frozen_cached) -> dest_rel == src_rel
-    for arch, rel in CACHED.items():
-        tasks = T3_TASKS + (["T4_conv_horizon", "T1e_pcn_vs_scn"] if arch != "vit_mae" else [])
-        for task in tasks:
-            _xfer(f"{rel}/{task}")
-    # BrainMVP T4 full_ft: CSD3 single-nested brainmvp_debug/aug_<aug>/..., but LOCAL full_ft tree is
-    # DOUBLE-NESTED at brainmvp_debug/brainmvp_debug/aug_<aug>/BrainMVP_uniformer/ -- land it there so
-    # it sits with the existing full_ft runs (and the 05_extract --ckpt-root = .../brainmvp_debug/brainmvp_debug).
-    for aug in ("none", "stochastic", "plus_original"):
-        _xfer(f"brainmvp_debug/aug_{aug}/BrainMVP_uniformer/T4_conv_horizon",
-              dest_rel=f"brainmvp_debug/brainmvp_debug/aug_{aug}/BrainMVP_uniformer/T4_conv_horizon",
-              note=f"(T4 full_ft, aug={aug}) -> LOCAL double-nest brainmvp_debug/brainmvp_debug/")
-    print()
 
 
 if __name__ == "__main__":
