@@ -196,6 +196,34 @@ TASK_CONFIG = {
     },
     # NB: the 1-year T1d task REUSES `T1d_pmci_smci` above (label = conversion_group, time-invariant)
     # — only --data_dir changes to verbose/baseline_m12; no separate m12 config is needed.
+    # ── 6-MONTH (m06) CROSS-SECTIONAL variants (for the temporal clinical EN over bl+m06+m12) ──
+    # Identical to the *_m12 entries (concurrent Label_visit_diag) but run on verbose/baseline_m06.
+    # Used to assemble a per-patient clinical trajectory up to year 1 (bl + m06 + m12), exploiting
+    # the fact that ADNI clinical visits are denser than MRI.
+    "T2_m06_multiclass": {
+        "label_col":     "Label_visit_diag",
+        "num_labels":    3,
+        "task_type":     "multiclass",
+        "label_map":     {"CN": 0, "MCI": 1, "AD": 2},
+        "filter_non_ad": False,
+        "description":   "Multiclass CN/MCI/AD at the m06 visit (concurrent dx; cross-sectional 6-month)",
+    },
+    "T1_m06_binary": {
+        "label_col":     "Label_visit_diag",
+        "num_labels":    2,
+        "task_type":     "binary",
+        "label_map":     {"CN": 0, "MCI": 1, "AD": 1},
+        "filter_non_ad": False,
+        "description":   "Binary CN vs MCI+AD at the m06 visit (detect CN; concurrent dx, 6-month)",
+    },
+    "T1b_m06_cnmci_ad": {
+        "label_col":     "Label_visit_diag",
+        "num_labels":    2,
+        "task_type":     "binary",
+        "label_map":     {"CN": 0, "MCI": 0, "AD": 1},
+        "filter_non_ad": False,
+        "description":   "Binary CN+MCI vs AD at the m06 visit (detect AD; concurrent dx, 6-month)",
+    },
 }
 
 
