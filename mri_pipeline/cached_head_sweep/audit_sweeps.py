@@ -86,8 +86,10 @@ def main():
                          "(CSD3 default; override after scp).")
     ap.add_argument("--remote", default="ec474@login-cpu.hpc.cam.ac.uk",
                     help="user@host for the transfer commands printed after the audit.")
-    ap.add_argument("--local-dest", default="/d/ADNI_BIDS_project/derivatives/ADNI_MRI",
-                    help="Local destination root for the printed transfer commands.")
+    ap.add_argument("--local-dest", default="/d/ADNI_BIDS_project/derivatives",
+                    help="Local destination root for the printed transfer commands. The CSD3 "
+                         "ADNI_MRI/<tree> maps to derivatives/<tree> (brainmvp_debug/, "
+                         "braindino_outputs/, vit_outputs_debug/ already live here).")
     args = ap.parse_args()
     b = args.base
 
