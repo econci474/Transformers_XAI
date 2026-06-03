@@ -33,7 +33,7 @@ MATCHED_LABELS_CSV="/home/ec474/rds/hpc-work/ADNI_MRI/master_mri_clinical_matche
 DATA_DIR="/home/ec474/rds/hpc-work/ADNI_CL/no_cdr_stratified_post_exclusion/tabular/baseline"
 OUT_DIR="/home/ec474/rds/hpc-work/ADNI_MRI/vit_outputs_debug/aug_none/ViT_B_mae75_frozen_cached"
 
-MODEL_NAME="ViT_MAE"
+MODEL_NAME="ViT-MAE75"
 EMBED_DIM=768
 WANDB_PROJECT="${WANDB_PROJECT:-vit_mae_frozen_cached_T3abcd}"
 export WANDB_MODE="${WANDB_MODE:-offline}"
