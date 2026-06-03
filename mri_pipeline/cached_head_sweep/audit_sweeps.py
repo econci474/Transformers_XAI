@@ -59,7 +59,7 @@ def _cached_cells(tasks, n_tasks_for_decode):
                         yield aid, rel
 
 
-def _audit(label, out_dir, cells):
+def _audit(label, out_dir, cells, submit):
     found, missing = 0, []
     for aid, rel in cells:
         if os.path.isfile(os.path.join(out_dir, rel)):
@@ -72,9 +72,9 @@ def _audit(label, out_dir, cells):
     print(f"\n[{label}]  {found}/{total}  ({pct:5.1f}%)  {status}")
     print(f"    dir: {out_dir}")
     if missing:
-        ids = sorted(set(missing))
-        print(f"    missing array ids ({len(ids)}): {','.join(map(str, ids))}")
-        print(f"    resubmit: sbatch --array={','.join(map(str, ids))}%4 <that submit script>")
+        ids = ",".join(map(str, sorted(set(missing))))
+        print(f"    missing array ids ({len(missing)}): {ids}")
+        print(f"    resubmit: sbatch --array={ids}%4 {submit}")
     return found, total
 
 
@@ -97,29 +97,35 @@ def main():
     print(f"  Cached-head + full_ft sweep audit   base={b}")
     print("=" * 78)
 
+    SUB = "mri_pipeline/cached_head_sweep"      # submit-script dir for cached-head sweeps
     specs = []
     # T3abcd (216 each), 3 archs
     for arch, rel in CACHED.items():
         specs.append((f"T3abcd / {arch}", os.path.join(b, rel),
-                      list(_cached_cells(T3_TASKS, 4))))
+                      list(_cached_cells(T3_TASKS, 4)),
+                      f"{SUB}/04_{arch}_head_sweep_T3abcd_submit_csd3.sh"))
     # T4 (54 each), brainmvp + braindino
     for arch in ("brainmvp", "braindino"):
         specs.append((f"T4 / {arch}", os.path.join(b, CACHED[arch]),
-                      list(_cached_cells(["T4_conv_horizon"], 1))))
+                      list(_cached_cells(["T4_conv_horizon"], 1)),
+                      f"{SUB}/04_{arch}_head_sweep_T4_submit_csd3.sh"))
     # T1e (54 each), brainmvp + braindino
     for arch in ("brainmvp", "braindino"):
         specs.append((f"T1e / {arch}", os.path.join(b, CACHED[arch]),
-                      list(_cached_cells(["T1e_pcn_vs_scn"], 1))))
-    # 04i BrainMVP T4 full_ft: 3 seeds per AUGMENT
+                      list(_cached_cells(["T1e_pcn_vs_scn"], 1)),
+                      f"{SUB}/04_{arch}_head_sweep_T1e_submit_csd3.sh"))
+    # 04i BrainMVP T4 full_ft: 3 seeds per AUGMENT (submit includes the AUGMENT export)
     for aug in ("none", "stochastic", "plus_original"):
         cells = [(s, f"BrainMVP_uniformer/T4_conv_horizon/seed_{s}/full_ft/metrics.json")
                  for s in SEEDS]
         specs.append((f"T4 full_ft / brainmvp aug={aug}",
-                      os.path.join(b, f"brainmvp_debug/aug_{aug}"), cells))
+                      os.path.join(b, f"brainmvp_debug/aug_{aug}"), cells,
+                      f"--export=ALL,AUGMENT={aug} "
+                      f"mri_pipeline/brain_mvp/04i_finetune_BrainMVP_T4_full_ft_submit_csd3.sh"))
 
     grand_f = grand_t = 0
-    for label, out_dir, cells in specs:
-        f, t = _audit(label, out_dir, cells)
+    for label, out_dir, cells, submit in specs:
+        f, t = _audit(label, out_dir, cells, submit)
         grand_f += f; grand_t += t
 
     print("\n" + "=" * 78)
