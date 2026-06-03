@@ -164,6 +164,38 @@ TASK_CONFIG = {
         "filter_non_ad": False,
         "description":   "Multiclass: AD-conversion horizon (<3y / 3-7y / >=7y), converters (pMCI + pCN_to_AD)",
     },
+    # ── 1-YEAR (m12) CROSS-SECTIONAL variants (for late fusion with the m12-dominant MRI arm) ──
+    # Same model architecture/training as the baseline tasks, but the INPUT is the patient's
+    # m12-visit summary and the diagnosis LABEL is the CONCURRENT m12 diagnosis (`Label_visit_diag`).
+    # Run via the SEPARATE 03g submit with DATA_DIR=verbose/baseline_m12 (built by 01h), which
+    # carries `Label_visit_diag` + `conversion_group`. The diagnosis maps below mirror the baseline
+    # T2/T1/T1b maps exactly — only `label_col` changes (Label_bl_multi -> Label_visit_diag).
+    "T2_m12_multiclass": {
+        "label_col":     "Label_visit_diag",
+        "num_labels":    3,
+        "task_type":     "multiclass",
+        "label_map":     {"CN": 0, "MCI": 1, "AD": 2},
+        "filter_non_ad": False,
+        "description":   "Multiclass CN/MCI/AD at the m12 visit (concurrent dx; cross-sectional 1-year)",
+    },
+    "T1_m12_binary": {
+        "label_col":     "Label_visit_diag",
+        "num_labels":    2,
+        "task_type":     "binary",
+        "label_map":     {"CN": 0, "MCI": 1, "AD": 1},
+        "filter_non_ad": False,
+        "description":   "Binary CN vs MCI+AD at the m12 visit (detect CN; concurrent dx, 1-year)",
+    },
+    "T1b_m12_cnmci_ad": {
+        "label_col":     "Label_visit_diag",
+        "num_labels":    2,
+        "task_type":     "binary",
+        "label_map":     {"CN": 0, "MCI": 0, "AD": 1},
+        "filter_non_ad": False,
+        "description":   "Binary CN+MCI vs AD at the m12 visit (detect AD; concurrent dx, 1-year)",
+    },
+    # NB: the 1-year T1d task REUSES `T1d_pmci_smci` above (label = conversion_group, time-invariant)
+    # — only --data_dir changes to verbose/baseline_m12; no separate m12 config is needed.
 }
 
 
