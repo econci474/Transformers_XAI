@@ -168,36 +168,43 @@ def main():
             mr_fill = np.where(mp[:, None], np.nan_to_num(mr), 1.0 / K)
             return np.hstack([cl, mr_fill, mp.astype(float)[:, None]])
 
-        def add(variant, y, pred, proba, val_bacc, pids):
+        def rec(variant, cohort, y, pred, proba, val_bacc, pids):
             r = h.metric_row(np.asarray(y, int), np.asarray(pred, int), proba)
-            r.update(seed=seed, variant=variant, val_bacc=float(val_bacc))
+            r.update(seed=seed, variant=variant, cohort=cohort, val_bacc=float(val_bacc))
             rows.append(r)
             for i in range(len(y)):
-                all_preds.append(dict(seed=seed, Patient_ID=pids[i], variant=variant,
-                                      y_true=int(y[i]), pred=int(pred[i])))
+                all_preds.append(dict(seed=seed, variant=variant, cohort=cohort,
+                                      Patient_ID=pids[i], y_true=int(y[i]), pred=int(pred[i])))
 
-        # references (clinical-only over FULL cohort; mri-only over MRI-present subset)
-        add("clinical_only", yt, clt.argmax(1), clt, bacc(yv, clv.argmax(1)), pid_t)
+        def add(variant, y, pred, proba, val_bacc, pids, pres):
+            """Record on BOTH cohorts: present-only (full) and both-present (MRI-present subset)."""
+            y, pred, proba, pids = (np.asarray(y), np.asarray(pred), np.asarray(proba), np.asarray(pids))
+            rec(variant, "present_only", y, pred, proba, val_bacc, pids)
+            if pres is not None and pres.sum() > 0:
+                rec(variant, "both_present", y[pres], pred[pres], proba[pres], val_bacc, pids[pres])
+
+        # references (clinical-only on both cohorts; mri-only only where MRI present)
+        add("clinical_only", yt, clt.argmax(1), clt, bacc(yv, clv.argmax(1)), pid_t, mpt)
         if mpt.any():
             vb = bacc(yv[mpv], mrv[mpv].argmax(1)) if mpv.sum() > 1 else float("nan")
-            add("mri_only", yt[mpt], mrt[mpt].argmax(1), mrt[mpt], vb, pid_t[mpt])
+            rec("mri_only", "both_present", yt[mpt], mrt[mpt].argmax(1), mrt[mpt], vb, pid_t[mpt])
         # present-only blends (full cohort: clinical proceeds where MRI absent)
         eqt = fuse_po(clt, mrt, mpt, 0.5)
-        add("equal_0.5", yt, eqt.argmax(1), eqt, bacc(yv, fuse_po(clv, mrv, mpv, 0.5).argmax(1)), pid_t)
+        add("equal_0.5", yt, eqt.argmax(1), eqt, bacc(yv, fuse_po(clv, mrv, mpv, 0.5).argmax(1)), pid_t, mpt)
         wb = tune_w("bacc"); wpt = fuse_po(clt, mrt, mpt, wb)
-        add("weighted_avg", yt, wpt.argmax(1), wpt, bacc(yv, fuse_po(clv, mrv, mpv, wb).argmax(1)), pid_t)
+        add("weighted_avg", yt, wpt.argmax(1), wpt, bacc(yv, fuse_po(clv, mrv, mpv, wb).argmax(1)), pid_t, mpt)
         wavg_pred = wpt.argmax(1)
         wj = tune_w("youden"); wjt = fuse_po(clt, mrt, mpt, wj)
-        add("weighted_avg_J", yt, wjt.argmax(1), wjt, bacc(yv, fuse_po(clv, mrv, mpv, wj).argmax(1)), pid_t)
+        add("weighted_avg_J", yt, wjt.argmax(1), wjt, bacc(yv, fuse_po(clv, mrv, mpv, wj).argmax(1)), pid_t, mpt)
         # EN / LR present-only (uniform-impute missing MRI + indicator -> full cohort)
         Xv, Xt = Xpo(clv, mrv, mpv), Xpo(clt, mrt, mpt)
         Xv_all.append(np.hstack([clv[mpv], mrv[mpv]])); yv_all.append(yv[mpv])  # complete-case for LR-weights viz
         en_res = h.fit_en(Xv, yv, Xt, seed)
         if en_res is not None:
-            add("elastic_net", yt, en_res[0], en_res[1], float("nan"), pid_t)
+            add("elastic_net", yt, en_res[0], en_res[1], float("nan"), pid_t, mpt)
         lr_res = h.fit_lr(Xv, yv, Xt, seed)
         if lr_res is not None:
-            add("lr", yt, lr_res[0], lr_res[1], float("nan"), pid_t)
+            add("lr", yt, lr_res[0], lr_res[1], float("nan"), pid_t, mpt)
 
         cl_pred, mri_pred_full = clt.argmax(1), mrt.argmax(1)
         for i in range(len(yt)):
@@ -238,23 +245,24 @@ def main():
         print(f"  pooled-VAL LR fit on n={len(ypool)} (classes {cls}) -> lr_coefficients_T4.csv")
 
     metric_cols = ["bacc", "macro_auc", "macro_f1"] + [f"f1_{c}" for c in h.CLASS_NAMES] + ["val_bacc", "n"]
-    agg = (per_seed.groupby("variant")[metric_cols]
+    agg = (per_seed.groupby(["variant", "cohort"])[metric_cols]
            .agg(["mean", "std"]).reset_index())
     # flatten + write
-    summary = pd.DataFrame({"variant": agg["variant"]})
+    summary = pd.DataFrame({"variant": agg["variant"], "cohort": agg["cohort"]})
     for c in metric_cols:
         summary[f"{c}_mean"] = agg[(c, "mean")]
         summary[f"{c}_std"] = agg[(c, "std")]
     order = ["clinical_only", "mri_only", "equal_0.5", "weighted_avg",
              "weighted_avg_J", "elastic_net", "lr"]
     summary["__o"] = summary["variant"].map({v: i for i, v in enumerate(order)}).fillna(99)
-    summary = summary.sort_values("__o").drop(columns="__o").reset_index(drop=True)
+    summary["__c"] = summary["cohort"].map({"both_present": 0, "present_only": 1}).fillna(9)
+    summary = summary.sort_values(["__c", "__o"]).drop(columns=["__o", "__c"]).reset_index(drop=True)
     summary.to_csv(HERE / "fusion_metrics.csv", index=False)
 
     print(f"\n  harmonisation: clinical-vs-MRI split mismatches across seeds = {n_mismatch} "
           f"(expect 0 if baseline splits align)")
     print("\n[T4 cumulative-horizon fusion] mean over seeds (fit VAL / report TEST):")
-    show = summary[["variant", "bacc_mean", "bacc_std", "macro_auc_mean",
+    show = summary[["cohort", "variant", "bacc_mean", "bacc_std", "macro_auc_mean",
                     "macro_f1_mean", "val_bacc_mean", "n_mean"]].copy()
     with pd.option_context("display.float_format", lambda v: f"{v:.3f}"):
         print(show.to_string(index=False))

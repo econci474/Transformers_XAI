@@ -115,30 +115,36 @@ def main():
                 mrf = np.where(p[:, None], np.nan_to_num(mr), 1.0 / K)
                 return np.hstack([cl, mrf, p.astype(float)[:, None]])
 
-            def add(variant, yy, pred, proba, vb, pids):
+            def rec(variant, cohort, yy, pred, proba, vb, pids):
                 r = h.metric_row(np.asarray(yy, int), np.asarray(pred, int), proba)
-                r.update(horizon=hz, seed=seed, variant=variant, val_bacc=float(vb),
+                r.update(horizon=hz, seed=seed, variant=variant, cohort=cohort, val_bacc=float(vb),
                          clin_model=cfg["model"], mri_model=cfg["mri_label"])
                 rows.append(r)
                 for i in range(len(yy)):
-                    all_preds.append(dict(horizon=hz, seed=seed, variant=variant,
+                    all_preds.append(dict(horizon=hz, seed=seed, variant=variant, cohort=cohort,
                                           Patient_ID=pids[i], y_true=int(yy[i]), pred=int(pred[i])))
 
-            add("clinical_only", yt, cpt.argmax(1), cpt, bacc(yv, cpv.argmax(1)), pid_t)
+            def add(variant, yy, pred, proba, vb, pids, pres):
+                yy, pred, proba, pids = np.asarray(yy), np.asarray(pred), np.asarray(proba), np.asarray(pids)
+                rec(variant, "present_only", yy, pred, proba, vb, pids)
+                if pres is not None and pres.sum() > 0:
+                    rec(variant, "both_present", yy[pres], pred[pres], proba[pres], vb, pids[pres])
+
+            add("clinical_only", yt, cpt.argmax(1), cpt, bacc(yv, cpv.argmax(1)), pid_t, prt)
             if prt.any():
                 vb = bacc(yv[prv], mpv[prv].argmax(1)) if prv.sum() > 1 else float("nan")
-                add("mri_only", yt[prt], mpt[prt].argmax(1), mpt[prt], vb, pid_t[prt])
+                rec("mri_only", "both_present", yt[prt], mpt[prt].argmax(1), mpt[prt], vb, pid_t[prt])
             et = fuse_po(cpt, mpt, prt, 0.5)
-            add("equal_0.5", yt, et.argmax(1), et, bacc(yv, fuse_po(cpv, mpv, prv, 0.5).argmax(1)), pid_t)
+            add("equal_0.5", yt, et.argmax(1), et, bacc(yv, fuse_po(cpv, mpv, prv, 0.5).argmax(1)), pid_t, prt)
             wb = tune_w("bacc"); wt = fuse_po(cpt, mpt, prt, wb)
-            add("weighted_avg", yt, wt.argmax(1), wt, bacc(yv, fuse_po(cpv, mpv, prv, wb).argmax(1)), pid_t)
+            add("weighted_avg", yt, wt.argmax(1), wt, bacc(yv, fuse_po(cpv, mpv, prv, wb).argmax(1)), pid_t, prt)
             wj = tune_w("youden"); wjt = fuse_po(cpt, mpt, prt, wj)
-            add("weighted_avg_J", yt, wjt.argmax(1), wjt, bacc(yv, fuse_po(cpv, mpv, prv, wj).argmax(1)), pid_t)
+            add("weighted_avg_J", yt, wjt.argmax(1), wjt, bacc(yv, fuse_po(cpv, mpv, prv, wj).argmax(1)), pid_t, prt)
             Xv, Xt = Xpo(cpv, mpv, prv), Xpo(cpt, mpt, prt)
             for name, fn in [("elastic_net", h.fit_en), ("lr", h.fit_lr)]:
                 res = fn(Xv, yv, Xt, seed)
                 if res is not None:
-                    add(name, yt, res[0], res[1], float("nan"), pid_t)
+                    add(name, yt, res[0], res[1], float("nan"), pid_t, prt)
             print(f"  {hz} seed{seed}: n_test={len(yt)} (MRI present {int(prt.sum())})  "
                   f"clin={bacc(yt, cpt.argmax(1)):.3f}  wavg={bacc(yt, wt.argmax(1)):.3f}")
 
@@ -149,50 +155,49 @@ def main():
     ap = pd.DataFrame(all_preds)
 
     # aggregate: seed-mean + pooled bACC per (horizon, variant)
-    body, first = [], {}
+    body = []
     for hz in HORIZONS:
         hd = per_seed[per_seed.horizon == hz]
         if hd.empty:
             continue
-        first[hz] = len(body)
-        for v in ORDER:
-            vd = hd[hd.variant == v]
-            if vd.empty:
-                continue
-            sm, ss = vd.bacc.mean(), vd.bacc.std()
-            au = vd.macro_auc.mean()
-            n = vd.n.mean()
-            pe = ap[(ap.horizon == hz) & (ap.variant == v)]
-            pool = bacc(pe.y_true, pe.pred) if len(pe) and pe.pred.ge(0).all() else float("nan")
-            body.append([HORIZONS[hz]["label"], VAR_LABEL[v],
-                         f"{sm:.3f} ± {ss:.3f}", f"{pool:.3f}", f"{au:.3f}", f"{n:.0f}"])
+        for ckey, clabel in [("both_present", "both-present"), ("present_only", "present-only")]:
+            cd = hd[hd.cohort == ckey]
+            for v in ORDER:
+                vd = cd[cd.variant == v]
+                if vd.empty:
+                    continue
+                sm, ss, au, n = vd.bacc.mean(), vd.bacc.std(), vd.macro_auc.mean(), vd.n.mean()
+                pe = ap[(ap.horizon == hz) & (ap.variant == v) & (ap.cohort == ckey)]
+                pool = bacc(pe.y_true, pe.pred) if len(pe) and (pe.pred >= 0).all() else float("nan")
+                body.append([HORIZONS[hz]["label"], clabel, VAR_LABEL[v],
+                             f"{sm:.3f} ± {ss:.3f}", f"{pool:.3f}", f"{au:.3f}", f"{n:.0f}"])
 
-    cols = ["Horizon", "Method", "TEST bACC (seed-mean)", "pooled bACC", "macro-AUC", "n"]
+    cols = ["Horizon", "Cohort", "Method", "TEST bACC (seed-mean)", "pooled bACC", "macro-AUC", "n"]
     nC = len(cols)
     cw = [max(len(str(x)) for x in [cols[j]] + [b[j] for b in body]) + 2 for j in range(nC)]
-    cw[0] += 2; cw[1] += 4
+    cw[2] += 6
     tot = sum(cw)
-    fig, ax = plt.subplots(figsize=(0.13 * tot, 0.6 + 0.4 * (len(body) + 1)))
+    fig, ax = plt.subplots(figsize=(0.12 * tot, 0.6 + 0.38 * (len(body) + 1)))
     ax.axis("off")
     tab = ax.table(cellText=body, colLabels=cols, loc="upper center", cellLoc="center",
                    colLoc="center", colWidths=[c / tot for c in cw])
-    tab.auto_set_font_size(False); tab.set_fontsize(9); tab.scale(1.0, 1.45)
+    tab.auto_set_font_size(False); tab.set_fontsize(8.5); tab.scale(1.0, 1.4)
     for j in range(nC):
         tab[0, j].set_text_props(weight="bold")
     for i in range(1, len(body) + 1):
-        for j in (0, 1):
+        for j in (0, 1, 2):
             tab[i, j].set_text_props(ha="left")
-    plt.title("T3 per-horizon late fusion — PRESENT-ONLY cohort (clinical@bl ⊕ MRI@m12)\n"
-              "full clinical-test cohort; single modality proceeds where the other is absent "
-              "(mean ± std across seeds)", pad=10, fontsize=11)
-    foot = ["clinical-only / EN / LR / weighted-avg scored on the FULL clinical-test cohort (MRI uniform-imputed",
-            "  + present flag for EN/LR; weighted-avg falls back to clinical where MRI absent).",
-            "MRI-only scored on the MRI-present subset (smaller n) — reference only.",
-            "pooled bACC = over all test patients pooled across seeds. MRI: 3y/7y BrainMVP full_ft plus_original,",
-            "  5y BrainMVP frozen/none (no full_ft for T3b). Clinical: 3y BioClin-L, 5y BioClin-B, 7y ModernBERT-L."]
+    plt.title("T3 per-horizon late fusion — BOTH cohorts (clinical@bl ⊕ MRI@m12)\n"
+              "both-present (complete-case) vs present-only (full clinical cohort; single modality proceeds "
+              "where the other is absent)\nmean ± std across seeds (fit VAL / report TEST)", pad=10, fontsize=10.5)
+    foot = ["COHORTS: both-present = only patients with an m12 MRI (smaller); present-only = FULL clinical cohort",
+            "  (where MRI absent, clinical proceeds; weighted-avg falls back to clinical; EN/LR uniform-impute MRI + flag).",
+            "MRI-only exists only on the MRI-present subset (both-present) — reference. pooled bACC = over all test",
+            "  patients pooled across seeds. MRI: 3y/7y BrainMVP full_ft plus_original, 5y BrainMVP frozen/none (no",
+            "  full_ft for T3b). Clinical: 3y BioClin-L, 5y BioClin-B, 7y ModernBERT-L (all full_ft)."]
     ax.text(0.0, -0.04, "\n".join(foot), transform=ax.transAxes, ha="left", va="top",
             fontsize=8, family="monospace", linespacing=1.4)
-    png = HERE / "SUMMARY_T3_present_only.png"
+    png = HERE / "SUMMARY_T3_fusion_by_cohort.png"
     fig.savefig(png, dpi=180, bbox_inches="tight", pad_inches=0.06); plt.close(fig)
     print(f"wrote {png}")
 
