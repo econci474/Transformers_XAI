@@ -46,10 +46,10 @@ EMB_ROOT="${DERIV}/encoder_outputs_no_cdr_post_exclusion_longitudinal/BioClinica
 MASTER="${DERIV}/no_cdr_stratified_post_exclusion/verbose/longitudinal/master_clinical_verbose.csv"
 
 echo "GPU: $(nvidia-smi --query-gpu=name --format=csv,noheader | head -1)"
-conda run -n clinical --no-capture-output python "${REPO}/integration/T4/mamba_long_clinical/01_train_survival_mamba.py" \
+conda run -n clinical python "${REPO}/integration/T4/mamba_long_clinical/01_train_survival_mamba.py" \
     --seeds 0 1 2 \
     --emb_root "${EMB_ROOT}" \
     --master   "${MASTER}" \
-    --out_dir  "${SURV_ROOT}/survival"
+    --out_dir  "${SURV_ROOT}/survival" || { echo "ERROR: training job failed (see above)."; exit 1; }
 echo "Finished. Predictions in ${SURV_ROOT}/survival . Next (survml env):"
 echo "  conda run -n survml python ${REPO}/integration/T4/mamba_long_clinical/02_survival_comparison.py --pred_root ${SURV_ROOT}/survival"

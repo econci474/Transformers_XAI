@@ -60,11 +60,11 @@ if [ -f "${METRICS}" ]; then
     exit 0
 fi
 
-conda run -n clinical --no-capture-output python "${SCRIPT_DIR}/03j_finetune_longitudinal_extract.py" \
+conda run -n clinical python "${SCRIPT_DIR}/03j_finetune_longitudinal_extract.py" \
     --model_id  "${MODEL_ID}" \
     --seed      "${SEED}" \
     --data_dir  "${DATA_DIR}" \
     --out_dir   "${OUT_DIR}" \
-    --hf_cache  "${HF_HOME}"
+    --hf_cache  "${HF_HOME}" || { echo "ERROR: extraction job failed (see above)."; exit 1; }
 
 echo "  Finished."
