@@ -33,7 +33,10 @@
 module purge
 module load cuda/12.1
 source "$(conda info --base)/etc/profile.d/conda.sh"
+conda deactivate 2>/dev/null || true          # shed any env inherited from the submitting shell (e.g. (mri))
 conda activate clinical
+python -c "import numpy, torch, transformers" 2>/dev/null || {
+    echo "ERROR: 'clinical' env not active (numpy/torch/transformers missing). conda env list:"; conda env list; exit 1; }
 export HF_HOME="/home/ec474/rds/hpc-work/hf_cache"
 
 REPO="/home/ec474/rds/hpc-work/Transformers_XAI"
