@@ -1,0 +1,12 @@
+Since imaging performance for T4 is too poor, we instead consider combinning the binary classification
+
+the clinical predictions will be based on baseline data, whereas the MRI predictions are based on 12 month data
+
+p(converted to AD within 3 years)  = p(<3yr)_CL + p(<3yr)_MRI
+p(converted to AD between 3-7 years) = [p(<7yr)_CL - p(<3yr)_CL] + [p(<7yr)_MRI - p(<3yr)_MRI]
+p(converted to AD after 7 years) = [1 - p(<7yr)_CL]  + [1 - p(<7yr)_MRI]
+
+the weights will be learned by EN/LR on val set
+or grid tuned on val best bacc, or Younden's J
+include 0.5 weight as reference
+and CL only and MRI only performance 

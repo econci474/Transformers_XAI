@@ -1,0 +1,35 @@
+Late integration using the output class probabilities derived from each model: 
+- average
+- weighted average of the output class probabilities
+
+1. Clinical T2 task and MRI T2 task 
+1. Clinical T1 task and MRI T1 task (detects CN) + Clinical T1b task and MRI T1b task (detects AD), so the remainder must be MCI
+
+ Clinical models to try:
+ T2 - BioBERT Large ft
+ T1 - BioBERT Base ft
+ T1b - ModernBERT frozen and ft
+
+ MRI models to try: 
+ T2 - BrainMVP ft stochastic
+ T1 - BrainMVP ft stochastic ; Brain MVP ft plus-original; BrainDINO frozen none
+ T1b - BrainMVP ft stochastic
+
+ Log patients who are FP and FN for each model to see if failure modes overlap or are complementary
+ make a table rows are each misclassified patient, columns are modalities, entries whether the model has classified
+ TP / FP / FN / TN 
+ So we can see if the modalities agree or disagree
+
+ Since there is a discrepancy in the overlap between CL and MRI at baseline, we can evaluate late intergration at 
+ BL and 1 year - cross sectional
+
+ Final probability at baseline = w1(CL_prob_bl) + w2(MRI_prob_bl) > if present
+ Final probability at 1 year = w3(CL_prob_1yr) + w4(MRI_prob_1yr)
+
+ alternatively we can up EN average of CL and MRI probabilities at baseline and 1-year
+ e.g. 
+ Final probability at 1 year = w1(Cl_prob_bl) + w2(Cl_prob_1yr) + w3(MRI_prob_bl) + w4(MRI_prob_1yr)
+
+ This should be robust to MRI baseline missigness
+
+Class index must be 0=CN, 1=MCI, 2=AD 

@@ -1,0 +1,6 @@
+p(converted to AD within 7 years)  = p(<7yr)_CL + p(<7yr)_MRI
+
+the weights will be learned by EN/LR on val set
+or grid tuned on val best bacc, or Younden's J
+include 0.5 weight as reference
+and CL only and MRI only performance 

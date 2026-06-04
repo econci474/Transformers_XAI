@@ -1,0 +1,18 @@
+Late integration using weighted average of output class probabilities derived from each model
+
+Clinical T1e task and Genetic T1e task (sCN vs pCN) 
+
+ Clinical models to try: 
+- BioBERT L frozen: "D:\ADNI_BIDS_project\derivatives\encoder_outputs_no_cdr_post_exclusion\BioClinical-ModernBERT-large\T1e_scn_pcn\seed_0\frozen\embeddings"
+- ModernBERT B ft: "D:\ADNI_BIDS_project\derivatives\encoder_outputs_no_cdr_post_exclusion\ModernBERT-base\T1e_scn_pcn\seed_0\full_ft\embeddings"
+
+ Genetic models to try: 
+- BMFM-SNP attn_bias_single chrom_hier MLP [attn=T1_AD_CN]
+- BMFM-SNP none global_attn XGB
+- meta prs
+- Kosteridis_full_PRS
+
+ Log patients who are FP and FN for each model to see if failure modes overlap or are complementary
+ make a table rows are each misclassified patient, columns are modalities, entries whether the model has classified
+ TP / FP / FN / TN 
+ So we can see if the modalities agree or disagree

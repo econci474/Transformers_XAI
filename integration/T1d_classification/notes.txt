@@ -1,0 +1,16 @@
+Late integration using elastic net on the output class probabilities derived from each model
+weighted average of class probabilities
+
+Clinical T1d task and MRI T1d task (sMCI vs pMCI) 
+
+ Clinical models to try: 
+- ModernBERT L and B ft
+
+ MRI models to try: 
+- BrainMVP ft plus-original
+- BrainDINO frozen none
+
+ Log patients who are FP and FN for each model to see if failure modes overlap or are complementary
+ make a table rows are each misclassified patient, columns are modalities, entries whether the model has classified
+ TP / FP / FN / TN 
+ So we can see if the modalities agree or disagree
