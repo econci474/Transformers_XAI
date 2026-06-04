@@ -716,6 +716,13 @@ def main():
     _render_tex(fmt_val, num_val,
                 os.path.join(args.out, "cross_model_table_val.tex"),
                 title_metric="val balanced accuracy (early-stop metric)")
+    # Persist the val long-form CSV too (previously only the test CSV was written,
+    # so cross_model_table_val.csv kept getting lost). 06b widens both to bACC/AUC/F1.
+    _val_cols = ["model", "variant", "augment", "task", "n_seeds", "n_degenerate",
+                 "val_bacc_mean", "val_bacc_std"]
+    summ_df[_val_cols].to_csv(os.path.join(args.out, "cross_model_table_val.csv"),
+                              index=False, float_format="%.4f")
+    print(f"  CSV (val) : {os.path.join(args.out, 'cross_model_table_val.csv')}")
 
     _print_stdout_summary(summ_df)
 
