@@ -149,7 +149,7 @@ def eval_transform() -> mt.Compose:
 # Helpers (mirror BrainDINO local script for consistent output schema)
 # --------------------------------------------------------------------------- #
 def n_classes_for_task(task: str) -> int:
-    return 3 if task == "T2_multiclass" else 2
+    return 3 if task in ("T2_multiclass", "T4_conv_horizon") else 2
 
 
 def ptid_to_rid(ptid: str) -> int | None:
@@ -194,6 +194,15 @@ def task_label(task: str, row: pd.Series) -> int | None:
         return None
     if task == "T2_multiclass":
         return {"CN": 0, "MCI": 1, "AD": 2}.get(visit_diag, None)
+    # conversion horizons (baseline-anchored, subject-level Label_Ny / Label_T4)
+    if task in ("T3a_conv3y", "T3b_conv5y", "T3c_conv7y"):
+        if row.get("Label_bl_multi") == "AD":   return None     # filter_non_ad=True
+        col = {"T3a_conv3y": "Label_3y", "T3b_conv5y": "Label_5y", "T3c_conv7y": "Label_7y"}[task]
+        v = row.get(col)
+        return int(v) if pd.notna(v) else None
+    if task == "T4_conv_horizon":
+        v = row.get("Label_T4")
+        return int(v) if pd.notna(v) else None
     return None
 
 
@@ -432,7 +441,8 @@ def parse_args():
         formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--task", required=True,
                    choices=["T1_binary", "T1b_binary", "T1c_binary",
-                            "T1d_binary", "T2_multiclass"])
+                            "T1d_binary", "T2_multiclass",
+                            "T3a_conv3y", "T3b_conv5y", "T3c_conv7y", "T4_conv_horizon"])
     p.add_argument("--augment", required=True,
                    choices=["none", "stochastic", "plus_original"])
     p.add_argument("--seed", type=int, required=True)
