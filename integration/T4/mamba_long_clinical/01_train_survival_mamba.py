@@ -42,7 +42,7 @@ GRID_TIMES = np.round(np.linspace(0.0, 15.0, 61), 4)            # dense grid for
 
 # config = (encoder kwargs, head, align_lambda, lr).  lr: frozen 1e-3 / finetune 1e-4.
 def CONFIGS():
-    enc = lambda **kw: dict(backbone="mamba1", frozen=True, time_concat="append", **kw)
+    enc = lambda **kw: {**dict(backbone="mamba1", frozen=True, time_concat="append"), **kw}
     return {
         # ── Sweep A (Weibull-piecewise head) ──
         "A_default_mamba1_frozen": (enc(), "weibull_piecewise", 0.0, 1e-3),

@@ -32,11 +32,11 @@
 module purge
 module load cuda/12.1
 source "$(conda info --base)/etc/profile.d/conda.sh"
-conda deactivate 2>/dev/null || true          # shed any env inherited from the submitting shell (e.g. (mri))
-conda activate clinical
-python -c "import numpy, torch, transformers" 2>/dev/null || {
-    echo "ERROR: 'clinical' env not active (numpy/torch/transformers missing). conda env list:"; conda env list; exit 1; }
 export HF_HOME="/home/ec474/rds/hpc-work/hf_cache"
+# Run EXPLICITLY in the 'clinical' env via `conda run` — independent of whatever env is active on the
+# login node at submit time (no activate/inherit/stacking). Fail loudly if it's missing.
+conda run -n clinical python -c "import numpy, torch, transformers" || {
+    echo "ERROR: 'clinical' env missing/broken. conda env list:"; conda env list; exit 1; }
 
 SCRIPT_DIR="/home/ec474/rds/hpc-work/Transformers_XAI/clinical_pipeline"
 DATA_DIR="/home/ec474/rds/hpc-work/ADNI_CL/no_cdr_stratified_post_exclusion/verbose/longitudinal_allvisits_T4split"
@@ -60,7 +60,7 @@ if [ -f "${METRICS}" ]; then
     exit 0
 fi
 
-python "${SCRIPT_DIR}/03j_finetune_longitudinal_extract.py" \
+conda run -n clinical --no-capture-output python "${SCRIPT_DIR}/03j_finetune_longitudinal_extract.py" \
     --model_id  "${MODEL_ID}" \
     --seed      "${SEED}" \
     --data_dir  "${DATA_DIR}" \

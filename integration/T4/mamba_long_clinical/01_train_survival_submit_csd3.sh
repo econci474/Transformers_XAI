@@ -33,11 +33,11 @@
 module purge
 module load cuda/12.1
 source "$(conda info --base)/etc/profile.d/conda.sh"
-conda deactivate 2>/dev/null || true          # shed any env inherited from the submitting shell (e.g. (mri))
-conda activate clinical
-python -c "import numpy, torch, transformers" 2>/dev/null || {
-    echo "ERROR: 'clinical' env not active (numpy/torch/transformers missing). conda env list:"; conda env list; exit 1; }
 export HF_HOME="/home/ec474/rds/hpc-work/hf_cache"
+# Run EXPLICITLY in the 'clinical' env via `conda run` — independent of whatever env is active on the
+# login node at submit time (no activate/inherit/stacking). Fail loudly if it's missing.
+conda run -n clinical python -c "import numpy, torch, transformers" || {
+    echo "ERROR: 'clinical' env missing/broken. conda env list:"; conda env list; exit 1; }
 
 REPO="/home/ec474/rds/hpc-work/Transformers_XAI"
 DERIV="/home/ec474/rds/hpc-work/ADNI_CL"
@@ -46,7 +46,7 @@ EMB_ROOT="${DERIV}/encoder_outputs_no_cdr_post_exclusion_longitudinal/BioClinica
 MASTER="${DERIV}/no_cdr_stratified_post_exclusion/verbose/longitudinal/master_clinical_verbose.csv"
 
 echo "GPU: $(nvidia-smi --query-gpu=name --format=csv,noheader | head -1)"
-python "${REPO}/integration/T4/mamba_long_clinical/01_train_survival_mamba.py" \
+conda run -n clinical --no-capture-output python "${REPO}/integration/T4/mamba_long_clinical/01_train_survival_mamba.py" \
     --seeds 0 1 2 \
     --emb_root "${EMB_ROOT}" \
     --master   "${MASTER}" \
