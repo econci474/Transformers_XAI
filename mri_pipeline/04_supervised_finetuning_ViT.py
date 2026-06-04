@@ -263,7 +263,11 @@ TASK_CONFIG = {
         "label_map":              None,
         "filter_non_ad":          False,
         "session_policy":         "baseline_anchored",
-        "label_anchor_max_months": 0,     # bl scans only (subject-level label)
+        # bl scans are nearly absent in the matched T4 cohort (~11 total), which
+        # left seed-0's test fold empty. Use 12 like T3a-d so T4 MRI is anchored
+        # on the abundant m12 scans (subject-level Label_T4 is broadcast to every
+        # visit row), matching the CL_bl + MRI_m12 late-fusion framing.
+        "label_anchor_max_months": 12,
         "description":            "Multiclass: AD-conversion horizon "
                                   "(3-bucket: <3y / 3-7y / >=7y) on pMCI + pCN_to_AD",
     },
@@ -527,22 +531,6 @@ def load_matched_labels(path: str) -> pd.DataFrame:
     Returns DataFrame with Patient_ID added (derived from bids_sub).
     Filtered to scans with a valid clinical match (Strategy A or B)."""
     df = pd.read_csv(path)
-    # ── TEMP DIAGNOSTIC (Label_T4 KeyError hunt) ── remove after debugging ──
-    import os as _os, sys as _sys
-    try:
-        _st = _os.stat(path)
-        _stat = f"size={_st.st_size} mtime={_st.st_mtime}"
-    except OSError as _e:
-        _stat = f"stat-failed: {_e}"
-    print(f"[DIAG load_matched_labels] node={_os.uname().nodename} pid={_os.getpid()}",
-          flush=True)
-    print(f"[DIAG load_matched_labels] path={path}", flush=True)
-    print(f"[DIAG load_matched_labels] realpath={_os.path.realpath(path)}", flush=True)
-    print(f"[DIAG load_matched_labels] {_stat}", flush=True)
-    print(f"[DIAG load_matched_labels] ncols={len(df.columns)} "
-          f"Label_T4_present={'Label_T4' in df.columns} "
-          f"last5cols={list(df.columns)[-5:]}", flush=True)
-    # ── END TEMP DIAGNOSTIC ────────────────────────────────────────────────
     if "match_status" in df.columns:
         df = df[df["match_status"].isin(MATCHED_STATUSES)].copy()
 
@@ -626,16 +614,21 @@ def _resolve_labels(df: pd.DataFrame, task_cfg: dict) -> pd.DataFrame:
                 .drop(columns="_months"))
         return df  # already int-cast, return early to skip the int recast below
     else:
-        # ── TEMP DIAGNOSTIC (Label_T4 KeyError hunt) ── remove after debugging ──
-        import sys as _sys
-        _lc = task_cfg["label_col"]
-        print(f"[DIAG _resolve_labels] label_col={_lc!r} "
-              f"present_in_df={_lc in df.columns} nrows={len(df)} ncols={len(df.columns)}",
-              flush=True)
-        print(f"[DIAG _resolve_labels] df.columns={list(df.columns)}", flush=True)
-        # ── END TEMP DIAGNOSTIC ────────────────────────────────────────────────
-        df = df.dropna(subset=[task_cfg["label_col"]]).copy()
-        df["label"] = df[task_cfg["label_col"]]
+        label_col = task_cfg["label_col"]
+        if label_col not in df.columns:
+            # An empty split collapses to a 0-column frame, which makes dropna
+            # raise a misleading KeyError on the label column. Surface the real
+            # cause (empty split vs genuinely-missing column) instead.
+            if len(df) == 0:
+                raise ValueError(
+                    f"Split is empty (0 rows) before resolving label_col="
+                    f"{label_col!r}. Likely no scans survived the session filter "
+                    f"(e.g. baseline_anchored with too small label_anchor_max_months).")
+            raise KeyError(
+                f"label_col {label_col!r} not in matched-labels columns: "
+                f"{list(df.columns)}")
+        df = df.dropna(subset=[label_col]).copy()
+        df["label"] = df[label_col]
     df = df.dropna(subset=["label"])
     df["label"] = df["label"].astype(int)
     return df
