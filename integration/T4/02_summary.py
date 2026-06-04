@@ -98,14 +98,18 @@ def main():
         tab[0, j].set_text_props(weight="bold")
     for i in range(1, len(body) + 1):
         tab[i, 0].set_text_props(ha="left")
-    # bold the best POOLED bACC (the trustworthy metric)
-    pv = [pooled.get(v, np.nan) for v in ORDER if v in [b for b in pooled]]
+    present = [v for v in ORDER if len(d[d["variant"] == v])]   # body rows are in this order
+    # bold best seed-mean bACC (col 1)
+    sm = {v: d[d["variant"] == v]["bacc_mean"].iloc[0] for v in present}
+    if sm:
+        best_sm = max(sm, key=lambda v: sm[v])
+        tab[present.index(best_sm) + 1, 1].set_text_props(weight="bold")
+    # bold best POOLED bACC (col 2; the trustworthy metric)
     if pooled:
-        best_v = max((v for v in ORDER if v in pooled and not np.isnan(pooled[v])),
-                     key=lambda v: pooled[v], default=None)
-        if best_v is not None:
-            bi = ORDER.index(best_v)
-            tab[bi + 1, 2].set_text_props(weight="bold")
+        cand = [v for v in present if v in pooled and not np.isnan(pooled[v])]
+        if cand:
+            best_v = max(cand, key=lambda v: pooled[v])
+            tab[present.index(best_v) + 1, 2].set_text_props(weight="bold")
 
     plt.title("T4 conversion-horizon (<3y / 3-7y / ≥7y) — CUMULATIVE fusion\n"
               "buckets from cumulative binary T3 probs: clinical@bl(≤3y BioClin-L, ≤7y ModernBERT-L) "

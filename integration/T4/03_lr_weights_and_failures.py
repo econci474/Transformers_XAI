@@ -78,10 +78,13 @@ def write_failure_table():
     if not f.exists():
         print("  [skip] no fusion_predictions_T4.csv"); return
     d = pd.read_csv(f)
+    # 'fused' = weighted-avg (the best/chosen T4 fusion; LR/EN overfit the tiny val).
+    fcol = "wavg_pred" if "wavg_pred" in d.columns else "lr_pred"
+    fcor = "wavg_correct" if "wavg_correct" in d.columns else "lr_correct"
     out = pd.DataFrame({
         "seed": d["seed"], "Patient_ID": d["Patient_ID"],
         "y_true": d["y_true"].map(NAMES),
-        "fused_pred": d["lr_pred"].map(NAMES), "fused_correct": d["lr_correct"],
+        "fused_pred": d[fcol].map(NAMES), "fused_correct": d[fcor],
         "clinical_pred": d["clinical_pred"].map(NAMES), "clinical_correct": d["clinical_correct"],
         "mri_pred": d["mri_pred"].map(NAMES), "mri_correct": d["mri_correct"],
     })
@@ -107,9 +110,10 @@ def plot_confusion():
     if not f.exists():
         print("  [skip] no fusion_predictions_T4.csv"); return
     d = pd.read_csv(f)
+    fcol = "wavg_pred" if "wavg_pred" in d.columns else "lr_pred"
     fig, axes = plt.subplots(1, 2, figsize=(9.0, 4.2))
     for ax, (pred_col, name) in zip(axes, [("clinical_pred", "clinical-only"),
-                                           ("lr_pred", "LR-fused")]):
+                                           (fcol, "weighted-avg fused")]):
         v = d[d[pred_col] >= 0]
         cm = confusion_matrix(v["y_true"], v[pred_col], labels=[0, 1, 2])
         ba = balanced_accuracy_score(v["y_true"], v[pred_col])

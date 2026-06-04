@@ -156,8 +156,9 @@ def main():
         add("mri_only",      mri_pred, mrt, bacc(yv, mrv.argmax(1)))
         eq = 0.5 * clt + 0.5 * mrt
         add("equal_0.5", eq.argmax(1), eq, bacc(yv, (0.5 * clv + 0.5 * mrv).argmax(1)))
-        pr, bl, w = h.fit_weighted_avg(clv, mrv, yv, clt, mrt, "bacc")
-        add("weighted_avg", pr, bl, bacc(yv, (w * clv + (1 - w) * mrv).argmax(1)))
+        wpr, wbl, ww = h.fit_weighted_avg(clv, mrv, yv, clt, mrt, "bacc")
+        add("weighted_avg", wpr, wbl, bacc(yv, (ww * clv + (1 - ww) * mrv).argmax(1)))
+        wavg_pred = wpr                                  # best fusion -> capture for plots
         pr, bl, w = h.fit_weighted_avg(clv, mrv, yv, clt, mrt, "youden")
         add("weighted_avg_J", pr, bl, bacc(yv, (w * clv + (1 - w) * mrv).argmax(1)))
         Xv, Xt = np.hstack([clv, mrv]), np.hstack([clt, mrt])
@@ -174,6 +175,7 @@ def main():
                 seed=seed, Patient_ID=pid_t[i], y_true=int(yt[i]),
                 clinical_pred=int(cl_pred[i]), clinical_correct=int(cl_pred[i] == yt[i]),
                 mri_pred=int(mri_pred[i]),     mri_correct=int(mri_pred[i] == yt[i]),
+                wavg_pred=int(wavg_pred[i]),   wavg_correct=int(wavg_pred[i] == yt[i]),
                 lr_pred=int(lr_pred[i]),       lr_correct=int(lr_pred[i] == yt[i])))
         print(f"  seed {seed}: n_val={len(yv)} n_test={len(yt)} "
               f"clin_only_bACC={bacc(yt, cl_pred):.3f}  lr_bACC="
