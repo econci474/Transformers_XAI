@@ -91,7 +91,7 @@ def run_config(name, cfg, seed, master_labels, device):
 
 
 def main():
-    global EMB_ROOT, MASTER
+    global EMB_ROOT, MASTER, OUT
     ap = argparse.ArgumentParser()
     ap.add_argument("--seeds", type=int, nargs="+", default=[0, 1, 2])
     ap.add_argument("--only", type=str, nargs="*", default=None, help="subset of config names")
@@ -99,8 +99,11 @@ def main():
     ap.add_argument("--emb_root", type=str, default=str(EMB_ROOT),
                     help="dir containing seed_*/full_ft/embeddings/embeddings.parquet")
     ap.add_argument("--master", type=str, default=str(MASTER))
+    ap.add_argument("--out_dir", type=str, default=str(OUT),
+                    help="where to write predictions (default repo outputs/ for LOCAL; pass a "
+                         "hpc-work path on CSD3 so nothing lands in the repo/script folder)")
     args = ap.parse_args()
-    EMB_ROOT = Path(args.emb_root); MASTER = Path(args.master)
+    EMB_ROOT = Path(args.emb_root); MASTER = Path(args.master); OUT = Path(args.out_dir)
     import torch
     device = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
     print(f"device={device}  emb_root={EMB_ROOT}")

@@ -126,6 +126,15 @@ def derived_horizon(name):
 
 
 def main():
+    global PRED_ROOT, OUT
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--pred_root", type=str, default=str(PRED_ROOT),
+                    help="dir of 01_train predictions (<config>/seed_*/predictions.parquet); pass the "
+                         "hpc-work path you pulled, so nothing is read from / written to the repo folder")
+    args = ap.parse_args()
+    PRED_ROOT = Path(args.pred_root); OUT = PRED_ROOT / "comparison"; OUT.mkdir(parents=True, exist_ok=True)
+
     configs = sorted(p.name for p in PRED_ROOT.iterdir()
                      if p.is_dir() and p.name != "comparison")
     print(f"MAMBA configs found: {configs}")
