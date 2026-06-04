@@ -112,14 +112,34 @@ def task_label(task: str, row: pd.Series):
     return None
 
 
-class HeadOnly(nn.Module):
-    """LayerNorm -> Linear -> GELU -> Dropout -> Linear (matches
-    cached_head_sweep/04_head_finetune_from_embeddings.py::HeadOnly)."""
-    def __init__(self, embed_dim: int, n_classes: int, drop_rate: float = 0.2):
+class StandardizeLayer(nn.Module):
+    """Frozen z-score baked as buffers (mirrors the trainer's StandardizeLayer)."""
+    def __init__(self, dim: int):
         super().__init__()
-        self.net = nn.Sequential(
-            nn.LayerNorm(embed_dim), nn.Linear(embed_dim, embed_dim), nn.GELU(),
-            nn.Dropout(drop_rate), nn.Linear(embed_dim, n_classes))
+        self.register_buffer("mean", torch.zeros(dim))
+        self.register_buffer("std", torch.ones(dim))
+
+    def forward(self, x):
+        return (x - self.mean) / self.std
+
+
+class HeadOnly(nn.Module):
+    """Must match cached_head_sweep/04_head_finetune_from_embeddings.py::HeadOnly
+    exactly (same layer order/keys) so the winner checkpoint loads. Defaults
+    (head='mlp', standardize=False) reproduce the original architecture."""
+    def __init__(self, embed_dim: int, n_classes: int, drop_rate: float = 0.2,
+                 head: str = "mlp", standardize: bool = False):
+        super().__init__()
+        layers = []
+        if standardize:
+            layers.append(StandardizeLayer(embed_dim))
+        if head == "linear":
+            layers += [nn.LayerNorm(embed_dim), nn.Dropout(drop_rate),
+                       nn.Linear(embed_dim, n_classes)]
+        else:  # mlp
+            layers += [nn.LayerNorm(embed_dim), nn.Linear(embed_dim, embed_dim),
+                       nn.GELU(), nn.Dropout(drop_rate), nn.Linear(embed_dim, n_classes)]
+        self.net = nn.Sequential(*layers)
 
     def forward(self, x):
         return self.net(x)
@@ -168,20 +188,33 @@ def load_split_for_seed(splits_dir: Path, seed: int) -> dict:
     return out
 
 
-def extract(arch, task, seed, emb, ids, master, splits_dir, device):
+def extract(arch, task, seed, emb, ids, master, splits_dir, device, heads_root=None):
     acfg = ARCHS[arch]
     K = n_classes_for_task(task)
-    hp = select_hp_winner(acfg["heads"], task)
-    ckpt = acfg["heads"] / task / f"seed_{seed}" / hp / "best_model.pt"
+    hroot = Path(heads_root) if heads_root else acfg["heads"]
+    hp = select_hp_winner(hroot, task)
+    hp_dir = hroot / task / f"seed_{seed}" / hp
+    ckpt = hp_dir / "best_model.pt"
     if not ckpt.exists():
-        raise FileNotFoundError(f"Head checkpoint missing: {ckpt}")
+        raise FileNotFoundError(
+            f"Head checkpoint missing: {ckpt}\n"
+            f"        (a --metrics_only sweep tree has no best_model.pt — point "
+            f"--heads-root at the finalised winner tree that re-trained the winner.)")
+    # Rebuild the EXACT head the winner used (head type / standardize / drop) from
+    # its metrics.json config; defaults reproduce the original mlp head for older runs.
+    cfg = json.load(open(hp_dir / "metrics.json")).get("config", {}) if (hp_dir / "metrics.json").exists() else {}
+    head_type = cfg.get("head", "mlp")
+    standardize = bool(cfg.get("standardize", False))
+    drop_rate = float(cfg.get("drop_rate", 0.2))
     sd = torch.load(ckpt, map_location="cpu", weights_only=False)
     state = sd["net"] if isinstance(sd, dict) and "net" in sd else sd
-    head = HeadOnly(acfg["embed_dim"], K)
+    head = HeadOnly(acfg["embed_dim"], K, drop_rate=drop_rate,
+                    head=head_type, standardize=standardize)
     missing, unexpected = head.load_state_dict(state, strict=False)
     if missing or unexpected:
         print(f"    [WARN] load_state_dict missing={missing} unexpected={unexpected}",
               file=sys.stderr)
+    print(f"    head={head_type}  standardize={standardize}  drop={drop_rate}")
     head.to(device).eval()
 
     cache_idx = {(s, v): i for i, (s, v) in enumerate(ids)}
@@ -233,6 +266,9 @@ def main():
     ap.add_argument("--splits-dir", default="baseline",
                     help="Sub-dir under .../no_cdr_stratified_post_exclusion/tabular/ "
                          "(baseline for T3; baseline_T4 for T4).")
+    ap.add_argument("--heads-root", default=None,
+                    help="Override the cached-head tree (e.g. the finalised T2 wide-sweep "
+                         "winner tree). Defaults to ARCHS[arch]['heads'].")
     ap.add_argument("--device", default="cpu", choices=["cpu", "cuda"])
     ap.add_argument("--out-dir", type=Path, default=DEFAULT_OUT)
     args = ap.parse_args()
@@ -253,7 +289,8 @@ def main():
         out_task.mkdir(parents=True, exist_ok=True)
         for seed in seeds:
             print(f"-- {args.arch} {task} seed={seed} --")
-            flat = extract(args.arch, task, seed, emb, ids, master, splits_dir, args.device)
+            flat = extract(args.arch, task, seed, emb, ids, master, splits_dir,
+                           args.device, heads_root=args.heads_root)
             flat.to_csv(out_task / f"embeddings_seed_{seed}.csv", index=False)
             print(f"    wrote {out_task / f'embeddings_seed_{seed}.csv'}")
     print("Done.")

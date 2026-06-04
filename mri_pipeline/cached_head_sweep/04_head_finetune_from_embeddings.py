@@ -34,6 +34,7 @@ Usage example:
 """
 
 import argparse
+import copy
 import importlib.util
 import json
 import os
@@ -46,6 +47,7 @@ import torch  # noqa: F401  (Windows MKL DLL order)
 import numpy as np
 import pandas as pd
 import torch.nn as nn
+import torch.nn.functional as F
 from sklearn.metrics import balanced_accuracy_score
 from sklearn.utils.class_weight import compute_class_weight
 from torch.utils.data import Dataset, DataLoader
@@ -76,21 +78,67 @@ warnings.filterwarnings("ignore")
 
 
 # ── Head + dataset ────────────────────────────────────────────────────────────
-class HeadOnly(nn.Module):
-    """LayerNorm -> Linear -> GELU -> Dropout -> Linear. Matches the
-    architecture used by BrainDINOClassifier / BrainMVPClassifier /
-    ViT-MAE downstream heads."""
-    def __init__(self, embed_dim: int, n_classes: int, drop_rate: float = 0.2):
+class StandardizeLayer(nn.Module):
+    """Frozen per-feature z-score, baked as buffers so it saves/loads with the
+    state_dict -- the extractor rebuilds the head and the scaler comes along for
+    free (no separate scaler file / logic). Stats are set from the TRAIN fold."""
+    def __init__(self, dim: int):
         super().__init__()
-        self.net = nn.Sequential(
-            nn.LayerNorm(embed_dim),
-            nn.Linear(embed_dim, embed_dim),
-            nn.GELU(),
-            nn.Dropout(drop_rate),
-            nn.Linear(embed_dim, n_classes),
-        )
+        self.register_buffer("mean", torch.zeros(dim))
+        self.register_buffer("std", torch.ones(dim))
+
+    @torch.no_grad()
+    def set_stats(self, mean, std):
+        self.mean.copy_(torch.as_tensor(mean, dtype=self.mean.dtype))
+        self.std.copy_(torch.as_tensor(std, dtype=self.std.dtype).clamp_min(1e-6))
+
+    def forward(self, x):
+        return (x - self.mean) / self.std
+
+
+class HeadOnly(nn.Module):
+    """Classification head on cached frozen embeddings. Defaults reproduce the
+    original architecture EXACTLY (head='mlp', standardize=False ->
+    LayerNorm->Linear->GELU->Dropout->Linear under `self.net`, identical
+    state_dict keys), so existing checkpoints load unchanged. Wider-sweep
+    options:
+      head='linear'   -> LayerNorm->Dropout->Linear (pure linear probe).
+      standardize=True -> prepend a frozen z-score (StandardizeLayer) as net[0]."""
+    def __init__(self, embed_dim: int, n_classes: int, drop_rate: float = 0.2,
+                 head: str = "mlp", standardize: bool = False):
+        super().__init__()
+        layers = []
+        if standardize:
+            layers.append(StandardizeLayer(embed_dim))
+        if head == "linear":
+            layers += [nn.LayerNorm(embed_dim), nn.Dropout(drop_rate),
+                       nn.Linear(embed_dim, n_classes)]
+        elif head == "mlp":
+            layers += [nn.LayerNorm(embed_dim), nn.Linear(embed_dim, embed_dim),
+                       nn.GELU(), nn.Dropout(drop_rate), nn.Linear(embed_dim, n_classes)]
+        else:
+            raise ValueError(f"unknown --head {head!r}")
+        self.net = nn.Sequential(*layers)
+        self.std_layer = self.net[0] if standardize else None
+
     def forward(self, x):
         return self.net(x)
+
+
+class FocalLoss(nn.Module):
+    """Multiclass focal loss with optional class weights + label smoothing.
+    ce = weighted CE (reduction='none'); pt = exp(-ce); loss = (1-pt)^gamma * ce."""
+    def __init__(self, weight=None, gamma: float = 2.0, label_smoothing: float = 0.0):
+        super().__init__()
+        self.weight = weight
+        self.gamma = gamma
+        self.label_smoothing = label_smoothing
+
+    def forward(self, logits, target):
+        ce = F.cross_entropy(logits, target, weight=self.weight,
+                             label_smoothing=self.label_smoothing, reduction="none")
+        pt = torch.exp(-ce)
+        return ((1.0 - pt) ** self.gamma * ce).mean()
 
 
 class EmbeddingDataset(Dataset):
@@ -193,6 +241,10 @@ def init_wandb(args, task_cfg, extra=None):
         "weight_decay":    args.weight_decay,
         "drop_rate":       args.drop_rate,
         "label_smoothing": args.label_smoothing,
+        "head":            args.head,
+        "loss":            args.loss,
+        "focal_gamma":     args.focal_gamma if args.loss == "focal" else None,
+        "standardize":     bool(args.standardize),
         "epochs":          args.epochs,
         "patience":        args.patience,
         "embed_dim":       args.embed_dim,
@@ -224,6 +276,21 @@ def parse_args():
     p.add_argument("--weight_decay", type=float, default=1e-5)
     p.add_argument("--drop_rate", type=float, default=0.2)
     p.add_argument("--label_smoothing", type=float, default=0.0)
+    # ── wider-sweep knobs (defaults reproduce the original behaviour) ──
+    p.add_argument("--head", type=str, default="mlp", choices=["mlp", "linear"],
+                   help="mlp = LN->Linear->GELU->Drop->Linear (original); "
+                        "linear = LN->Drop->Linear (pure linear probe).")
+    p.add_argument("--loss", type=str, default="ce_weighted",
+                   choices=["ce_weighted", "focal"],
+                   help="ce_weighted = class-weighted CE (original); focal = focal loss.")
+    p.add_argument("--focal_gamma", type=float, default=2.0,
+                   help="Focusing parameter for --loss focal.")
+    p.add_argument("--standardize", action="store_true",
+                   help="Z-score embeddings (stats from TRAIN fold, baked into the head).")
+    p.add_argument("--metrics_only", action="store_true",
+                   help="Sweep mode: write metrics.json only (no checkpoint / manifest / "
+                        "train_log / test_predictions). Best head kept in memory for the "
+                        "test pass. Implies --no_resume.")
     p.add_argument("--epochs", type=int, default=50)
     p.add_argument("--patience", type=int, default=15,
                    help="Early-stopping epochs without val_bacc improvement.")
@@ -261,6 +328,8 @@ def parse_args():
         else:
             n = int(args.long); args.long_mode = "cutoff"; args.max_months = n * 12
         args.session = None
+    if args.metrics_only:
+        args.no_resume = True
     return args
 
 
@@ -291,8 +360,19 @@ def main():
     torch.manual_seed(args.seed); np.random.seed(args.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    out_dir = Path(args.out_dir) / args.task / f"seed_{args.seed}" / (
-        f"lr{args.lr:.0e}_d{args.drop_rate}_ls{args.label_smoothing}")
+    # Backward-compatible HP-dir name: defaults (wd=1e-5, head=mlp, ce_weighted,
+    # no standardize) reproduce the original `lr{}_d{}_ls{}` exactly; non-default
+    # wider-sweep knobs append suffixes so cells don't collide.
+    hp_name = f"lr{args.lr:.0e}_d{args.drop_rate}_ls{args.label_smoothing}"
+    if abs(args.weight_decay - 1e-5) > 1e-12:
+        hp_name += f"_wd{args.weight_decay:.0e}"
+    if args.head != "mlp":
+        hp_name += f"_h{args.head}"
+    if args.loss != "ce_weighted":
+        hp_name += f"_{args.loss}"
+    if args.standardize:
+        hp_name += "_std"
+    out_dir = Path(args.out_dir) / args.task / f"seed_{args.seed}" / hp_name
     out_dir.mkdir(parents=True, exist_ok=True)
 
     if (out_dir / "metrics.json").exists():
@@ -336,10 +416,11 @@ def main():
 
     print(f"  Splits -- train: {len(train_df)}  val: {len(val_df)}  test: {len(test_df)}")
     print(f"  Missing embedding -- train: {n_miss_tr}  val: {n_miss_va}  test: {n_miss_te}")
-    manifest = pd.concat([train_df.assign(split="train"),
-                          val_df.assign(split="val"),
-                          test_df.assign(split="test")], ignore_index=True)
-    manifest.to_csv(out_dir / "dataset_manifest.csv", index=False)
+    if not args.metrics_only:
+        manifest = pd.concat([train_df.assign(split="train"),
+                              val_df.assign(split="val"),
+                              test_df.assign(split="test")], ignore_index=True)
+        manifest.to_csv(out_dir / "dataset_manifest.csv", index=False)
 
     # ── Class weights ─────────────────────────────────────────────────────────
     num_labels = task_cfg["num_labels"]
@@ -362,14 +443,26 @@ def main():
     test_loader  = DataLoader(test_ds,  batch_size=args.batch_size, shuffle=False)
 
     # ── Model / opt / scheduler / loss ────────────────────────────────────────
-    model = HeadOnly(args.embed_dim, num_labels, drop_rate=args.drop_rate).to(device)
+    model = HeadOnly(args.embed_dim, num_labels, drop_rate=args.drop_rate,
+                     head=args.head, standardize=args.standardize).to(device)
+    if args.standardize:                                  # stats from TRAIN fold only
+        train_emb = embeddings[train_ds.rows].float()
+        model.std_layer.set_stats(train_emb.mean(0), train_emb.std(0))
+        print(f"  Standardize: baked train-fold z-score (mean|std over {train_emb.shape[0]} scans)")
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr,
                                  weight_decay=args.weight_decay)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode="max",
         factor=args.scheduler_factor, patience=args.scheduler_patience)
-    criterion = nn.CrossEntropyLoss(weight=class_weights,
-                                    label_smoothing=args.label_smoothing)
+    if args.loss == "focal":
+        criterion = FocalLoss(weight=class_weights, gamma=args.focal_gamma,
+                              label_smoothing=args.label_smoothing)
+    else:
+        criterion = nn.CrossEntropyLoss(weight=class_weights,
+                                        label_smoothing=args.label_smoothing)
+    print(f"  Head={args.head}  loss={args.loss}"
+          + (f"(γ={args.focal_gamma})" if args.loss == "focal" else "")
+          + f"  standardize={args.standardize}")
 
     wb = init_wandb(args, task_cfg, extra={
         "n_train": len(train_df), "n_val": len(val_df), "n_test": len(test_df),
@@ -380,6 +473,7 @@ def main():
     best_metric = -1.0
     best_val_loss_at_best = float("inf")
     best_epoch = -1
+    best_state_mem = None                  # best head state kept in memory (for --metrics_only)
     epochs_since_improve = 0
     log_rows = []
     start_epoch = 0
@@ -450,13 +544,16 @@ def main():
                 best_val_loss_at_best = va_loss
                 best_epoch = epoch + 1
                 epochs_since_improve = 0
-                torch.save({"net": model.state_dict(), "epoch": best_epoch},
-                           out_dir / "best_model.pt")
+                best_state_mem = copy.deepcopy(model.state_dict())
+                if not args.metrics_only:
+                    torch.save({"net": best_state_mem, "epoch": best_epoch},
+                               out_dir / "best_model.pt")
             else:
                 epochs_since_improve += 1
 
-            pd.DataFrame(log_rows).to_csv(out_dir / "train_log.csv", index=False)
-            _save_checkpoint(epoch)
+            if not args.metrics_only:
+                pd.DataFrame(log_rows).to_csv(out_dir / "train_log.csv", index=False)
+                _save_checkpoint(epoch)
 
             if wb is not None:
                 import wandb
@@ -468,14 +565,18 @@ def main():
                 print(f"  Early stopping at epoch {epoch+1}")
                 break
 
-        pd.DataFrame(log_rows).to_csv(out_dir / "train_log.csv", index=False)
+        if not args.metrics_only:
+            pd.DataFrame(log_rows).to_csv(out_dir / "train_log.csv", index=False)
 
         # ── Test ──────────────────────────────────────────────────────────────
-        if not (out_dir / "best_model.pt").exists():
-            print("  [ERROR] no best_model.pt -- no metrics.json written.")
+        if (out_dir / "best_model.pt").exists():
+            model.load_state_dict(
+                torch.load(out_dir / "best_model.pt", map_location=device)["net"])
+        elif best_state_mem is not None:
+            model.load_state_dict(best_state_mem)        # --metrics_only: in-memory best
+        else:
+            print("  [ERROR] no best head (never improved) -- no metrics.json written.")
             return
-        best_state = torch.load(out_dir / "best_model.pt", map_location=device)
-        model.load_state_dict(best_state["net"])
         _, test_logits, test_labels = evaluate(model, test_loader, criterion, device)
         test_metrics, test_preds, test_probs = compute_test_metrics(
             test_labels, test_logits, task_cfg["task_type"])
@@ -485,11 +586,12 @@ def main():
         test_diagnostics = compute_diagnostics(
             test_labels, test_preds, num_labels, label_names)
 
-        pred_df = pd.DataFrame({"y_true": test_labels.astype(int),
-                                "y_pred": test_preds.astype(int)})
-        for c in range(test_probs.shape[1]):
-            pred_df[f"prob_{c}"] = test_probs[:, c]
-        pred_df.to_csv(out_dir / "test_predictions.csv", index=False)
+        if not args.metrics_only:
+            pred_df = pd.DataFrame({"y_true": test_labels.astype(int),
+                                    "y_pred": test_preds.astype(int)})
+            for c in range(test_probs.shape[1]):
+                pred_df[f"prob_{c}"] = test_probs[:, c]
+            pred_df.to_csv(out_dir / "test_predictions.csv", index=False)
 
         config = {
             "model_id":              f"{args.model_name}_frozen_cached",
@@ -505,6 +607,10 @@ def main():
             "seed":                  args.seed,
             "strategy":              "frozen_cached",
             "augment":               "none",
+            "head":                  args.head,
+            "loss":                  args.loss,
+            "focal_gamma":           args.focal_gamma if args.loss == "focal" else None,
+            "standardize":           bool(args.standardize),
             "epochs":                args.epochs,
             "best_epoch":            best_epoch,
             "best_val_balanced_acc": round(float(best_metric), 4),
