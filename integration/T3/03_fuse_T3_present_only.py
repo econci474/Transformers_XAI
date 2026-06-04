@@ -63,6 +63,66 @@ VAR_LABEL = {"clinical_only": "clinical-only", "mri_only": "MRI-only (subset)",
              "weighted_avg_J": "weighted-avg Youden", "elastic_net": "elastic-net", "lr": "logistic-reg"}
 
 
+def render_horizon_present_only(per_seed, hz, cfg, out_path):
+    """Per-horizon PRESENT-ONLY table in the engine's fusion_table_M12 layout
+    (rows=variants, cols=bACC/macro-F1/macro-AUC/F1 noConv/F1 conv), saved as
+    fusion_table_M12_present_only.png next to the complete-case engine table."""
+    METR = [("bacc", "bACC"), ("macro_f1", "macro-F1"), ("macro_auc", "macro-AUC"),
+            ("f1_noConv", "F1 noConv"), ("f1_conv", "F1 conv")]
+    po = per_seed[(per_seed.horizon == hz) & (per_seed.cohort == "present_only")]
+    mri = per_seed[(per_seed.horizon == hz) & (per_seed.cohort == "both_present")
+                   & (per_seed.variant == "mri_only")]
+    lab = {"clinical_only": f"clinical-only [{cfg['model']}/full_ft]",
+           "mri_only": f"MRI-only [{cfg['mri_label']}] (MRI-present subset)",
+           "equal_0.5": "equal-0.5", "weighted_avg": "weighted-avg (bACC-tuned)",
+           "weighted_avg_J": "weighted-avg (Youden's J)",
+           "elastic_net": "elastic-net (present-only)", "lr": "logistic regression"}
+    order = ["clinical_only", "mri_only", "equal_0.5", "weighted_avg", "weighted_avg_J", "elastic_net", "lr"]
+    body, baccs = [], []
+    for v in order:
+        src = mri if v == "mri_only" else po[po.variant == v]
+        if src.empty:
+            continue
+        row = [lab[v]]
+        for mk, _ in METR:
+            m, s, n = src[mk].mean(), src[mk].std(), src["n"].mean()
+            row.append(f"{m:.3f} ± {s:.3f}" + (f" ({n:.0f})" if mk == "bacc" else ""))
+        body.append(row)
+        baccs.append((v, src["bacc"].mean()))
+    if not body:
+        return
+    cols = ["Variant (fusion method / model)"] + [lbl for _, lbl in METR]
+    nC = len(cols)
+    cw = [max(len(str(x)) for x in [cols[j]] + [b[j] for b in body]) + 2 for j in range(nC)]
+    cw[0] += 6
+    tot = sum(cw)
+    fig, ax = plt.subplots(figsize=(0.115 * tot, 0.55 + 0.42 * (len(body) + 1)))
+    ax.axis("off")
+    tab = ax.table(cellText=body, colLabels=cols, loc="upper center", cellLoc="center",
+                   colLoc="center", colWidths=[c / tot for c in cw])
+    tab.auto_set_font_size(False); tab.set_fontsize(9); tab.scale(1.0, 1.5)
+    for j in range(nC):
+        tab[0, j].set_facecolor("#ECECEC"); tab[0, j].set_text_props(weight="bold")
+    for i in range(1, len(body) + 1):
+        tab[i, 0].set_text_props(ha="left")
+    # bold best bACC among full-cohort variants (exclude MRI-only subset)
+    cand = [(i, b) for i, (v, b) in enumerate(baccs) if v != "mri_only" and not np.isnan(b)]
+    if cand:
+        bi = max(cand, key=lambda t: t[1])[0]
+        tab[bi + 1, 1].set_text_props(weight="bold")
+    plt.title(f"T3 {cfg['label']} late fusion -- M12 (CL_bl + MRI_m12) — PRESENT-ONLY cohort\n"
+              f"clinical={cfg['model']}/full_ft   MRI={cfg['mri_label']}   (mean ± std across seeds, n)",
+              pad=8, fontsize=11)
+    foot = ["PRESENT-ONLY: full clinical-test cohort; where the m12 MRI is absent the single present modality",
+            "(clinical) proceeds (weighted-avg falls back to clinical; EN/LR uniform-impute MRI + present flag).",
+            "MRI-only is scored on the MRI-present subset only (smaller n) — reference. (n) after bACC = mean #TEST",
+            "patients across seeds. Compare with the complete-case fusion_table_M12.png (both-present only)."]
+    ax.text(0.0, -0.04, "\n".join(foot), transform=ax.transAxes, ha="left", va="top",
+            fontsize=8, family="monospace", linespacing=1.4)
+    fig.savefig(out_path, dpi=180, bbox_inches="tight", pad_inches=0.06); plt.close(fig)
+    print(f"  wrote {out_path}")
+
+
 def _mri_template(cfg):
     t = cfg["mri_task"]
     if cfg["mri"] == "ft":
@@ -153,6 +213,12 @@ def main():
     per_seed = pd.DataFrame(rows)
     per_seed.to_csv(HERE / "SUMMARY_T3_present_only_per_seed.csv", index=False)
     ap = pd.DataFrame(all_preds)
+
+    # per-horizon PRESENT-ONLY tables (engine layout) beside the complete-case fusion_table_M12.png
+    for hz, cfg in HORIZONS.items():
+        outd = HERE / hz / ("brainmvp_ft" if cfg["mri"] == "ft" else "brainmvp")
+        if outd.is_dir():
+            render_horizon_present_only(per_seed, hz, cfg, outd / "fusion_table_M12_present_only.png")
 
     # aggregate: seed-mean + pooled bACC per (horizon, variant)
     body = []
