@@ -48,7 +48,7 @@ import numpy as np
 import pandas as pd
 import torch.nn as nn
 import torch.nn.functional as F
-from sklearn.metrics import balanced_accuracy_score
+from sklearn.metrics import balanced_accuracy_score, roc_auc_score
 from sklearn.utils.class_weight import compute_class_weight
 from torch.utils.data import Dataset, DataLoader
 
@@ -291,6 +291,10 @@ def parse_args():
                    help="Sweep mode: write metrics.json only (no checkpoint / manifest / "
                         "train_log / test_predictions). Best head kept in memory for the "
                         "test pass. Implies --no_resume.")
+    p.add_argument("--select_by", type=str, default="bacc", choices=["bacc", "auc"],
+                   help="Validation metric for early-stopping + best-epoch selection. "
+                        "'auc' = macro-OvR ROC-AUC (the BrainDINO-paper metric for ADNI 3-class); "
+                        "'bacc' = balanced accuracy (default, backward-compatible).")
     p.add_argument("--epochs", type=int, default=50)
     p.add_argument("--patience", type=int, default=15,
                    help="Early-stopping epochs without val_bacc improvement.")
@@ -351,6 +355,23 @@ def evaluate(model, loader, criterion, device):
     return (total_loss / max(total_n, 1),
             np.concatenate(all_logits, axis=0) if all_logits else np.empty((0,)),
             np.concatenate(all_labels, axis=0) if all_labels else np.empty((0,)))
+
+
+def _macro_auc(labels, logits, num_labels):
+    """Macro-averaged OvR ROC-AUC (the BrainDINO-paper metric for ADNI 3-class).
+    Returns nan if the fold has <2 classes present."""
+    y = np.asarray(labels).astype(int)
+    if len(np.unique(y)) < 2:
+        return float("nan")
+    e = np.exp(logits - logits.max(axis=1, keepdims=True))
+    probs = e / e.sum(axis=1, keepdims=True)
+    try:
+        if num_labels == 2:
+            return float(roc_auc_score(y, probs[:, 1]))
+        return float(roc_auc_score(y, probs, multi_class="ovr", average="macro",
+                                   labels=list(range(num_labels))))
+    except ValueError:
+        return float("nan")
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -470,7 +491,9 @@ def main():
 
     # ── Resume ────────────────────────────────────────────────────────────────
     ckpt_path = out_dir / "last_checkpoint.pt"
-    best_metric = -1.0
+    best_metric = -1.0                     # the MONITORED metric (bacc or auc per --select_by)
+    best_va_bacc = -1.0                    # val balanced-acc at the best epoch
+    best_va_auc = float("nan")             # val macro-AUC at the best epoch
     best_val_loss_at_best = float("inf")
     best_epoch = -1
     best_state_mem = None                  # best head state kept in memory (for --metrics_only)
@@ -484,6 +507,8 @@ def main():
         if "scheduler" in ck2:
             scheduler.load_state_dict(ck2["scheduler"])
         best_metric = ck2.get("best_metric", -1.0)
+        best_va_bacc = ck2.get("best_va_bacc", -1.0)
+        best_va_auc = ck2.get("best_va_auc", float("nan"))
         best_val_loss_at_best = ck2.get("best_val_loss_at_best", float("inf"))
         best_epoch = ck2.get("best_epoch", -1)
         epochs_since_improve = ck2.get("epochs_since_improve", 0)
@@ -497,6 +522,7 @@ def main():
                     "optimizer": optimizer.state_dict(),
                     "scheduler": scheduler.state_dict(),
                     "epoch": ep, "best_metric": best_metric,
+                    "best_va_bacc": best_va_bacc, "best_va_auc": best_va_auc,
                     "best_val_loss_at_best": best_val_loss_at_best,
                     "best_epoch": best_epoch,
                     "epochs_since_improve": epochs_since_improve,
@@ -529,18 +555,25 @@ def main():
                 break
             va_bacc = float(balanced_accuracy_score(
                 va_labels.astype(int), va_logits.argmax(axis=-1)))
-            scheduler.step(va_bacc)
+            va_auc = _macro_auc(va_labels, va_logits, num_labels)
+            monitor = va_auc if args.select_by == "auc" else va_bacc
+            if not np.isfinite(monitor):           # e.g. AUC undefined on a 1-class val fold
+                monitor = -1.0
+            scheduler.step(monitor)
 
             log_rows.append({"epoch": epoch + 1, "lr": cur_lr,
                              "train_loss": tr_loss, "train_acc": tr_acc,
-                             "val_loss": va_loss, "val_bacc": va_bacc})
+                             "val_loss": va_loss, "val_bacc": va_bacc, "val_auc": va_auc})
             print(f"  [epoch {epoch+1:>3}/{args.epochs}] lr={cur_lr:.2e}  "
-                  f"tr_loss={tr_loss:.4f}  va_loss={va_loss:.4f}  va_bacc={va_bacc:.4f}")
+                  f"tr_loss={tr_loss:.4f}  va_loss={va_loss:.4f}  "
+                  f"va_bacc={va_bacc:.4f}  va_auc={va_auc:.4f}  (sel={args.select_by})")
 
-            improved = (va_bacc > best_metric + 1e-6) or (
-                abs(va_bacc - best_metric) <= 1e-6 and va_loss < best_val_loss_at_best)
+            improved = (monitor > best_metric + 1e-6) or (
+                abs(monitor - best_metric) <= 1e-6 and va_loss < best_val_loss_at_best)
             if improved:
-                best_metric = va_bacc
+                best_metric = monitor
+                best_va_bacc = va_bacc
+                best_va_auc = va_auc
                 best_val_loss_at_best = va_loss
                 best_epoch = epoch + 1
                 epochs_since_improve = 0
@@ -559,7 +592,8 @@ def main():
                 import wandb
                 wandb.log({"epoch": epoch + 1, "lr": cur_lr,
                            "train_loss": tr_loss, "val_loss": va_loss,
-                           "val_bacc": va_bacc, "best_val_bacc": best_metric})
+                           "val_bacc": va_bacc, "val_auc": va_auc,
+                           "best_val_bacc": best_va_bacc, "best_val_auc": best_va_auc})
 
             if epochs_since_improve >= args.patience:
                 print(f"  Early stopping at epoch {epoch+1}")
@@ -613,7 +647,9 @@ def main():
             "standardize":           bool(args.standardize),
             "epochs":                args.epochs,
             "best_epoch":            best_epoch,
-            "best_val_balanced_acc": round(float(best_metric), 4),
+            "best_val_balanced_acc": round(float(best_va_bacc), 4),
+            "best_val_auc":          (round(float(best_va_auc), 4) if np.isfinite(best_va_auc) else None),
+            "select_by":             args.select_by,
             "lr":                    args.lr,
             "weight_decay":          args.weight_decay,
             "drop_rate":             args.drop_rate,
