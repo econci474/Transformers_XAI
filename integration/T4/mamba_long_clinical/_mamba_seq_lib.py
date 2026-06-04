@@ -195,15 +195,20 @@ def make_encoder(*, backbone="mamba1", frozen=True, time_concat="append", emb_di
         def forward(self, X, Tt, M, L):
             h = self.project(X, Tt)                               # [N,3,d_model]  (also used by align loss)
             if self.backbone_kind in ("mamba1", "mamba2"):
-                ctx = torch.no_grad() if self.frozen else _nullctx()
-                with ctx:
-                    out = self.backbone(inputs_embeds=h).last_hidden_state   # [N,3,d_out]
+                # NB: a FROZEN backbone is frozen via requires_grad=False on its params (build_backbone),
+                # NOT torch.no_grad() here — gradients MUST still flow THROUGH it to the trained
+                # projection. Wrapping this in no_grad() would detach the graph and the proj never learns.
+                out = self.backbone(inputs_embeds=h).last_hidden_state          # [N,3,d_out]
             elif self.backbone_kind == "gru":
                 out, _ = self.backbone(h)
-            else:                                                 # meanpool
+            else:                                                 # meanpool control (no SSM)
                 out = h
-            idx = (L - 1).clamp(min=0).view(-1, 1, 1).expand(-1, 1, out.size(-1))
-            z = out.gather(1, idx).squeeze(1)                     # last-present step  [N,d_out]
+            if self.backbone_kind == "meanpool":
+                m = M.unsqueeze(-1)                                # masked MEAN over present visits
+                z = (out * m).sum(1) / m.sum(1).clamp_min(1.0)
+            else:                                                 # sequential: last-PRESENT step
+                idx = (L - 1).clamp(min=0).view(-1, 1, 1).expand(-1, 1, out.size(-1))
+                z = out.gather(1, idx).squeeze(1)                 # [N,d_out]
             return z, h
 
         def align_loss(self, h, M, pid_int):
