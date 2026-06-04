@@ -120,10 +120,51 @@ def main():
             subprocess.run(cmd, check=True)
 
     print(f"[finalize] done. Winner re-trained (with best_model.pt) under {args.out_dir}")
+
+    # ── Aggregate the winner's TEST metrics across the re-trained seeds ──
+    if not args.dry_run:
+        summarize_winner(Path(args.out_dir), args.task)
+
     print("[finalize] now extract probs:\n"
           f"  python mri_pipeline/05_extract_cached_head_probs.py --arch "
           f"{args.model_name.lower().replace('-','_').replace('vit_mae75','vit_mae')} "
           f"--tasks {args.task} --heads-root {args.out_dir}")
+
+
+def summarize_winner(out_dir: Path, task: str):
+    """Read the winner-tree per-seed metrics.json and report mean±std TEST metrics
+    (the headline to compare vs the BrainDINO paper's macro-AUC 0.954). The winner
+    tree has exactly one HP dir per seed, so glob it (no slug replication)."""
+    import numpy as np
+    # test_metrics key aliases across binary/multiclass schemas.
+    KEYS = {"test_bACC": ["balanced_acc"],
+            "test_macro_AUC": ["auc_roc_ovr", "auc_roc"],
+            "test_macro_F1": ["macro_f1", "f1"],
+            "test_acc": ["accuracy"]}
+    rows, vals = [], {k: [] for k in KEYS}
+    for mp in sorted(glob.glob(str(out_dir / task / "seed_*" / "*" / "metrics.json"))):
+        d = json.load(open(mp))
+        tm = d.get("test_metrics", {}); cfg = d.get("config", {})
+        seed = cfg.get("seed")
+        row = {"seed": seed, "val_bACC": cfg.get("best_val_balanced_acc"),
+               "val_AUC": cfg.get("best_val_auc")}
+        for label, aliases in KEYS.items():
+            v = next((tm[a] for a in aliases if a in tm), None)
+            row[label] = v
+            if v is not None:
+                vals[label].append(float(v))
+        rows.append(row)
+    if not rows:
+        print("[finalize] no winner metrics.json found to summarise."); return
+    summ = pd.DataFrame(rows).sort_values("seed")
+    out_csv = out_dir / task / "winner_test_summary.csv"
+    summ.to_csv(out_csv, index=False)
+    print(f"\n[finalize] WINNER test metrics (n={len(rows)} seeds) — compare macro-AUC vs paper 0.954:")
+    for label in KEYS:
+        xs = vals[label]
+        if xs:
+            print(f"    {label:14s} = {np.mean(xs):.4f} ± {np.std(xs):.4f}")
+    print(f"[finalize] per-seed table -> {out_csv}")
 
 
 if __name__ == "__main__":
