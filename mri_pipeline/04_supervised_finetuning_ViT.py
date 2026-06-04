@@ -527,6 +527,22 @@ def load_matched_labels(path: str) -> pd.DataFrame:
     Returns DataFrame with Patient_ID added (derived from bids_sub).
     Filtered to scans with a valid clinical match (Strategy A or B)."""
     df = pd.read_csv(path)
+    # ── TEMP DIAGNOSTIC (Label_T4 KeyError hunt) ── remove after debugging ──
+    import os as _os, sys as _sys
+    try:
+        _st = _os.stat(path)
+        _stat = f"size={_st.st_size} mtime={_st.st_mtime}"
+    except OSError as _e:
+        _stat = f"stat-failed: {_e}"
+    print(f"[DIAG load_matched_labels] node={_os.uname().nodename} pid={_os.getpid()}",
+          flush=True)
+    print(f"[DIAG load_matched_labels] path={path}", flush=True)
+    print(f"[DIAG load_matched_labels] realpath={_os.path.realpath(path)}", flush=True)
+    print(f"[DIAG load_matched_labels] {_stat}", flush=True)
+    print(f"[DIAG load_matched_labels] ncols={len(df.columns)} "
+          f"Label_T4_present={'Label_T4' in df.columns} "
+          f"last5cols={list(df.columns)[-5:]}", flush=True)
+    # ── END TEMP DIAGNOSTIC ────────────────────────────────────────────────
     if "match_status" in df.columns:
         df = df[df["match_status"].isin(MATCHED_STATUSES)].copy()
 
@@ -610,6 +626,14 @@ def _resolve_labels(df: pd.DataFrame, task_cfg: dict) -> pd.DataFrame:
                 .drop(columns="_months"))
         return df  # already int-cast, return early to skip the int recast below
     else:
+        # ── TEMP DIAGNOSTIC (Label_T4 KeyError hunt) ── remove after debugging ──
+        import sys as _sys
+        _lc = task_cfg["label_col"]
+        print(f"[DIAG _resolve_labels] label_col={_lc!r} "
+              f"present_in_df={_lc in df.columns} nrows={len(df)} ncols={len(df.columns)}",
+              flush=True)
+        print(f"[DIAG _resolve_labels] df.columns={list(df.columns)}", flush=True)
+        # ── END TEMP DIAGNOSTIC ────────────────────────────────────────────────
         df = df.dropna(subset=[task_cfg["label_col"]]).copy()
         df["label"] = df[task_cfg["label_col"]]
     df = df.dropna(subset=["label"])
