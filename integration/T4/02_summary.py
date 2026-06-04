@@ -99,14 +99,15 @@ def main():
     for i in range(1, len(body) + 1):
         tab[i, 0].set_text_props(ha="left")
     present = [v for v in ORDER if len(d[d["variant"] == v])]   # body rows are in this order
-    # bold best seed-mean bACC (col 1)
-    sm = {v: d[d["variant"] == v]["bacc_mean"].iloc[0] for v in present}
+    # bold the best among FULL-COHORT variants only (exclude mri_only: scored on the
+    # smaller MRI-present subset, so not comparable on the same patients).
+    full_cohort = [v for v in present if v != "mri_only"]
+    sm = {v: d[d["variant"] == v]["bacc_mean"].iloc[0] for v in full_cohort}
     if sm:
         best_sm = max(sm, key=lambda v: sm[v])
         tab[present.index(best_sm) + 1, 1].set_text_props(weight="bold")
-    # bold best POOLED bACC (col 2; the trustworthy metric)
     if pooled:
-        cand = [v for v in present if v in pooled and not np.isnan(pooled[v])]
+        cand = [v for v in full_cohort if v in pooled and not np.isnan(pooled[v])]
         if cand:
             best_v = max(cand, key=lambda v: pooled[v])
             tab[present.index(best_v) + 1, 2].set_text_props(weight="bold")
@@ -115,7 +116,9 @@ def main():
               "buckets from cumulative binary T3 probs: clinical@bl(≤3y BioClin-L, ≤7y ModernBERT-L) "
               f"⊕ MRI@m12({mri_label})\nmean ± std across seeds (fit VAL / report TEST)",
               pad=10, fontsize=10.5)
-    foot = ["bucket = [p(<3y), p(<7y)-p(<3y), 1-p(<7y)] per modality (monotone-clipped, renormalised).",
+    foot = ["PRESENT-ONLY eval: test = full clinical cohort; where the m12 MRI is absent the single",
+            "  present modality (clinical) proceeds. MRI-only row is scored on the MRI-present subset (smaller n).",
+            "bucket = [p(<3y), p(<7y)-p(<3y), 1-p(<7y)] per modality (monotone-clipped, renormalised).",
             "TEST bACC (seed-mean) = mean of per-seed bACC — HIGH-VARIANCE on n≈10/seed × 3 classes.",
             "pooled bACC = bACC over ALL ~31 test patients pooled across seeds — trustworthy; agrees with confusion_T4.png.",
             "The two CAN disagree here (seed-mean ranks LR>clinical; pooled ranks clinical>LR) — a small-n artifact, NOT a real gain.",

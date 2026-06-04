@@ -81,19 +81,23 @@ def write_failure_table():
     # 'fused' = weighted-avg (the best/chosen T4 fusion; LR/EN overfit the tiny val).
     fcol = "wavg_pred" if "wavg_pred" in d.columns else "lr_pred"
     fcor = "wavg_correct" if "wavg_correct" in d.columns else "lr_correct"
+    mp = d["mri_present"] if "mri_present" in d.columns else pd.Series(True, index=d.index)
     out = pd.DataFrame({
         "seed": d["seed"], "Patient_ID": d["Patient_ID"],
         "y_true": d["y_true"].map(NAMES),
         "fused_pred": d[fcol].map(NAMES), "fused_correct": d[fcor],
         "clinical_pred": d["clinical_pred"].map(NAMES), "clinical_correct": d["clinical_correct"],
-        "mri_pred": d["mri_pred"].map(NAMES), "mri_correct": d["mri_correct"],
+        # present-only: MRI absent -> NaN pred (renders 'absent', grey)
+        "mri_pred": d["mri_pred"].map(NAMES), "mri_correct": d["mri_correct"].where(mp, other=np.nan),
     })
     # clinical-vs-MRI complementarity (matches the T2 failure-table 'agreement').
-    def agree(r):
+    def agree(r, present):
+        if not present:
+            return "mri_absent"
         c, m = bool(r["clinical_correct"]), bool(r["mri_correct"])
         return ("both_correct" if c and m else "clinical_only" if c else
                 "mri_only" if m else "both_wrong")
-    out["agreement"] = out.apply(agree, axis=1)
+    out["agreement"] = [agree(r, bool(p)) for (_, r), p in zip(out.iterrows(), mp)]
     csv = HERE / "failure_table.csv"
     out.to_csv(csv, index=False)
 

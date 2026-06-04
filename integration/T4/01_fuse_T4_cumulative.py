@@ -123,63 +123,94 @@ def main():
         m3 = _mri_prob(MRI3_TASK, seed, mri_tmpl).rename(columns={"p": "p_mri3"})
         m7 = _mri_prob(MRI7_TASK, seed, mri_tmpl)[["Patient_ID", "p"]].rename(columns={"p": "p_mri7"})
 
-        df = (c3.merge(c7, on="Patient_ID").merge(m3, on="Patient_ID")
-                .merge(m7, on="Patient_ID"))
-        # harmonisation: clinical baseline split vs MRI split for the same patients
-        n_mismatch += int((df["split"] != df["split_mri"]).sum())
+        # PRESENT-ONLY: keep ALL clinical-test patients (clinical present for every
+        # eligible subject); LEFT-join MRI so a patient WITHOUT an m12 scan is retained
+        # and the single present modality (clinical) proceeds.
+        df = c3.merge(c7, on="Patient_ID")
+        df = df.merge(m3, on="Patient_ID", how="left").merge(m7, on="Patient_ID", how="left")
         df["y"] = df["Patient_ID"].map(y_by_pid)
-        df = df[df["y"].notna()].copy()
-        df["y"] = df["y"].astype(int)
+        df = df[df["y"].notna()].copy(); df["y"] = df["y"].astype(int)
 
-        bcl = _buckets(df["p_cl3"].values, df["p_cl7"].values)
-        bmr = _buckets(df["p_mri3"].values, df["p_mri7"].values)
+        bcl = _buckets(df["p_cl3"].values, df["p_cl7"].values)        # clinical (all)
+        bmr = _buckets(df["p_mri3"].values, df["p_mri7"].values)      # MRI (NaN rows where absent)
+        mri_pres = ~np.isnan(bmr).any(axis=1)
+        n_mismatch += int((df.loc[mri_pres, "split"] != df.loc[mri_pres, "split_mri"]).sum())
+
         vm, tm = (df["split"] == "val").values, (df["split"] == "test").values
         yv, yt = df["y"].values[vm], df["y"].values[tm]
-        clv, clt = bcl[vm], bcl[tm]
-        mrv, mrt = bmr[vm], bmr[tm]
-        if len(yt) == 0 or len(yv) == 0:
-            print(f"  seed {seed}: empty val/test (val={len(yv)} test={len(yt)}) — skip"); continue
-
+        clv, clt, mrv, mrt = bcl[vm], bcl[tm], bmr[vm], bmr[tm]
+        mpv, mpt = mri_pres[vm], mri_pres[tm]
         pid_t = df["Patient_ID"].values[tm]
-
-        def add(variant, pred, proba, val_bacc):
-            r = h.metric_row(yt, pred, proba)
-            r.update(seed=seed, variant=variant, val_bacc=float(val_bacc))
-            rows.append(r)
-            for i in range(len(yt)):           # capture per-patient pred for POOLED bACC
-                all_preds.append(dict(seed=seed, Patient_ID=pid_t[i], variant=variant,
-                                      y_true=int(yt[i]), pred=int(pred[i])))
+        if len(yt) == 0 or len(yv) == 0:
+            print(f"  seed {seed}: empty val/test — skip"); continue
 
         from sklearn.metrics import balanced_accuracy_score as bacc
-        cl_pred, mri_pred = clt.argmax(1), mrt.argmax(1)
-        add("clinical_only", cl_pred, clt, bacc(yv, clv.argmax(1)))
-        add("mri_only",      mri_pred, mrt, bacc(yv, mrv.argmax(1)))
-        eq = 0.5 * clt + 0.5 * mrt
-        add("equal_0.5", eq.argmax(1), eq, bacc(yv, (0.5 * clv + 0.5 * mrv).argmax(1)))
-        wpr, wbl, ww = h.fit_weighted_avg(clv, mrv, yv, clt, mrt, "bacc")
-        add("weighted_avg", wpr, wbl, bacc(yv, (ww * clv + (1 - ww) * mrv).argmax(1)))
-        wavg_pred = wpr                                  # best fusion -> capture for plots
-        pr, bl, w = h.fit_weighted_avg(clv, mrv, yv, clt, mrt, "youden")
-        add("weighted_avg_J", pr, bl, bacc(yv, (w * clv + (1 - w) * mrv).argmax(1)))
-        Xv, Xt = np.hstack([clv, mrv]), np.hstack([clt, mrt])
-        Xv_all.append(Xv); yv_all.append(yv)
+
+        def fuse_po(cl, mr, mp, w):
+            """present-only blend: w*CL+(1-w)*MRI where both present, else CL alone."""
+            out = cl.copy()
+            if mp.any():
+                out[mp] = w * cl[mp] + (1.0 - w) * mr[mp]
+            return out
+
+        def tune_w(objective):
+            scorer = h.youden_j if objective == "youden" else bacc
+            best_w, best_s = 0.5, -2.0
+            for w in np.linspace(0, 1, 21):
+                s = scorer(yv, fuse_po(clv, mrv, mpv, w).argmax(1))
+                if s > best_s:
+                    best_s, best_w = s, w
+            return best_w
+
+        def Xpo(cl, mr, mp):
+            """EN/LR stack: clinical + MRI (uniform-imputed where absent) + present flag."""
+            K = len(h.CLASS_NAMES)
+            mr_fill = np.where(mp[:, None], np.nan_to_num(mr), 1.0 / K)
+            return np.hstack([cl, mr_fill, mp.astype(float)[:, None]])
+
+        def add(variant, y, pred, proba, val_bacc, pids):
+            r = h.metric_row(np.asarray(y, int), np.asarray(pred, int), proba)
+            r.update(seed=seed, variant=variant, val_bacc=float(val_bacc))
+            rows.append(r)
+            for i in range(len(y)):
+                all_preds.append(dict(seed=seed, Patient_ID=pids[i], variant=variant,
+                                      y_true=int(y[i]), pred=int(pred[i])))
+
+        # references (clinical-only over FULL cohort; mri-only over MRI-present subset)
+        add("clinical_only", yt, clt.argmax(1), clt, bacc(yv, clv.argmax(1)), pid_t)
+        if mpt.any():
+            vb = bacc(yv[mpv], mrv[mpv].argmax(1)) if mpv.sum() > 1 else float("nan")
+            add("mri_only", yt[mpt], mrt[mpt].argmax(1), mrt[mpt], vb, pid_t[mpt])
+        # present-only blends (full cohort: clinical proceeds where MRI absent)
+        eqt = fuse_po(clt, mrt, mpt, 0.5)
+        add("equal_0.5", yt, eqt.argmax(1), eqt, bacc(yv, fuse_po(clv, mrv, mpv, 0.5).argmax(1)), pid_t)
+        wb = tune_w("bacc"); wpt = fuse_po(clt, mrt, mpt, wb)
+        add("weighted_avg", yt, wpt.argmax(1), wpt, bacc(yv, fuse_po(clv, mrv, mpv, wb).argmax(1)), pid_t)
+        wavg_pred = wpt.argmax(1)
+        wj = tune_w("youden"); wjt = fuse_po(clt, mrt, mpt, wj)
+        add("weighted_avg_J", yt, wjt.argmax(1), wjt, bacc(yv, fuse_po(clv, mrv, mpv, wj).argmax(1)), pid_t)
+        # EN / LR present-only (uniform-impute missing MRI + indicator -> full cohort)
+        Xv, Xt = Xpo(clv, mrv, mpv), Xpo(clt, mrt, mpt)
+        Xv_all.append(np.hstack([clv[mpv], mrv[mpv]])); yv_all.append(yv[mpv])  # complete-case for LR-weights viz
         en_res = h.fit_en(Xv, yv, Xt, seed)
         if en_res is not None:
-            add("elastic_net", en_res[0], en_res[1], float("nan"))
+            add("elastic_net", yt, en_res[0], en_res[1], float("nan"), pid_t)
         lr_res = h.fit_lr(Xv, yv, Xt, seed)
         if lr_res is not None:
-            add("lr", lr_res[0], lr_res[1], float("nan"))
-        lr_pred = lr_res[0] if lr_res is not None else np.full(len(yt), -1)
+            add("lr", yt, lr_res[0], lr_res[1], float("nan"), pid_t)
+
+        cl_pred, mri_pred_full = clt.argmax(1), mrt.argmax(1)
         for i in range(len(yt)):
+            pres = bool(mpt[i])
             pred_rows.append(dict(
-                seed=seed, Patient_ID=pid_t[i], y_true=int(yt[i]),
+                seed=seed, Patient_ID=pid_t[i], y_true=int(yt[i]), mri_present=pres,
                 clinical_pred=int(cl_pred[i]), clinical_correct=int(cl_pred[i] == yt[i]),
-                mri_pred=int(mri_pred[i]),     mri_correct=int(mri_pred[i] == yt[i]),
-                wavg_pred=int(wavg_pred[i]),   wavg_correct=int(wavg_pred[i] == yt[i]),
-                lr_pred=int(lr_pred[i]),       lr_correct=int(lr_pred[i] == yt[i])))
+                mri_pred=(int(mri_pred_full[i]) if pres else -1),
+                mri_correct=(int(mri_pred_full[i] == yt[i]) if pres else -1),
+                wavg_pred=int(wavg_pred[i]), wavg_correct=int(wavg_pred[i] == yt[i])))
         print(f"  seed {seed}: n_val={len(yv)} n_test={len(yt)} "
-              f"clin_only_bACC={bacc(yt, cl_pred):.3f}  lr_bACC="
-              f"{bacc(yt, lr_pred) if lr_res is not None else float('nan'):.3f}")
+              f"(MRI present test {int(mpt.sum())}/{len(yt)})  "
+              f"clin_only={bacc(yt, cl_pred):.3f}  wavg={bacc(yt, wavg_pred):.3f}")
 
     if not rows:
         sys.exit("No T4 rows produced — check inputs.")
