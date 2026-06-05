@@ -50,8 +50,12 @@ _ap.add_argument("--post-exclusion", action="store_true",
                   help="Read from no_cdr_stratified_post_exclusion + "
                        "VISCODE_2_aligned_extended_post_exclusion and suffix "
                        "outputs with _post_exclusion.")
+_ap.add_argument("--cleaned", action="store_true",
+                  help="Render a cleaned copy (trimmed title/subtitle, NO footnote, drop the 'sc' "
+                       "scheduling visit) to diagnostic_coverage_cleaned.{png,pdf}. Original untouched.")
 _args = _ap.parse_args()
 POST_EXCLUSION = bool(_args.post_exclusion)
+CLEANED        = bool(_args.cleaned)
 SUFFIX         = "_post_exclusion" if POST_EXCLUSION else ""
 
 if POST_EXCLUSION:
@@ -60,7 +64,7 @@ if POST_EXCLUSION:
                         r"\tabular\longitudinal\master_clinical_tabular.csv")
     MASTER_MRI  = Path(r"D:\ADNI_BIDS_project\derivatives\mri_clinical_matched"
                         r"\VISCODE_2_aligned_extended_post_exclusion"
-                        r"\master_mri_clinical_matched_viscode2_extended.csv")
+                        r"\master_mri_clinical_matched_viscode2_extended_post_exclusion.csv")
     SPLIT_DIR   = Path(r"D:\ADNI_BIDS_project\derivatives\clinical"
                         r"\no_cdr_stratified_post_exclusion\tabular\baseline")
 else:
@@ -200,7 +204,7 @@ last_mri_idx = max(
      if df_result[df_result["Session"] == s]["MRI_N"].max() > 0),
     default=-1)
 display_sessions = [s for i, s in enumerate(sessions)
-                    if i <= last_mri_idx or s in ("sc", "bl")]
+                    if (i <= last_mri_idx or s in ("sc", "bl")) and not (CLEANED and s == "sc")]
 
 # ── Render the table ─────────────────────────────────────────────────────────
 def fmt_dx(total, cn, mci, ad):
@@ -259,7 +263,7 @@ HROW1_H    = 0.32
 HROW2_H    = 0.28
 TOP_PAD    = 0.12
 BOT_PAD    = 0.12
-FOOTNOTE_H = 0.80
+FOOTNOTE_H = 0.05 if CLEANED else 0.80
 
 LEFT      = 0.25
 RIGHT_PAD = 0.25
@@ -290,9 +294,11 @@ def hline(y, lw=1.0, ls="-"):
 # ── Title ─────────────────────────────────────────────────────────────────
 y_title_top = y_cursor
 y_cursor -= TITLE_H
-ax.text((LEFT + RIGHT) / 2, (y_title_top + y_cursor) / 2,
-        "ADNI Diagnostic Coverage by Visit — STRATIFIED Splits  (VISCODE2-aligned)\n"
-        "(stratified on baseline 3-class diagnosis: CN / MCI / AD)",
+_title = ("ADNI Diagnostic Coverage by Visit Stratified Splits  (VISCODE2-aligned)\n"
+          "(stratified on baseline 3-class diagnosis: CN / MCI / AD)") if CLEANED else (
+          "ADNI Diagnostic Coverage by Visit — STRATIFIED Splits  (VISCODE2-aligned)\n"
+          "(stratified on baseline 3-class diagnosis: CN / MCI / AD)")
+ax.text((LEFT + RIGHT) / 2, (y_title_top + y_cursor) / 2, _title,
         ha="center", va="center", fontsize=11, fontweight="bold",
         color="black", linespacing=1.3)
 
@@ -300,11 +306,13 @@ ax.text((LEFT + RIGHT) / 2, (y_title_top + y_cursor) / 2,
 y_sub_top = y_cursor
 y_cursor -= SUBTITLE_H
 n_subjects = len(snp_pids)
-ax.text((LEFT + RIGHT) / 2, (y_sub_top + y_cursor) / 2,
-        f"SNP+MRI cohort, n={n_subjects} subjects. Sessions on VISCODE_2.\n"
-        f"80/10/10 train/val/test splits (seeds 0, 1, 2), "
-        f"stratified by Label_bl_multi. "
-        f"Diagnosis = per-visit diagnosis (Label_visit_diag).",
+_subtitle = (f"SNP+MRI cohort, n={n_subjects} subjects. Sessions on VISCODE_2.\n"
+             f"80/10/10 train/val/test splits (seeds 0, 1, 2).") if CLEANED else (
+             f"SNP+MRI cohort, n={n_subjects} subjects. Sessions on VISCODE_2.\n"
+             f"80/10/10 train/val/test splits (seeds 0, 1, 2), "
+             f"stratified by Label_bl_multi. "
+             f"Diagnosis = per-visit diagnosis (Label_visit_diag).")
+ax.text((LEFT + RIGHT) / 2, (y_sub_top + y_cursor) / 2, _subtitle,
         ha="center", va="center", fontsize=9, fontstyle="italic",
         color="black", linespacing=1.4)
 
@@ -395,29 +403,31 @@ rect = plt.Rectangle((LEFT, BOTTOM), RIGHT - LEFT, y_title_top - BOTTOM,
                       facecolor="none", edgecolor="black", linewidth=1.5, zorder=5)
 ax.add_patch(rect)
 
-# ── Footnote ──────────────────────────────────────────────────────────────
-foot_y = BOTTOM - 0.15
-footnote_raw = (
-    f"VISCODE2 alignment: clinical sessions use VISCODE_2; MRI scans are "
-    f"matched via adni_viscode (= VISCODE_2) with match_status ∈ "
-    f"{{viscode2_exact, nearest_within_14d}} from master_mri_clinical_matched_viscode2.csv. "
-    f"N = total unique subjects with that modality at that visit. "
-    f"Train/val/test splits are 80/10/10 STRATIFIED by baseline "
-    f"3-class diagnosis (Label_bl_multi: CN / MCI / AD) at the "
-    f"Patient_ID level (subject-level), using "
-    f"sklearn.model_selection.train_test_split(stratify=...). "
-    f"Seeds 0, 1, 2 control the random state. "
-    f"Diagnosis counts use per-visit diagnosis (Label_visit_diag)."
-)
-foot_wrap_chars = int((RIGHT - LEFT) * 17)
-footnote_wrapped = "\n".join(textwrap.wrap(footnote_raw, width=foot_wrap_chars))
-ax.text(LEFT, foot_y, footnote_wrapped,
-        ha="left", va="top", fontsize=7.5, color="black")
+# ── Footnote (omitted in the cleaned copy) ─────────────────────────────────
+if not CLEANED:
+    foot_y = BOTTOM - 0.15
+    footnote_raw = (
+        f"VISCODE2 alignment: clinical sessions use VISCODE_2; MRI scans are "
+        f"matched via adni_viscode (= VISCODE_2) with match_status ∈ "
+        f"{{viscode2_exact, nearest_within_14d}} from master_mri_clinical_matched_viscode2.csv. "
+        f"N = total unique subjects with that modality at that visit. "
+        f"Train/val/test splits are 80/10/10 STRATIFIED by baseline "
+        f"3-class diagnosis (Label_bl_multi: CN / MCI / AD) at the "
+        f"Patient_ID level (subject-level), using "
+        f"sklearn.model_selection.train_test_split(stratify=...). "
+        f"Seeds 0, 1, 2 control the random state. "
+        f"Diagnosis counts use per-visit diagnosis (Label_visit_diag)."
+    )
+    foot_wrap_chars = int((RIGHT - LEFT) * 17)
+    footnote_wrapped = "\n".join(textwrap.wrap(footnote_raw, width=foot_wrap_chars))
+    ax.text(LEFT, foot_y, footnote_wrapped,
+            ha="left", va="top", fontsize=7.5, color="black")
 
 plt.tight_layout(pad=0.1)
-fig.savefig(OUT_DIR / f"diagnostic_coverage_table_stratified_viscode2{SUFFIX}.png", bbox_inches="tight", dpi=300)
-fig.savefig(OUT_DIR / f"diagnostic_coverage_table_stratified_viscode2{SUFFIX}.pdf", bbox_inches="tight", dpi=300)
-print(f"\nSaved PNG → {OUT_DIR / ('diagnostic_coverage_table_stratified_viscode2' + SUFFIX + '.png')}")
-print(f"Saved PDF → {OUT_DIR / ('diagnostic_coverage_table_stratified_viscode2' + SUFFIX + '.pdf')}")
+_stem = "diagnostic_coverage_cleaned" if CLEANED else f"diagnostic_coverage_table_stratified_viscode2{SUFFIX}"
+fig.savefig(OUT_DIR / f"{_stem}.png", bbox_inches="tight", dpi=300)
+fig.savefig(OUT_DIR / f"{_stem}.pdf", bbox_inches="tight", dpi=300)
+print(f"\nSaved PNG → {OUT_DIR / (_stem + '.png')}")
+print(f"Saved PDF → {OUT_DIR / (_stem + '.pdf')}")
 plt.close()
 print("Done.")
