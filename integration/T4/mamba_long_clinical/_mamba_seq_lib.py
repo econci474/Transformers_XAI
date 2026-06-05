@@ -433,3 +433,69 @@ def predict_survival_curves(encoder, head, seq, idx, times, device="cpu"):
                    torch.tensor(seq["L"][idx], dtype=torch.long, device=device))
         S = hd.survival(z, torch.tensor(times, dtype=torch.float32, device=device))
     return S.cpu().numpy()
+
+
+# ── Classifier training (full-batch weighted-CE; early stop on val CE) ────────
+def train_classifier(encoder, head, seq, *, device="cpu", lr=1e-3, max_epochs=300, patience=30,
+                     weight_decay=1e-4, align_lambda=0.0, n_classes=3, log_every=0):
+    """Train the 3-class T4-horizon classifier head. Class-imbalance handled by inverse-freq weighted
+    CE (weights from TRAIN only). Early-stop on val weighted-CE. Mirrors train_survival's loop/restore."""
+    torch = _torch()
+    import torch.nn.functional as F
+    enc, hd = encoder.to(device), head.to(device)
+    tr, va = split_indices(seq, "train"), split_indices(seq, "val")
+
+    def batch(idx):
+        to = lambda a, d=torch.float32: torch.tensor(a[idx], dtype=d, device=device)
+        pid_int = torch.tensor(pd.factorize(seq["pid"][idx])[0], dtype=torch.long, device=device)
+        return (to(seq["X"]), to(seq["T"]), to(seq["M"]),
+                torch.tensor(seq["L"][idx], dtype=torch.long, device=device),
+                torch.tensor(seq["y"][idx], dtype=torch.long, device=device), pid_int)
+
+    Xtr, Ttr, Mtr, Ltr, ytr, ptr = batch(tr)
+    Xva, Tva, Mva, Lva, yva, pva = batch(va)
+    cnt = torch.bincount(ytr, minlength=n_classes).float()
+    w = (cnt.sum() / (n_classes * cnt.clamp_min(1.0))).to(device)          # inverse-freq, mean≈1
+    params = [q for q in list(enc.parameters()) + list(hd.parameters()) if q.requires_grad]
+    opt = torch.optim.AdamW(params, lr=lr, weight_decay=weight_decay)
+
+    best, best_state, bad = float("inf"), None, 0
+    for ep in range(max_epochs):
+        enc.train(); hd.train(); opt.zero_grad()
+        z, h = enc(Xtr, Ttr, Mtr, Ltr)
+        loss = F.cross_entropy(hd.logits(z), ytr, weight=w)
+        if align_lambda > 0:
+            loss = loss + align_lambda * enc.align_loss(h, Mtr, ptr)
+        loss.backward(); opt.step()
+
+        enc.eval(); hd.eval()
+        with torch.no_grad():
+            zv, _ = enc(Xva, Tva, Mva, Lva)
+            vloss = F.cross_entropy(hd.logits(zv), yva, weight=w).item()
+        if log_every and ep % log_every == 0:
+            print(f"    ep{ep:3d} train {loss.item():.4f} val {vloss:.4f}")
+        if vloss < best - 1e-5:
+            best, bad = vloss, 0
+            best_state = {k: v.detach().cpu().clone() for k, v in
+                          list(enc.state_dict().items()) + [(f"head.{k}", v) for k, v in hd.state_dict().items()]}
+        else:
+            bad += 1
+            if bad >= patience:
+                break
+    if best_state is not None:
+        enc.load_state_dict({k: v for k, v in best_state.items() if not k.startswith("head.")})
+        hd.load_state_dict({k[5:]: v for k, v in best_state.items() if k.startswith("head.")})
+    return enc, hd, best
+
+
+def predict_proba(encoder, head, seq, idx, device="cpu"):
+    """Return [len(idx), n_classes] softmax probabilities for the given patient indices."""
+    torch = _torch()
+    import torch.nn.functional as F
+    enc, hd = encoder.to(device).eval(), head.to(device).eval()
+    to = lambda a, d=torch.float32: torch.tensor(a[idx], dtype=d, device=device)
+    with torch.no_grad():
+        z, _ = enc(to(seq["X"]), to(seq["T"]), to(seq["M"]),
+                   torch.tensor(seq["L"][idx], dtype=torch.long, device=device))
+        p = F.softmax(hd.logits(z), dim=-1)
+    return p.cpu().numpy()
