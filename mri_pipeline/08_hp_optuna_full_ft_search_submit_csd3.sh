@@ -36,7 +36,11 @@
 module purge
 module load cuda/12.1
 source "$(conda info --base)/etc/profile.d/conda.sh"
-conda activate mri
+# Env-independent: do NOT `conda activate` (sbatch inherits the login-node env and
+# activation can stack on top of it). Target the named env explicitly with
+# `conda run -n mri`, and preflight the deps so a wrong/missing env fails fast.
+conda run -n mri python -c "import torch, optuna" \
+    || { echo "[ERROR] mri env missing torch/optuna"; exit 1; }
 
 ARCH="${ARCH:?set ARCH=brainmvp or ARCH=vit_mae via --export=ALL,ARCH=...}"
 export WANDB_MODE="${WANDB_MODE:-offline}"
@@ -55,8 +59,10 @@ echo "  GPU    : $(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null
 echo "  Started: $(date)"
 echo "============================================================"
 
-python "${SCRIPT_DIR}/08_hp_optuna_full_ft.py" \
+conda run -n mri python "${SCRIPT_DIR}/08_hp_optuna_full_ft.py" \
     --mode search --arch "${ARCH}" --task T2_multiclass \
     --study-dir "${STUDY_DIR}" --n-trials 1 ${SEARCH_EPOCHS_FLAG}
+rc=$?
 
-echo "  Finished: $(date)  exit=$?"
+echo "  Finished: $(date)  exit=${rc}"
+exit ${rc}
