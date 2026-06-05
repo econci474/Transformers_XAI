@@ -65,7 +65,7 @@ def render(summary, pooled, out):
     """summary: per-(model,split) mean/std DataFrame ; pooled: per-(model,split) pooled DataFrame."""
     test = pooled[pooled.split == "test"].set_index("model")
     ssd = summary.xs("test", level="split")
-    fig, ax = plt.subplots(figsize=(10.5, 0.6 + 0.45 * len(ORDER)))
+    fig, ax = plt.subplots(figsize=(11.5, 0.6 + 0.45 * len(ORDER)))
     ax.axis("off")
     cols = ["Config", "bACC (pooled)", "bACC (seed mean±sd)", "macro-F1 (pooled)", "macro-F1 (mean±sd)", "acc (pooled)"]
     cell, best_b = [], test["bacc"].max()
@@ -77,7 +77,8 @@ def render(summary, pooled, out):
                      f"{test.loc[name,'macro_f1']:.3f}",
                      f"{ssd.loc[name, ('macro_f1','mean')]:.3f}±{ssd.loc[name, ('macro_f1','std')]:.3f}",
                      f"{test.loc[name,'acc']:.3f}"])
-    tb = ax.table(cellText=cell, colLabels=cols, loc="center", cellLoc="center")
+    tb = ax.table(cellText=cell, colLabels=cols, loc="center", cellLoc="center",
+                  colWidths=[0.30, 0.14, 0.18, 0.14, 0.16, 0.12])
     tb.auto_set_font_size(False); tb.set_fontsize(9); tb.scale(1, 1.5)
     for j in range(len(cols)):
         tb[0, j].set_facecolor("#404040"); tb[0, j].set_text_props(color="white", fontweight="bold")
