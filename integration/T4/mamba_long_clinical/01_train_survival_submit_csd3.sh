@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH -A LIO-CHARM-SL2-GPU
+#SBATCH -A COMPUTERLAB-SL2-GPU
 #SBATCH --job-name=mamba_surv
 # Logs + run outputs live UNDER a hpc-work root — NEVER in the repo/script folder.
 # Create the logs dir before submitting:
