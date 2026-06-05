@@ -220,7 +220,7 @@ FOOTNOTES = [
     r"      AD horizon (T4): 3-class time-to-AD (<3y / 3–7y / ≥7y) over confirmed converters "
     r"(pMCI + pCN→AD), separate split tree; tabular baselines use the full battery joined to that cohort.",
 ]
-VAL_FOOTNOTE = (r"      NB Validation is held-out for both, but the encoders use it for "
+VAL_FOOTNOTE = (r"      Validation is held-out for both, but the encoders use it for "
                 r"early-stopping / checkpoint selection (mildly optimistic); the tabular "
                 r"baselines do not. Test is untouched for both.")
 
@@ -264,6 +264,8 @@ def render_split(split, groups=None, out_name=None):
             g2["subtitle"] = t4_subtitle(s0_t4)
         else:
             g2["subtitle"] = subtitle_for(g, s0)
+        # make the held-out set explicit at the top of each column group: N(test)= / N(val)=
+        g2["subtitle"] = g2["subtitle"].replace("N=", f"N({split})=", 1)
         GROUPS.append(g2)
 
     def bl_cell(model_id, grp):
@@ -321,7 +323,10 @@ def render_split(split, groups=None, out_name=None):
 
     # ── Sizing ──────────────────────────────────────────────────────────────
     COL_W, ROW_H, ROW_H_SUB, MODEL_COL_W, STRAT_COL_W = 1.40, 0.32, 0.22, 1.55, 0.95
-    footnotes = FOOTNOTES + ([VAL_FOOTNOTE] if split == "val" else [])
+    # the AD-horizon (T4) footnote only applies to tables that actually show the T4 column
+    _has_t4 = any(g["enc_task"] == "T4_conv_horizon" for g in GROUPS)
+    _fn = FOOTNOTES if _has_t4 else [x for x in FOOTNOTES if not x.strip().startswith("AD horizon (T4)")]
+    footnotes = _fn + ([VAL_FOOTNOTE] if split == "val" else [])
     FOOTER_H = 0.16 * len(footnotes) + 0.25
     n_data_cols = n_total_cols
     fig_w = 0.3 + MODEL_COL_W + STRAT_COL_W + n_data_cols * COL_W + 0.3
