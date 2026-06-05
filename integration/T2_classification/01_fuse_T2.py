@@ -493,6 +493,7 @@ def evaluate_framing(framing, seed, clin, mri, prior, pred_rows):
                                    _probs(ve, cols).argmax(1)) if len(ve) else float("nan")
             r.update(framing=framing, seed=seed, variant=name, missing="-")
             rows.append(r)
+            _stash_preds(pred_rows, framing, seed, name, "-", te, P.argmax(1), P)
 
     # ---- complete-case (both present): weighted-avg(+J), LR, EN ----
     vb = val[val["clin_present"] & val["mri_present"]]
@@ -510,6 +511,7 @@ def evaluate_framing(framing, seed, clin, mri, prior, pred_rows):
             r.update(framing=framing, seed=seed, variant=vname,
                      missing="complete_case", note=f"w_clin={w:.2f}")
             rows.append(r)
+            _stash_preds(pred_rows, framing, seed, vname, "complete_case", tb, wpred, wproba)
         for fit, vname in [(fit_lr, "lr"), (fit_en, "elastic_net")]:
             out = _fit2(fit, Xv, yv, Xt)
             if out is None:
@@ -612,6 +614,41 @@ def failure_table(framing, seed, fr):
     return df
 
 
+def failure_stats(framing, seed, fr):
+    """REAL per-modality performance on the FULL test cohort (NOT the wrong-enriched
+    failure subset that `failure_table` returns). Lets the failure-table PNG state the
+    true accuracy/bACC + how many both-correct rows were hidden, so the filtered green/
+    red view is not mistaken for the real accuracy."""
+    test = fr[fr["split"] == "test"]
+    n_test = int(len(test))
+
+    def _argmax_ok(row, cols):
+        return int(np.argmax([row[c] for c in cols])) == int(row["y_true"])
+
+    both_pres = test[test["clin_present"] & test["mri_present"]]
+    n_both_present = int(len(both_pres))
+    n_both_correct = int(sum(_argmax_ok(r, CP_COLS) and _argmax_ok(r, MP_COLS)
+                             for _, r in both_pres.iterrows()))
+    rows = []
+    for mod, cols, pres in [("clinical", CP_COLS, "clin_present"),
+                            ("mri", MP_COLS, "mri_present")]:
+        sub = test[test[pres]]
+        if not len(sub):
+            continue
+        y = sub["y_true"].to_numpy(int)
+        pred = sub[cols].to_numpy(float).argmax(1)
+        rows.append({
+            "framing": framing, "seed": seed, "modality": mod,
+            "n": int(len(sub)), "n_correct": int((y == pred).sum()),
+            "raw_acc": float((y == pred).mean()),
+            "balanced_acc": float(balanced_accuracy_score(y, pred))
+                            if len(np.unique(y)) > 1 else float("nan"),
+            "n_test": n_test, "n_both_present": n_both_present,
+            "n_both_correct_hidden": n_both_correct,
+        })
+    return pd.DataFrame(rows)
+
+
 # --------------------------------------------------------------------------- #
 # Rendered table (matplotlib) -- mirrors mri_pipeline/06_render_cross_model_table
 # --------------------------------------------------------------------------- #
@@ -661,8 +698,63 @@ def _fmt(mean, std, n=None):
     return s
 
 
+def render_confusions(preds, framing, picks, out_path, task_label="T2"):
+    """One row of per-class confusion matrices (counts pooled across seeds) for the
+    given (variant, missing, label) picks -- e.g. clinical_only, mri_only, best fusion.
+    Each cell shows count and row-normalised %; the cohort n is printed per panel since
+    references and complete-case fusion can be on different cohorts."""
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except ImportError:
+        print("  [WARN] matplotlib not installed -- skipping confusion PNG.")
+        return
+    sub_all = preds[preds["framing"] == framing]
+    if sub_all.empty:
+        return
+    panels = []
+    for variant, missing, label, *rest in picks:
+        tp = rest[0] if rest else ""
+        s = sub_all[(sub_all["variant"] == variant) & (sub_all["missing"] == missing)]
+        if s.empty:
+            continue
+        y = s["y_true"].to_numpy(int)
+        p = s["pred"].to_numpy(int)
+        cm = confusion_matrix(y, p, labels=list(range(N_CLASSES)))
+        bacc = balanced_accuracy_score(y, p) if len(np.unique(y)) > 1 else float("nan")
+        n_per_seed = len(s) // s["seed"].nunique() if s["seed"].nunique() else len(s)
+        panels.append((label, tp, cm, n_per_seed, len(s), bacc))
+    if not panels:
+        return
+    n = len(panels)
+    fig, axes = plt.subplots(1, n, figsize=(3.6 * n, 3.9))
+    if n == 1:
+        axes = [axes]
+    for ax, (label, tp, cm, n_per_seed, n_tot, bacc) in zip(axes, panels):
+        row = cm.sum(1, keepdims=True)
+        pct = np.divide(cm, np.where(row == 0, 1, row)) * 100
+        ax.imshow(pct, cmap="Blues", vmin=0, vmax=100)
+        ax.set_xticks(range(N_CLASSES)); ax.set_yticks(range(N_CLASSES))
+        ax.set_xticklabels(CLASS_NAMES); ax.set_yticklabels(CLASS_NAMES)
+        ax.set_xlabel("predicted"); ax.set_ylabel("true")
+        for i in range(N_CLASSES):
+            for j in range(N_CLASSES):
+                ax.text(j, i, f"{cm[i, j]}\n{pct[i, j]:.0f}%", ha="center", va="center",
+                        fontsize=8.5, color="white" if pct[i, j] > 55 else "black")
+        tp_line = f"{tp}\n" if tp else ""
+        ax.set_title(f"{label}\n{tp_line}{n_per_seed}/seed TEST (Σ{n_tot})  bACC {bacc:.3f}",
+                     fontsize=9)
+    fig.suptitle(f"{task_label} {framing} -- per-class confusion (counts pooled across seeds; "
+                 "row-normalised %)", fontsize=11)
+    fig.tight_layout(rect=(0, 0, 1, 0.94))
+    fig.savefig(out_path, dpi=170, bbox_inches="tight", pad_inches=0.08)
+    plt.close(fig)
+    print(f"  confusion: {out_path}")
+
+
 def render_framing_png(summary, cov, framing, mri_name, clin_label, out_path,
-                       task_label="T2"):
+                       task_label="T2", tp_label=None):
     try:
         import matplotlib
         matplotlib.use("Agg")
@@ -739,7 +831,7 @@ def render_framing_png(summary, cov, framing, mri_name, clin_label, out_path,
     cov_line = ("  coverage (test, both modalities present per seed): "
                 + ", ".join(f"s{int(c.seed)}={int(c.n_test_both)}/{int(c.n_test)}"
                             for c in cov_f.itertuples()))
-    plt.title(f"{task_label} late fusion -- {framing} ({TP_LABEL[framing]})\n"
+    plt.title(f"{task_label} late fusion -- {framing} ({tp_label or TP_LABEL[framing]})\n"
               f"clinical={clin_label}   MRI={mri_name}   "
               f"(mean ± std across seeds, n)", pad=6, fontsize=11)
     # Detector-augmented: spell out the class-specific renormalised late-fusion formula.
@@ -787,6 +879,27 @@ def main() -> int:
     ap.add_argument("--clin-task", default="T2_multiclass",
                     help="Clinical parquet task subdir. Use T2_m12_multiclass "
                          "with --framings M12X for the cross-sectional m12 fusion.")
+    ap.add_argument("--clin-probs-root", type=Path, default=None,
+                    help="Optional: load the clinical PROBS from a DIFFERENT parquet "
+                         "tree than the cohort/label/split anchor (--clin-root/--clin-task). "
+                         "Use to fuse CL_bl probs onto the m12 concurrent-label cohort "
+                         "(present-only CL_bl + MRI_m12): anchor on T2_m12_multiclass, "
+                         "probs from T2_multiclass. Defaults to --clin-root.")
+    ap.add_argument("--clin-probs-task", default=None,
+                    help="Task subdir for --clin-probs-root (defaults to --clin-task).")
+    ap.add_argument("--mri-timepoint", default=None, choices=["bl", "m12"],
+                    help="Override the MRI session joined for ALL framings (default: bl "
+                         "for BL, m12 for M12/M12X). E.g. --framings BL --mri-timepoint m12 "
+                         "= baseline-anchored present-only (full baseline clinical cohort) "
+                         "fused with MRI at m12.")
+    ap.add_argument("--tp-label", default=None,
+                    help="Override the timepoint description in the table title (default "
+                         "per-framing). Use to state the true clinical-probs source, e.g. "
+                         "'CL_bl + MRI_m12 (baseline label, present-only)'.")
+    ap.add_argument("--table-tag", default=None,
+                    help="Name the rendered PNG fusion_table_<table_tag>.png instead of "
+                         "fusion_table_<framing>.png (e.g. CLbl_Mm12), so the file is "
+                         "named by clinical arm rather than the internal framing code.")
     ap.add_argument("--seeds", type=int, nargs="+", default=list(SEEDS_DEFAULT))
     ap.add_argument("--n-classes", type=int, default=3,
                     help="Number of classes (3 for T2 CN/MCI/AD; 2 for T1d sMCI/pMCI).")
@@ -831,13 +944,24 @@ def main() -> int:
     out_dir = args.out_dir / (args.out_name or args.mri_name)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    all_metrics, all_preds, all_fail = [], [], []
+    all_metrics, all_preds, all_fail, all_stats = [], [], [], []
     coverage = []
 
     framings_run = ["M12_DET"] if args.detectors else args.framings
     for seed in args.seeds:
         clin = load_clinical(seed, args.clin_root, args.clin_model,
                              args.clin_strat, task=args.clin_task)
+        # Optionally swap in clinical PROBS from a different parquet (e.g. CL_bl)
+        # while keeping the anchor's cohort/label/split (e.g. m12 concurrent dx).
+        # Splits are verified consistent across the bl/m12 trees, so this is
+        # leakage-safe (a m12-test patient is never a bl-train patient).
+        if args.clin_probs_root is not None or args.clin_probs_task is not None:
+            cp_root = args.clin_probs_root or args.clin_root
+            cp_task = args.clin_probs_task or args.clin_task
+            clin_p = load_clinical(seed, cp_root, args.clin_model,
+                                   args.clin_strat, task=cp_task)
+            clin = (clin.drop(columns=CP_COLS)
+                    .merge(clin_p[["Patient_ID"] + CP_COLS], on="Patient_ID", how="left"))
         prior = class_prior_from_train(clin)
         if args.detectors:
             t1 = (load_mri_detector(seed, args.mri_t1_template, "m12", "prob_class_0", "mri_cn")
@@ -856,11 +980,12 @@ def main() -> int:
             })
             continue
         for framing in args.framings:
-            tp = "bl" if framing == "BL" else "m12"
+            tp = args.mri_timepoint or ("bl" if framing == "BL" else "m12")
             mri = load_mri(seed, args.mri_csv_template, tp)
             rows, fr = evaluate_framing(framing, seed, clin, mri, prior, all_preds)
             all_metrics.extend(rows)
             all_fail.append(failure_table(framing, seed, fr))
+            all_stats.append(failure_stats(framing, seed, fr))
             te = fr[fr["split"] == "test"]
             coverage.append({
                 "framing": framing, "seed": seed,
@@ -892,13 +1017,38 @@ def main() -> int:
     preds.to_csv(out_dir / "fused_predictions.csv", index=False)
     if len(fails):
         fails.to_csv(out_dir / "failure_table.csv", index=False)
+    stats = pd.concat(all_stats, ignore_index=True) if all_stats else pd.DataFrame()
+    if len(stats):
+        stats.to_csv(out_dir / "failure_stats.csv", index=False)
+
+    # ---- per-class confusion matrices: clinical_only, mri_only, best fusion ----
+    if len(preds):
+        # best fusion = highest mean test bACC among non-reference variants.
+        fusion = summary[~summary["variant"].isin(["clinical_only", "mri_only"])]
+        best = None
+        if len(fusion):
+            br = fusion.sort_values("bacc_mean", ascending=False).iloc[0]
+            best = (br["variant"], br["missing"])
+        _tp_word = lambda c: {"bl": "baseline", "m12": "month 12"}.get(c, c)
+        clin_tp = _tp_word("m12" if "m12" in (args.clin_probs_task or args.clin_task) else "bl")
+        for framing in framings_run:
+            mri_tp = _tp_word(args.mri_timepoint or ("bl" if framing == "BL" else "m12"))
+            picks = [("clinical_only", "-", f"clinical-only [{args.clin_model}]", clin_tp),
+                     ("mri_only", "-", f"MRI-only [{args.mri_name}]", mri_tp)]
+            if best is not None:
+                picks.append((best[0], best[1], f"best fusion [{best[0]} / {best[1]}]",
+                              f"CL {clin_tp} + MRI {mri_tp}"))
+            render_confusions(preds, framing, picks,
+                              out_dir / f"confusion_{args.table_tag or framing}.png",
+                              task_label=args.task_label)
 
     # ---- rendered PNG table per framing (style of 06_render_cross_model_table) ----
     clin_label = f"{args.clin_model}/{args.clin_strat}"
     for framing in framings_run:
+        tag = args.table_tag or framing
         render_framing_png(summary, cov, framing, args.mri_name, clin_label,
-                           out_dir / f"fusion_table_{framing}.png",
-                           task_label=args.task_label)
+                           out_dir / f"fusion_table_{tag}.png",
+                           task_label=args.task_label, tp_label=args.tp_label)
 
     print("=" * 72)
     print(f"  T2 late fusion -- clinical={args.clin_model}/{args.clin_strat}  "

@@ -82,13 +82,50 @@ def derive_agreement(df, mods):
     return pd.Series(out, index=df.index)
 
 
+FILTER_BANNER = ("FILTERED / WRONG-ENRICHED COHORT — only TEST patients where >=1 modality "
+                 "is WRONG are shown (both-correct rows hidden). Do NOT read accuracy off these "
+                 "cells; see the REAL full-cohort numbers below.")
+
+
+def build_stats_footer(stats_path, seed=None):
+    """Build the 'real numbers' footer from a sibling failure_stats.csv. If seed is
+    None, pool across seeds (raw-acc = Σcorrect/Σn; bACC = mean over seeds)."""
+    if not os.path.exists(stats_path):
+        return ("(failure_stats.csv not found -- re-run 01_fuse_T2.py to emit real "
+                "full-cohort numbers.)")
+    st = pd.read_csv(stats_path)
+    if seed is not None and "seed" in st.columns:
+        st = st[st["seed"] == seed]
+    if st.empty:
+        return ""
+    lines = ["REAL performance on the FULL test cohort (all patients"
+             + ("" if seed is not None else ", pooled across seeds") + "):"]
+    for mod in ("clinical", "mri"):
+        m = st[st["modality"] == mod]
+        if m.empty:
+            continue
+        nc, n = int(m["n_correct"].sum()), int(m["n"].sum())
+        raw = nc / n if n else float("nan")
+        bacc = float(m["balanced_acc"].mean())
+        lines.append(f"  {mod:8s}: raw-acc {raw:.3f} ({nc}/{n} correct)   "
+                     f"balanced-acc {bacc:.3f}")
+    # cohort counts: one row per seed carries them; dedupe by seed.
+    cc = st.drop_duplicates("seed") if "seed" in st.columns else st.head(1)
+    n_test = int(cc["n_test"].sum())
+    n_both = int(cc["n_both_present"].sum())
+    n_hidden = int(cc["n_both_correct_hidden"].sum())
+    lines.append(f"  cohort: {n_test} TEST total, {n_both} both-present, "
+                 f"{n_hidden} both-correct (HIDDEN from this filtered view).")
+    return "\n".join(lines)
+
+
 def _cell_color(correct):
     if correct is None or (isinstance(correct, float) and np.isnan(correct)):
         return GREY
     return GREEN if bool(correct) else RED
 
 
-def render_seed_table(sub, mods, agree, title, out_path):
+def render_seed_table(sub, mods, agree, title, out_path, stats_footer=""):
     show_pred = "fused_pred" in sub.columns
     cols = ["Patient_ID", "y_true"] + [lbl for lbl, _, _ in mods] + ["agreement"]
     body, colors = [], []
@@ -111,9 +148,13 @@ def render_seed_table(sub, mods, agree, title, out_path):
     tab.auto_set_font_size(False); tab.set_fontsize(8); tab.scale(1.0, 1.25)
     for j in range(n_cols):
         tab[0, j].set_facecolor(HEAD); tab[0, j].set_text_props(weight="bold")
-    plt.title(title, pad=6, fontsize=11)
+    plt.title(title, pad=30, fontsize=11)
+    # red filtered-cohort banner directly under the title
+    ax.text(0.5, 1.005, FILTER_BANNER, transform=ax.transAxes, ha="center", va="bottom",
+            fontsize=8, color="#b00000", weight="bold", wrap=True)
     legend = ("green = modality correct    red = modality wrong    grey = modality absent\n"
-              "cell text = predicted class; rows = TEST patients in the failure table")
+              "cell text = predicted class; rows = TEST patients in the FILTERED failure table\n"
+              + (stats_footer or ""))
     ax.text(0.0, -0.04, legend, transform=ax.transAxes, ha="left", va="top",
             fontsize=8, family="monospace", linespacing=1.4)
     fig.savefig(out_path, dpi=170, bbox_inches="tight", pad_inches=0.05)
@@ -121,7 +162,7 @@ def render_seed_table(sub, mods, agree, title, out_path):
     print(f"  PNG: {out_path}")
 
 
-def render_summary(df, agree, title, out_path):
+def render_summary(df, agree, title, out_path, stats_footer=""):
     seed_col = "seed" if "seed" in df.columns else None
     patterns = sorted(agree.unique())
     rows = []
@@ -143,12 +184,14 @@ def render_summary(df, agree, title, out_path):
         tab[0, j].set_facecolor(HEAD); tab[0, j].set_text_props(weight="bold")
     for i in range(1, len(rows) + 1):
         tab[i, 0].set_text_props(weight="bold", ha="left")
-    plt.title(title, pad=6, fontsize=11)
-    ax.text(0.0, -0.06,
-            "Agreement patterns over the failure-table rows. 'clinical_only' = clinical "
-            "right where MRI wrong;\n'mri_only' = MRI right where clinical wrong "
-            "(complementary lift); 'both_wrong' = neither.",
-            transform=ax.transAxes, ha="left", va="top", fontsize=8,
+    plt.title(title, pad=30, fontsize=11)
+    ax.text(0.5, 1.01, FILTER_BANNER, transform=ax.transAxes, ha="center", va="bottom",
+            fontsize=8, color="#b00000", weight="bold", wrap=True)
+    foot = ("Agreement patterns over the FILTERED failure-table rows (both-correct hidden). "
+            "'clinical_only' = clinical\nright where MRI wrong; 'mri_only' = MRI right where "
+            "clinical wrong (complementary lift); 'both_wrong' = neither.\n\n"
+            + (stats_footer or ""))
+    ax.text(0.0, -0.06, foot, transform=ax.transAxes, ha="left", va="top", fontsize=8,
             family="monospace", linespacing=1.4)
     fig.savefig(out_path, dpi=170, bbox_inches="tight", pad_inches=0.05)
     plt.close(fig)
@@ -164,15 +207,18 @@ def render_csv(path):
     agree = derive_agreement(df, mods)
     out_dir = os.path.dirname(path)
     tag = os.path.relpath(out_dir, start=os.path.dirname(os.path.dirname(path)))
+    stats_path = os.path.join(out_dir, "failure_stats.csv")
     print(f"[{path}]  modalities: {[m[0] for m in mods]}  rows={len(df)}")
     render_summary(df, agree, f"Failure-mode agreement summary — {tag}",
-                   os.path.join(out_dir, "failure_summary.png"))
+                   os.path.join(out_dir, "failure_summary.png"),
+                   stats_footer=build_stats_footer(stats_path))
     seed_col = "seed" if "seed" in df.columns else None
     seeds = sorted(df[seed_col].unique()) if seed_col else [None]
     for s in seeds:
         sub = df[df[seed_col] == s] if seed_col else df
         render_seed_table(sub, mods, agree, f"Failure table — {tag}  (seed {s})",
-                          os.path.join(out_dir, f"failure_table_seed{s}.png"))
+                          os.path.join(out_dir, f"failure_table_seed{s}.png"),
+                          stats_footer=build_stats_footer(stats_path, seed=s))
 
 
 def main():
