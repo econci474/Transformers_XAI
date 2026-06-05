@@ -286,6 +286,18 @@ def render_split(split):
                              else enc_cell(model_id, strategy, grp))
         cell_grid.append(row_cells)
 
+    # ── CSV backup of the rendered table (mirrors the figure cells 1:1) ───────────
+    _strat_lbl = {"tabular": "tabular", "frozen": "frozen", "full_ft": "full fine-tune"}
+    _col_names = [f"{g['title']} | {h}" for g in GROUPS for h in g["headers"]]
+    _records = []
+    for r_idx, (strategy, label, model_id) in enumerate(ROW_ENTRIES):
+        rec = {"Model": label, "Strategy": _strat_lbl[strategy]}
+        rec.update(dict(zip(_col_names, cell_grid[r_idx])))
+        _records.append(rec)
+    pd.DataFrame(_records, columns=["Model", "Strategy"] + _col_names).to_csv(
+        OUT_DIR / f"combined_model_table_{split}.csv", index=False)
+    print(f"  Saved → {OUT_DIR / f'combined_model_table_{split}.csv'}")
+
     n_total_cols = sum(len(g["headers"]) for g in GROUPS)
     best_mask = [[False] * n_total_cols for _ in range(n_rows)]
     # Bold the best WITHIN each block per column: best tabular baseline AND best encoder,
