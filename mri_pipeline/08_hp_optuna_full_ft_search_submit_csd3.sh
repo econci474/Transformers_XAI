@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH -A LIO-CHARM-SL2-GPU
+#SBATCH -A COMPUTERLAB-SL2-GPU
 #SBATCH --job-name=optuna_ft
 #SBATCH --output=/home/ec474/rds/hpc-work/ADNI_MRI/optuna/slurm_logs/optuna_ft_%A_%a.log
 #SBATCH --error=/home/ec474/rds/hpc-work/ADNI_MRI/optuna/slurm_logs/optuna_ft_%A_%a.err
