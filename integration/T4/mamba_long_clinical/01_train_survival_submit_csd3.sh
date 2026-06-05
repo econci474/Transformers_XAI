@@ -26,8 +26,10 @@
 #   - git pull (integration/T4/mamba_long_clinical present); mamba-1/2 download to HF_HOME on first run.
 #   - mkdir -p ${SURV_ROOT}/logs
 #   - (optional, SODEN arm) pip install torchdiffeq into the clinical env; else B_soden is skipped.
-# Submit:  sbatch integration/T4/mamba_long_clinical/01_train_survival_submit_csd3.sh
-# Smoke one config:  add  --only A_default_mamba1_frozen --seeds 0  to the python call.
+# Submit (full grid):  sbatch integration/T4/mamba_long_clinical/01_train_survival_submit_csd3.sh
+# Extra args after the script name pass THROUGH to the python (via "$@"), e.g. re-run ONE config only:
+#   sbatch integration/T4/mamba_long_clinical/01_train_survival_submit_csd3.sh --only B_soden
+# Smoke one config/seed:  sbatch <script> --only A_default_mamba1_frozen --seeds 0
 # Pull back:  ${SURV_ROOT}/survival/   (then run 02 with --pred_root pointing at it)
 # =============================================================================
 module purge
@@ -50,6 +52,7 @@ conda run -n clinical python "${REPO}/integration/T4/mamba_long_clinical/01_trai
     --seeds 0 1 2 \
     --emb_root "${EMB_ROOT}" \
     --master   "${MASTER}" \
-    --out_dir  "${SURV_ROOT}/survival" || { echo "ERROR: training job failed (see above)."; exit 1; }
+    --out_dir  "${SURV_ROOT}/survival" \
+    "$@" || { echo "ERROR: training job failed (see above)."; exit 1; }
 echo "Finished. Predictions in ${SURV_ROOT}/survival . Next (survml env):"
 echo "  conda run -n survml python ${REPO}/integration/T4/mamba_long_clinical/02_survival_comparison.py --pred_root ${SURV_ROOT}/survival"
