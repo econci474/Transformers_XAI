@@ -244,7 +244,11 @@ def parse_mean(s):
         return float("-inf")
 
 
-def render_split(split):
+def render_split(split, groups=None, out_name=None):
+    """Render one split. groups=None → the full battery; pass a GROUPS_BASE subset for a focused
+    sub-table. out_name=None → 'combined_model_table_{split}'; else use the given stem verbatim.
+    Style/title/footnotes are IDENTICAL to the full table (only the task columns differ)."""
+    stem = out_name if out_name is not None else f"combined_model_table_{split}"
     bl_split = bl_df[bl_df["Split"] == split]
     enc_summary = ENC_SUMMARY[split]
     s0 = pd.read_csv(SPLIT_DIR / "seed_0" / f"{split}.csv", low_memory=False)
@@ -254,7 +258,7 @@ def render_split(split):
         s0_t4 = pd.read_csv(_t4f, low_memory=False)
 
     GROUPS = []
-    for g in GROUPS_BASE:
+    for g in (groups if groups is not None else GROUPS_BASE):
         g2 = dict(g)
         if g["enc_task"] == "T4_conv_horizon":
             g2["subtitle"] = t4_subtitle(s0_t4)
@@ -295,8 +299,8 @@ def render_split(split):
         rec.update(dict(zip(_col_names, cell_grid[r_idx])))
         _records.append(rec)
     pd.DataFrame(_records, columns=["Model", "Strategy"] + _col_names).to_csv(
-        OUT_DIR / f"combined_model_table_{split}.csv", index=False)
-    print(f"  Saved → {OUT_DIR / f'combined_model_table_{split}.csv'}")
+        OUT_DIR / f"{stem}.csv", index=False)
+    print(f"  Saved → {OUT_DIR / f'{stem}.csv'}")
 
     n_total_cols = sum(len(g["headers"]) for g in GROUPS)
     best_mask = [[False] * n_total_cols for _ in range(n_rows)]
@@ -426,15 +430,32 @@ def render_split(split):
         ax.text(LEFT, y_fn, line, ha="left", va="top", fontsize=6.3, color="#222222")
         y_fn -= 0.16
 
-    plt.tight_layout(pad=0.1)
-    fig.savefig(OUT_DIR / f"combined_model_table_{split}.pdf", bbox_inches="tight", dpi=300)
-    fig.savefig(OUT_DIR / f"combined_model_table_{split}.png", bbox_inches="tight", dpi=300)
-    if split == "test":   # back-compat canonical name
+    # NB no plt.tight_layout(): for narrow sub-tables the full-width title/footnotes overflow the
+    # figure and tight_layout would compress the axes (collapsing the columns). bbox_inches="tight"
+    # at save time crops to content correctly without squashing the table.
+    fig.savefig(OUT_DIR / f"{stem}.pdf", bbox_inches="tight", dpi=300)
+    fig.savefig(OUT_DIR / f"{stem}.png", bbox_inches="tight", dpi=300)
+    if out_name is None and split == "test":   # back-compat canonical name (full table only)
         fig.savefig(OUT_DIR / "combined_model_table.png", bbox_inches="tight", dpi=300)
     plt.close()
-    print(f"  Saved → {OUT_DIR / f'combined_model_table_{split}.png'}")
+    print(f"  Saved → {OUT_DIR / f'{stem}.png'}")
 
 
 for _split in ("test", "val"):
     print(f"[{_split}]")
     render_split(_split)
+
+# ── Focused sub-tables (same style, fewer task columns) → table_{split}_{taskcodes} ──
+# Each tuple: (task-code suffix, list of GROUPS_BASE titles to include).
+SUBTABLES = [
+    ("t1t1bt2",    ["CN vs MCI+AD", "CN+MCI vs AD", "CN / MCI / AD (3-class)"]),
+    ("t1d",        ["pMCI vs sMCI"]),
+    ("t1e",        ["sCN vs pCN"]),
+    ("t3at3bt3d",  ["AD conversion ≤ 3 yrs", "AD conversion ≤ 5 yrs", "AD conversion ≤ 7 yrs"]),
+    ("t4",         ["AD horizon (3-class)"]),
+]
+for _suffix, _titles in SUBTABLES:
+    _grps = [g for g in GROUPS_BASE if g["title"] in _titles]
+    for _split in ("test", "val"):
+        render_split(_split, groups=_grps, out_name=f"table_{_split}_{_suffix}")
+    print(f"[subtable] table_{{val,test}}_{_suffix}  → png/pdf/csv")
