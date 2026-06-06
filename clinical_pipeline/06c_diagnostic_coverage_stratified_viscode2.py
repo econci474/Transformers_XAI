@@ -307,7 +307,8 @@ y_sub_top = y_cursor
 y_cursor -= SUBTITLE_H
 n_subjects = len(snp_pids)
 _subtitle = (f"SNP+MRI cohort, n={n_subjects} subjects. Sessions on VISCODE_2.\n"
-             f"80/10/10 train/val/test splits (seeds 0, 1, 2).") if CLEANED else (
+             f"80/10/10 train/val/test splits (seeds 0, 1, 2). "
+             f"Diagnosis = per-visit diagnosis.") if CLEANED else (
              f"SNP+MRI cohort, n={n_subjects} subjects. Sessions on VISCODE_2.\n"
              f"80/10/10 train/val/test splits (seeds 0, 1, 2), "
              f"stratified by Label_bl_multi. "
