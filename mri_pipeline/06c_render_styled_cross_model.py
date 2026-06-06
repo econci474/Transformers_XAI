@@ -172,7 +172,8 @@ TEST_METRICS = [("balanced_acc", "Bal.Acc"), ("auc", "AUC"), ("f1", "F1")]
 # complete without implying a measured result. Skipped if a real row already
 # exists for that (model, task). TEMPORARY — drop once the run completes.
 PLACEHOLDER_ROWS = [
-    {"model": "ViT-Base", "variant": "baseline", "augment": "random", "task": "T1d_binary"},
+    # ViT-Base T1d trained on Colab (2026-06-06); real row now supersedes the
+    # former chance-level placeholder. Keep the mechanism for future gaps.
 ]
 PLACEHOLDER_FILL = {
     "val":  {"val_bacc_mean": 0.5, "val_bacc_std": 0.0},
