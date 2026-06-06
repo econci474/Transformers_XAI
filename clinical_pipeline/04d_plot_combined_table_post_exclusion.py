@@ -535,7 +535,7 @@ SUBTABLES = [
 ]
 # Clean sub-tables: trimmed 3-line title, NO footnotes, NO HP superscripts
 # (HPs are factored out to the single shared table_tall_hp reference).
-CLEAN_SUFFIXES = {"t1d", "t1t1bt2"}
+CLEAN_SUFFIXES = {"t1d", "t1e", "t1t1bt2"}
 # Column-header task-code prefixes (clean tables show e.g. "T1a: CN vs MCI+AD").
 TASK_CODE = {
     "CN vs MCI+AD": "T1a", "CN+MCI vs AD": "T1b", "CN / MCI / AD (3-class)": "T2",
