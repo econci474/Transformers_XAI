@@ -50,9 +50,14 @@ _ap.add_argument("--post-exclusion", action="store_true",
                   help="Apply diagnostic-reversion + corrupted-MRI exclusion, "
                        "read from VISCODE_2_aligned_extended_post_exclusion/, "
                        "and suffix output filenames with _post_exclusion.")
+_ap.add_argument("--cleaned", action="store_true",
+                  help="Polished copy: trimmed subtitle, NO footnote, short group "
+                       "names → conversion_group_coverage_viscode2_extension_cleaned.*")
 _args = _ap.parse_args()
 POST_EXCLUSION = bool(_args.post_exclusion)
+CLEANED        = bool(_args.cleaned)
 SUFFIX         = "_post_exclusion" if POST_EXCLUSION else ""
+STEM           = "conversion_group_coverage_viscode2_extension" + ("_cleaned" if CLEANED else "") + SUFFIX
 
 CONV_TSV      = Path(r"D:\ADNI_SNP_Omni2.5M_20140220\conversion_labels\conversion_labels.tsv")
 # In post-exclusion mode, read from the extended_post_exclusion sister master.
@@ -203,6 +208,17 @@ GROUP_PRETTY = {
     "sCN":        "sCN  (stable CN)",
     "Excluded":   "Excluded  (reversions, non-sustained)",
 }
+if CLEANED:
+    GROUP_PRETTY = {
+        "AD_bl":      "AD at baseline visit",
+        "AD_final":   "AD at final visit",
+        "pMCI":       "pMCI",
+        "sMCI":       "sMCI",
+        "pCN_to_AD":  "pCN to AD",
+        "pCN_to_MCI": "pCN to MCI",
+        "sCN":        "sCN",
+        "Excluded":   "Reversions (excluded)",
+    }
 
 rows = []
 for g in GROUPS:
@@ -234,7 +250,8 @@ for g in GROUPS:
 # TOTAL row (over the full SNP+MRI cohort) — defining label is mixed → '—'
 all_pids = snp_pids
 rows.append({
-    "group": "TOTAL", "label": "TOTAL (SNP+MRI cohort)", "defining_label": None,
+    "group": "TOTAL", "label": ("TOTAL" if CLEANED else "TOTAL (SNP+MRI cohort)"),
+    "defining_label": None,
     "SNP_subj":      len(all_pids),       "SNP_rec":      len(all_pids),
     "MRI_subj":      len(all_pids & mri_pids),
     "MRI_rec":       int(mri_scans_per_pid.reindex(list(all_pids))
@@ -247,10 +264,8 @@ rows.append({
 })
 
 table_df = pd.DataFrame(rows)
-table_df.to_csv(OUT_DIR / f"conversion_group_coverage_viscode2_extension{SUFFIX}.csv",
-                 index=False)
-print(f"\nSaved CSV → "
-      f"{OUT_DIR / ('conversion_group_coverage_viscode2_extension' + SUFFIX + '.csv')}")
+table_df.to_csv(OUT_DIR / f"{STEM}.csv", index=False)
+print(f"\nSaved CSV → {OUT_DIR / (STEM + '.csv')}")
 print("\n" + table_df.to_string(index=False))
 
 # ── Identify the sMCI subject(s) with 0 matched MRI scans ──────────────
@@ -286,7 +301,7 @@ def fmt(n_subj: int, n_rec: int, show_rec: bool = True,
         return f"{n_subj:,}"
     base = f"{n_subj:,} ({n_rec:,})"
     if defining_label is None or n_lab < 0:
-        return base + "  [—]"
+        return base if CLEANED else base + "  [—]"
     pct = (100.0 * n_lab / n_rec) if n_rec > 0 else 0.0
     return f"{base}  [{n_lab:,} {defining_label}, {pct:.0f}%]"
 
@@ -298,7 +313,8 @@ LEFT, RIGHT_PAD = 0.25, 0.25
 
 TITLE_H, HEADER_H = 0.55, 0.40
 ROW_H, TOTAL_H = 0.36, 0.44
-TOP_PAD, BOT_PAD, FOOTNOTE_H = 0.12, 0.12, 1.40
+TOP_PAD, BOT_PAD = 0.12, 0.12
+FOOTNOTE_H = 0.10 if CLEANED else 1.40
 
 fig_w = LEFT + sum(COL_W) + RIGHT_PAD
 _RIGHT_FOR_WRAP = LEFT + sum(COL_W)
@@ -307,6 +323,12 @@ _RIGHT_FOR_WRAP = LEFT + sum(COL_W)
 #    line count. This keeps the subheading text strictly INSIDE the table's
 #    bounding rectangle (was overflowing on long footnotes previously).
 sub_raw = (
+    "N_subjects (n_records) [n_label, pct%]. "
+    "n_records = total MRI scans (matched VISCODE2) or clinical visits "
+    "across all timepoints summed across the subjects in that group. "
+    "Square brackets [n_label, pct%] = subset of those records that carry "
+    "the group's defining diagnosis label at the visit."
+) if CLEANED else (
     "Cell format: N_subjects (n_records) [n_label, pct%]. "
     "n_records = total MRI scans (matched VISCODE2) or clinical visits "
     "across all timepoints summed across the subjects in that group. "
@@ -318,8 +340,10 @@ sub_raw = (
     "are at AD-labelled visits (100%) → 36 (60) [60 AD, 100%]. "
     "SNP is collected once at baseline → N_subj = N_records (single column)."
 )
-sub_wrap_chars = int((_RIGHT_FOR_WRAP - LEFT) * 16)
+sub_wrap_chars = int((_RIGHT_FOR_WRAP - LEFT) * 13)   # tighter so wrapped lines stay inside the box
 sub_wrapped    = "\n".join(textwrap.wrap(sub_raw, width=sub_wrap_chars))
+if CLEANED:                                            # asterisk note on its own line
+    sub_wrapped += "\n* one subject with corrupted MRI file."
 _sub_n_lines   = max(1, sub_wrapped.count("\n") + 1)
 # fontsize=8.4 with linespacing=1.4 → ~0.165 in/line in fig coords
 SUBTITLE_H = max(0.50, _sub_n_lines * 0.165 + 0.22)
@@ -348,9 +372,10 @@ def hline(yv, lw=1.0, ls="-"):
 
 # Title
 y_title_top = y; y -= TITLE_H
-ax.text((LEFT + RIGHT) / 2, (y_title_top + y) / 2,
-        "Conversion-group Subject + Record Counts by Modality  "
-        "(VISCODE2-aligned)",
+_title = ("Conversion-group Subject and Record Counts by Modality  (VISCODE2-aligned)"
+          if CLEANED else
+          "Conversion-group Subject + Record Counts by Modality  (VISCODE2-aligned)")
+ax.text((LEFT + RIGHT) / 2, (y_title_top + y) / 2, _title,
         ha="center", va="center", fontsize=11.5, fontweight="bold")
 # Subtitle (already wrapped above; SUBTITLE_H sized to actual line count
 # so the text stays INSIDE the table's bounding rectangle)
@@ -393,7 +418,11 @@ for i, row in enumerate(rows):
     mri_txt = fmt(row["MRI_subj"], row["MRI_rec"], True,
                    n_lab=row["MRI_lab"], defining_label=dl)
     if row["group"] == "sMCI" and sMCI_missing_info:
-        mri_txt += " *"
+        if CLEANED:        # asterisk on the subject count: 202* (see subtitle note)
+            mri_txt = mri_txt.replace(f"{row['MRI_subj']:,} (",
+                                      f"{row['MRI_subj']:,}* (", 1)
+        else:
+            mri_txt += " *"
     ax.text(col_cx[2], y_mid, mri_txt,
             ha="center", va="center", fontsize=fs, fontweight=fw, color="black")
     # Clinical: subj (records) [n_label, pct%]
@@ -417,7 +446,7 @@ rect = plt.Rectangle((LEFT, BOTTOM), RIGHT - LEFT, y_title_top - BOTTOM,
                       linewidth=1.5, zorder=5)
 ax.add_patch(rect)
 
-# Footnote
+# Footnote (omitted entirely in the cleaned/polished copy)
 foot_y = BOTTOM - 0.15
 miss_lines = ""
 if sMCI_missing_info:
@@ -457,17 +486,15 @@ footnote_raw = (
     "(parens = total non-sc visits across all timepoints, summed across "
     "the subjects in that group)." + miss_lines
 )
-foot_wrap_chars = int((RIGHT - LEFT) * 13)
-footnote_wrapped = "\n".join(textwrap.wrap(footnote_raw, width=foot_wrap_chars))
-ax.text(LEFT, foot_y, footnote_wrapped,
-         ha="left", va="top", fontsize=7.4, color="black")
+if not CLEANED:
+    foot_wrap_chars = int((RIGHT - LEFT) * 13)
+    footnote_wrapped = "\n".join(textwrap.wrap(footnote_raw, width=foot_wrap_chars))
+    ax.text(LEFT, foot_y, footnote_wrapped,
+            ha="left", va="top", fontsize=7.4, color="black")
 
 plt.tight_layout(pad=0.1)
-fig.savefig(OUT_DIR / f"conversion_group_coverage_viscode2_extension{SUFFIX}.png",
-             bbox_inches="tight", dpi=300)
-fig.savefig(OUT_DIR / f"conversion_group_coverage_viscode2_extension{SUFFIX}.pdf",
-             bbox_inches="tight", dpi=300)
-print(f"\nSaved PNG → "
-      f"{OUT_DIR / ('conversion_group_coverage_viscode2_extension' + SUFFIX + '.png')}")
+fig.savefig(OUT_DIR / f"{STEM}.png", bbox_inches="tight", dpi=300)
+fig.savefig(OUT_DIR / f"{STEM}.pdf", bbox_inches="tight", dpi=300)
+print(f"\nSaved PNG → {OUT_DIR / (STEM + '.png')}")
 plt.close()
 print("Done.")
