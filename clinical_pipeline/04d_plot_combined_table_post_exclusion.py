@@ -386,9 +386,14 @@ def render_split(split, groups=None, out_name=None, clean=False):
 
     split_word = {"val": "Validation", "test": "Test"}[split]
     if clean:
+        # T4 uses a SEPARATE converter-cohort split tree (baseline_T4), not the
+        # baseline-diagnosis-stratified split — keep the description truthful.
+        _split_line = ("train/val/test, 80/10/10, converter-cohort split (pMCI + pCN→AD)"
+                       if _has_t4 else
+                       "train/val/test, 80/10/10, stratified splits on baseline diagnosis")
         _title = (f"Clinical Models: {split_word} Performance at Baseline\n"
                   f"(mean ± std, seeds 0/1/2)\n"
-                  f"train/val/test, 80/10/10, stratified splits on baseline diagnosis")
+                  f"{_split_line}")
     else:
         _title = (f"Clinical Models (No CDR, post-exclusion): {split_word} Performance at Baseline   "
                   f"(mean ± std, seeds 0/1/2, train-fit / held-out {split}, 80/10/10 stratified split)")
@@ -535,7 +540,7 @@ SUBTABLES = [
 ]
 # Clean sub-tables: trimmed 3-line title, NO footnotes, NO HP superscripts
 # (HPs are factored out to the single shared table_tall_hp reference).
-CLEAN_SUFFIXES = {"t1d", "t1e", "t1t1bt2"}
+CLEAN_SUFFIXES = {"t1d", "t1e", "t1t1bt2", "t3at3bt3d", "t4"}
 # Column-header task-code prefixes (clean tables show e.g. "T1a: CN vs MCI+AD").
 TASK_CODE = {
     "CN vs MCI+AD": "T1a", "CN+MCI vs AD": "T1b", "CN / MCI / AD (3-class)": "T2",
