@@ -115,6 +115,35 @@ ENC_SUMMARY = {s: _build_enc_summary(enc_rows[s]) for s in ("val", "test")}
 print(f"  Encoder metric files: val={len(enc_rows['val'])}, test={len(enc_rows['test'])}"
       + (f"  ({n_skipped} skipped)" if n_skipped else ""))
 
+# ── Per-seed values, for the best-LLM-vs-best-baseline significance stars ──────
+# Encoder per-seed comes straight from enc_rows; baselines from the seed-level CSVs
+# that 02h/02m wrote alongside the aggregated tables.
+try:
+    from scipy import stats as _scipy_stats
+except Exception:                                  # pragma: no cover
+    _scipy_stats = None
+    print("  [WARN] scipy unavailable — significance stars disabled.")
+
+ENC_PERSEED = {s: (pd.DataFrame(enc_rows[s]) if enc_rows[s] else pd.DataFrame())
+               for s in ("val", "test")}
+
+
+def _load_bl_perseed():
+    frames = []
+    for p in (OUT_DIR / "results_per_seed.csv",
+              BASE / "outputs" / "baseline_no_cdr_post_exclusion" / "results_per_seed_T4.csv"):
+        if p.exists():
+            frames.append(pd.read_csv(p))
+    if not frames:
+        return pd.DataFrame()
+    df = pd.concat(frames, ignore_index=True)
+    if "Split" not in df.columns:
+        df["Split"] = "test"
+    return df
+
+
+BL_PERSEED = _load_bl_perseed()
+
 # ── Metric column maps ─────────────────────────────────────────────────────────
 # Accuracy omitted — uninformative on the imbalanced cohort; report balanced accuracy.
 BINARY_METRICS = (["BalancedAcc", "AUC-ROC", "F1"],
@@ -245,6 +274,64 @@ def parse_mean(s):
         return float("-inf")
 
 
+def _best_perseed_enc(split, enc_task, metric):
+    """Per-seed values {seed: val} of the best-MEAN encoder (across frozen+full_ft) for a metric."""
+    df = ENC_PERSEED.get(split)
+    if df is None or df.empty or metric not in df.columns:
+        return None
+    sub = df[df["task"] == enc_task][["model", "strategy", "seed", metric]].copy()
+    if sub.empty:
+        return None
+    sub[metric] = pd.to_numeric(sub[metric], errors="coerce")
+    g = sub.groupby(["model", "strategy"])[metric].mean()
+    if g.dropna().empty:
+        return None
+    bm, bs = g.idxmax()
+    b = sub[(sub.model == bm) & (sub.strategy == bs)].dropna(subset=[metric])
+    return dict(zip(b["seed"].astype(int), b[metric]))
+
+
+def _best_perseed_bl(split, bl_task, metric):
+    """Per-seed values {seed: val} of the best-MEAN tabular baseline for a metric."""
+    df = BL_PERSEED
+    if df is None or df.empty or metric not in df.columns:
+        return None
+    sub = df[(df["Task"] == bl_task) & (df["Split"] == split)].copy()
+    if sub.empty:
+        return None
+    sub[metric] = pd.to_numeric(sub[metric], errors="coerce")
+    g = sub.groupby("Model")[metric].mean()
+    if g.dropna().empty:
+        return None
+    b = sub[sub.Model == g.idxmax()].dropna(subset=[metric])
+    return dict(zip(b["Seed"].astype(int), b[metric]))
+
+
+def sig_stars(split, grp, ci):
+    """Two-sided paired t-test (best-mean LLM vs best-mean baseline) across the 3 seeds, for
+    column ci. Returns (stars, winner) — winner in {'enc','bl'} is the higher-mean family; the
+    stars (''/'*'/'**'/'***' at p<0.05/0.01/0.001) attach to that winner's cell."""
+    if _scipy_stats is None:
+        return ("", None)
+    enc = _best_perseed_enc(split, grp["enc_task"], grp["enc_metrics"][ci])
+    bl = _best_perseed_bl(split, grp["bl_task"], grp["bl_metrics"][ci])
+    if not enc or not bl:
+        return ("", None)
+    seeds = sorted(set(enc) & set(bl))
+    if len(seeds) < 3:
+        return ("", None)
+    a = np.array([enc[s] for s in seeds], float)   # best LLM
+    b = np.array([bl[s] for s in seeds], float)     # best baseline
+    if np.any(np.isnan(a)) or np.any(np.isnan(b)) or np.allclose(a, b):
+        return ("", None)
+    t, p = _scipy_stats.ttest_rel(a, b)             # two-sided
+    if not np.isfinite(p):
+        return ("", None)
+    star = "***" if p < 0.001 else "**" if p < 0.01 else "*" if p < 0.05 else ""
+    winner = "enc" if a.mean() >= b.mean() else "bl"
+    return (star, winner)
+
+
 def render_split(split, groups=None, out_name=None, clean=False):
     """Render one split. groups=None → the full battery; pass a GROUPS_BASE subset for a focused
     sub-table. out_name=None → 'combined_model_table_{split}'; else use the given stem verbatim.
@@ -324,8 +411,20 @@ def render_split(split, groups=None, out_name=None, clean=False):
                 if v == best_val:
                     best_mask[r][col_idx] = True
 
+    # Significance stars: best-LLM vs best-baseline, ON BALANCED ACCURACY ONLY (the primary
+    # metric). Other metric columns are left unstarred. (stars, winning-family) per column.
+    stars_by_col = []
+    for grp in GROUPS:
+        for ci in range(len(grp["headers"])):
+            stars_by_col.append(sig_stars(split, grp, ci)
+                                if grp["enc_metrics"][ci] == "balanced_acc" else ("", None))
+
     # ── Sizing ──────────────────────────────────────────────────────────────
-    COL_W, ROW_H, ROW_H_SUB, MODEL_COL_W, STRAT_COL_W = 1.40, 0.32, 0.22, 1.55, 0.95
+    # Widen the metric columns a touch when a '***' star is present so it doesn't
+    # crowd the value against the column divider (e.g. T1e Bal.Acc).
+    _has_triple = any(s == "***" for s, _ in stars_by_col)
+    COL_W, ROW_H, ROW_H_SUB, MODEL_COL_W, STRAT_COL_W = (
+        1.54 if _has_triple else 1.40), 0.32, 0.22, 1.55, 0.95
     # the AD-horizon (T4) footnote only applies to tables that actually show the T4 column
     _has_t4 = any(g["enc_task"] == "T4_conv_horizon" for g in GROUPS)
     _fn = FOOTNOTES if _has_t4 else [x for x in FOOTNOTES if not x.strip().startswith("AD horizon (T4)")]
@@ -437,7 +536,14 @@ def render_split(split, groups=None, out_name=None, clean=False):
         col_cursor = 2
         for ci, val in enumerate(cell_grid[r_idx]):
             fw = "bold" if best_mask[r_idx][ci] else "normal"
-            ax.text(col_cx[col_cursor], row_mid(row_i), val,
+            disp = val
+            # Attach the significance stars to the WINNING family's best cell in this column.
+            star, winner = stars_by_col[ci]
+            if star and best_mask[r_idx][ci] and (
+                    (winner == "enc" and r_idx in encoder_rows) or
+                    (winner == "bl" and r_idx in baseline_rows)):
+                disp = f"{val}{star}"
+            ax.text(col_cx[col_cursor], row_mid(row_i), disp,
                     ha="center", va="center", fontsize=7.1, color="black", fontweight=fw)
             col_cursor += 1
 
