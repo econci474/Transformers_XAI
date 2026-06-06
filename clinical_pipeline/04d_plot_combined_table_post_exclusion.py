@@ -174,7 +174,7 @@ GROUPS_BASE = [
     grp_binary("AD conversion ≤ 7 yrs", "Conversion to AD within 7 years", "T3d_conv7y"),
     grp_binary("AD conversion ≤ 10 yrs", "Conversion to AD within 10 years", "T3c_conv10y"),
     # T4 — isolated converter-cohort task (3-class horizon); tabular baseline via 02m.
-    {"title": "AD horizon (3-class)", "bl_task": "AD horizon (3-class): pMCI + pCN_to_AD",
+    {"title": "AD conversion window (3-class)", "bl_task": "AD horizon (3-class): pMCI + pCN_to_AD",
      "enc_task": "T4_conv_horizon",
      "bl_metrics": MULTI_METRICS[0], "enc_metrics": MULTI_METRICS[1], "headers": MULTI_METRICS[2]},
 ]
@@ -485,13 +485,14 @@ def render_split(split, groups=None, out_name=None, clean=False):
 
     split_word = {"val": "Validation", "test": "Test"}[split]
     if clean:
-        # T4 uses a SEPARATE converter-cohort split tree (baseline_T4), not the
-        # baseline-diagnosis-stratified split — keep the description truthful.
-        _split_line = ("train/val/test, 80/10/10, converter-cohort split (pMCI + pCN→AD)"
+        # 3rd line is the stratification descriptor. T4 uses a SEPARATE split tree
+        # (baseline_T4): cohort = converters (pMCI + pCN→AD), stratified on the
+        # conversion window (Label_T4) — NOT on cohort membership or baseline diagnosis.
+        _split_line = ("cohort = pMCI + pCN→AD, stratified on conversion window"
                        if _has_t4 else
-                       "train/val/test, 80/10/10, stratified splits on baseline diagnosis")
+                       "stratified splits on baseline diagnosis")
         _title = (f"Clinical Models: {split_word} Performance at Baseline\n"
-                  f"(mean ± std, seeds 0/1/2)\n"
+                  f"(mean ± std, seeds 0/1/2), train/val/test, 80/10/10\n"
                   f"{_split_line}")
     else:
         _title = (f"Clinical Models (No CDR, post-exclusion): {split_word} Performance at Baseline   "
@@ -642,7 +643,7 @@ SUBTABLES = [
     ("t1d",        ["sMCI vs pMCI"]),
     ("t1e",        ["sCN vs pCN"]),
     ("t3at3bt3d",  ["AD conversion ≤ 3 yrs", "AD conversion ≤ 5 yrs", "AD conversion ≤ 7 yrs"]),
-    ("t4",         ["AD horizon (3-class)"]),
+    ("t4",         ["AD conversion window (3-class)"]),
 ]
 # Clean sub-tables: trimmed 3-line title, NO footnotes, NO HP superscripts
 # (HPs are factored out to the single shared table_tall_hp reference).
@@ -653,7 +654,7 @@ TASK_CODE = {
     "sCN vs prog.+AD": "T1c", "sMCI vs pMCI": "T1d", "sCN vs pCN": "T1e",
     "AD conversion ≤ 3 yrs": "T3a", "AD conversion ≤ 5 yrs": "T3b",
     "AD conversion ≤ 7 yrs": "T3d", "AD conversion ≤ 10 yrs": "T3c",
-    "AD horizon (3-class)": "T4",
+    "AD conversion window (3-class)": "T4",
 }
 for _suffix, _titles in SUBTABLES:
     _grps = [g for g in GROUPS_BASE if g["title"] in _titles]
