@@ -137,6 +137,44 @@ def _is_degenerate(diag: dict) -> bool:
     return any(a[:, j].sum() == 0 for j in range(a.shape[0]))
 
 
+def _read_val_metrics(d: dict, run_dir: str, best_epoch) -> dict:
+    """Validation AUC/F1 at the best (early-stop) epoch.
+
+    Two sources, in order of preference:
+      1. An explicit `val_metrics` block in metrics.json — written by the
+         `--val_test` checkpoint-recompute mode for trainers that never logged
+         val AUC/F1 during training (BrainMVP / AG-MS3D / 3D-CNN).
+      2. train_log.csv at `config.best_epoch` (1-based, matches the `epoch`
+         column) — the per-epoch log the ViT / BrainDINO / cached-head trainers
+         write (ViT/BrainDINO carry val_auc+val_f1; cached-head carries val_auc
+         only, so val_f1 stays None there until Part B re-runs it).
+    Returns {"val_auc": float|None, "val_f1": float|None}."""
+    out = {"val_auc": None, "val_f1": None}
+    if best_epoch is not None:
+        log = os.path.join(run_dir, "train_log.csv")
+        if os.path.exists(log):
+            try:
+                tl = pd.read_csv(log)
+                if "epoch" in tl.columns:
+                    row = tl[tl["epoch"] == best_epoch]
+                    if not row.empty:
+                        r0 = row.iloc[0]
+                        for col in ("val_auc", "val_f1"):
+                            if col in tl.columns and pd.notna(r0[col]):
+                                out[col] = float(r0[col])
+            except Exception:
+                pass
+    vm = d.get("val_metrics") or {}
+    if vm:
+        a = vm.get("auc", vm.get("auc_roc", vm.get("auc_roc_ovr")))
+        f = vm.get("f1", vm.get("macro_f1"))
+        if a is not None:
+            out["val_auc"] = float(a)
+        if f is not None:
+            out["val_f1"] = float(f)
+    return out
+
+
 def read_run(path: str, model: str) -> dict:
     """Parse one metrics.json into a flat record (defensive — schemas vary)."""
     with open(path) as f:
@@ -144,6 +182,7 @@ def read_run(path: str, model: str) -> dict:
     cfg = d.get("config", {})
     tm = d.get("test_metrics", {}) or {}
     tms = d.get("test_metrics_subject", {}) or {}
+    val_xtra = _read_val_metrics(d, os.path.dirname(path), cfg.get("best_epoch"))
     return {
         "model":    model,
         # ViT/BrainMVP report `strategy`; the CNN reports `model_kind`.
@@ -164,6 +203,9 @@ def read_run(path: str, model: str) -> dict:
         # head sweeps (which produce many HP-leaves per task/seed). For
         # single-HP runs this is the same as best across training.
         "best_val_bacc": cfg.get("best_val_balanced_acc"),
+        # Val AUC/F1 at the best epoch (train_log.csv or a val_metrics block).
+        "val_auc":      val_xtra["val_auc"],
+        "val_f1":       val_xtra["val_f1"],
         "path":         path,
     }
 

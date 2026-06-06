@@ -354,6 +354,13 @@ def _summarise(df):
         v = pd.to_numeric(sub["best_val_bacc"], errors="coerce").dropna().to_numpy()
         rec["val_bacc_mean"] = float(v.mean()) if len(v) else None
         rec["val_bacc_std"]  = float(v.std())  if len(v) else None
+        # Val AUC/F1 at the best epoch (read_run pulls these from train_log.csv
+        # or a val_metrics block). Missing for trainers that never logged them
+        # (BrainMVP/AG-MS3D/3D-CNN) and val_f1 for cached-head -> None -> "—".
+        for vmetric in ["val_auc", "val_f1"]:
+            v = pd.to_numeric(sub.get(vmetric), errors="coerce").dropna().to_numpy()
+            rec[f"{vmetric}_mean"] = float(v.mean()) if len(v) else None
+            rec[f"{vmetric}_std"]  = float(v.std())  if len(v) else None
         summ.append(rec)
     return pd.DataFrame(summ)
 
@@ -719,7 +726,9 @@ def main():
     # Persist the val long-form CSV too (previously only the test CSV was written,
     # so cross_model_table_val.csv kept getting lost). 06b widens both to bACC/AUC/F1.
     _val_cols = ["model", "variant", "augment", "task", "n_seeds", "n_degenerate",
-                 "val_bacc_mean", "val_bacc_std"]
+                 "val_bacc_mean", "val_bacc_std",
+                 "val_auc_mean", "val_auc_std",
+                 "val_f1_mean", "val_f1_std"]
     summ_df[_val_cols].to_csv(os.path.join(args.out, "cross_model_table_val.csv"),
                               index=False, float_format="%.4f")
     print(f"  CSV (val) : {os.path.join(args.out, 'cross_model_table_val.csv')}")
