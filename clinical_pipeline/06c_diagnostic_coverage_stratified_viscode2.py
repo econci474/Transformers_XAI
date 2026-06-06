@@ -258,7 +258,7 @@ n_visit_rows = sum(1 for t in display_data if t[0] == "visit_header")
 n_seed_rows  = sum(1 for t in display_data if t[0] == "seed_row")
 
 TITLE_H    = 0.70
-SUBTITLE_H = 0.50
+SUBTITLE_H = 0.68 if CLEANED else 0.50
 HROW1_H    = 0.32
 HROW2_H    = 0.28
 TOP_PAD    = 0.12
@@ -308,7 +308,9 @@ y_cursor -= SUBTITLE_H
 n_subjects = len(snp_pids)
 _subtitle = (f"SNP+MRI cohort, n={n_subjects} subjects. Sessions on VISCODE_2.\n"
              f"80/10/10 train/val/test splits (seeds 0, 1, 2). "
-             f"Diagnosis = per-visit diagnosis.") if CLEANED else (
+             f"Diagnosis = per-visit diagnosis.\n"
+             f"MRI N (%) = subjects with a matched MRI scan as a % of "
+             f"clinical visits at that session.") if CLEANED else (
              f"SNP+MRI cohort, n={n_subjects} subjects. Sessions on VISCODE_2.\n"
              f"80/10/10 train/val/test splits (seeds 0, 1, 2), "
              f"stratified by Label_bl_multi. "

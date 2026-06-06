@@ -87,6 +87,21 @@ GROUPS = [
     ("Excluded",               "Reversions  (all reversions, no double counting)"),
 ]
 
+# Cleaned copy: non-overlapping partition (drops the composite overlap rows
+# ever_conversion_AD / ad_cases / ever_conversion_MCI_AD). pCN_to_MCI_only =
+# baseline-CN -> MCI but NOT -> AD (= CN_to_MCI - CN_to_AD), so the CN->AD cases
+# are not double-counted with the pCN->AD row. Sums to 616.
+CLEANED_GROUPS = [
+    ("full_cohort",      "Full Cohort"),
+    ("AD_bl",            "AD at baseline visit"),
+    ("pMCI",             "progressive MCI (pMCI)"),
+    ("stable_MCI",       "stable MCI (sMCI)"),
+    ("CN_to_AD",         "progressive CN (pCN, to AD)"),
+    ("pCN_to_MCI_only",  "progressive CN (pCN, to MCI)"),
+    ("stable_CN",        "stable CN (sCN)"),
+    ("Excluded",         "Reversions (excluded)"),
+]
+
 
 def _demog(df: pd.DataFrame) -> pd.DataFrame:
     d = df.copy()
@@ -110,7 +125,7 @@ def _summ(g: pd.DataFrame) -> dict:
     n = len(g)
     if n == 0:
         return {"N": 0, "age": "", "F": "", "e2": "", "e3": "", "e4": "",
-                "e4c": ""}
+                "e2c": "", "e4c": ""}
     age = pd.to_numeric(g["age"], errors="coerce").dropna()
     fem = pd.to_numeric(g["female"], errors="coerce")
     a2 = pd.to_numeric(g["apoe2"], errors="coerce")
@@ -123,13 +138,17 @@ def _summ(g: pd.DataFrame) -> dict:
         "e2": f"{a2.mean():.2f}" if a2.notna().any() else "",
         "e3": f"{a3.mean():.2f}" if a3.notna().any() else "",
         "e4": f"{a4.mean():.2f}" if a4.notna().any() else "",
+        "e2c": f"{100*(a2 >= 1).mean():.0f}%" if a2.notna().any() else "",
         "e4c": f"{100*(a4 >= 1).mean():.0f}%" if a4.notna().any() else "",
     }
 
 
-def _cell(s: dict) -> str:
+def _cell(s: dict, cleaned: bool = False) -> str:
     if s["N"] == 0:
         return "—"
+    if cleaned:
+        return (f"N={s['N']}  age {s['age']}  F {s['F']}\n"
+                f"ε2+ {s['e2c']}  ε4+ {s['e4c']}")
     return (f"N={s['N']}  age {s['age']}  F {s['F']}\n"
             f"ε2/3/4 {s['e2']}/{s['e3']}/{s['e4']}  ε4+ {s['e4c']}")
 
@@ -142,9 +161,15 @@ def main() -> None:
                     help="Use no_cdr_stratified_post_exclusion splits, drop "
                          "diagnostic-reversion + corrupted-MRI subjects, and "
                          "suffix output filenames with _post_exclusion.")
+    ap.add_argument("--cleaned", action="store_true",
+                    help="Render a cleaned copy: non-overlapping partition rows, "
+                         "ε2+/ε4+ carrier %% (no dosage), trimmed title/subtitle, "
+                         "no footnote -> demographic_cleaned.{png,pdf,csv}.")
     args = ap.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
 
+    cleaned = bool(args.cleaned)
+    groups = CLEANED_GROUPS if cleaned else GROUPS
     post = bool(args.post_exclusion)
     suffix = "_post_exclusion" if post else ""
     SPLIT = SPLIT_POST if post else SPLIT_PRE
@@ -209,11 +234,15 @@ def main() -> None:
             return dm.iloc[0:0] if dm is not None else None
         if key == "full_cohort":
             return dm
+        if key == "pCN_to_MCI_only":
+            cn_mci = pd.to_numeric(dm.get("CN_to_MCI"), errors="coerce") == 1
+            cn_ad  = pd.to_numeric(dm.get("CN_to_AD"), errors="coerce") == 1
+            return dm[cn_mci & ~cn_ad]
         return dm[pd.to_numeric(dm.get(key), errors="coerce") == 1]
 
     # ── tidy long CSV ──────────────────────────────────────────────────────
     rows = []
-    for (gk, gp) in GROUPS:
+    for (gk, gp) in groups:
         for sd in SEEDS:
             for sp in SPLITS:
                 dm = demog.get(sd, {}).get(sp)
@@ -222,10 +251,9 @@ def main() -> None:
                 rows.append({"group": gp, "seed": sd, "split": sp,
                              **_summ(_grp(dm, gk))})
     long_df = pd.DataFrame(rows)
-    long_df.to_csv(args.out / f"demographic_coverage_table_reconciled{suffix}.csv",
-                    index=False)
-    print(f"[out] {args.out/('demographic_coverage_table_reconciled'+suffix+'.csv')} "
-          f"({len(long_df)} rows)")
+    _csv_stem = "demographic_cleaned" if cleaned else "demographic_coverage_table_reconciled"
+    long_df.to_csv(args.out / f"{_csv_stem}{suffix}.csv", index=False)
+    print(f"[out] {args.out/(_csv_stem+suffix+'.csv')} ({len(long_df)} rows)")
 
     # ── figure (diagnostic_coverage house style) ───────────────────────────
     COL_W = [3.0, 3.0, 3.0, 3.0]
@@ -235,8 +263,9 @@ def main() -> None:
     fig_w = LEFT + sum(widths) + RIGHT_PAD
     TITLE_H, SUB_H, H1, H2 = 0.66, 0.46, 0.30, 0.28
     R_GRP, R_SEED = 0.30, 0.52
-    TOP_PAD, BOT_PAD, FOOT_H = 0.12, 0.12, 1.20
-    n_grp, n_seed = len(GROUPS), len(GROUPS) * len(SEEDS)
+    TOP_PAD, BOT_PAD = 0.12, 0.12
+    FOOT_H = 0.10 if cleaned else 1.20
+    n_grp, n_seed = len(groups), len(groups) * len(SEEDS)
     fig_h = (TOP_PAD + TITLE_H + SUB_H + H1 + H2 + R_GRP * n_grp
              + R_SEED * n_seed + FOOT_H + BOT_PAD)
 
@@ -255,18 +284,26 @@ def main() -> None:
     y = fig_h - TOP_PAD
     y_top = y
     y -= TITLE_H
-    ax.text((LEFT + RIGHT) / 2, (y_top + y) / 2,
-            "ADNI Demographic Coverage by Conversion Group, Seed and Split  "
-            "— Reconciled",
+    _title = ("ADNI Demographic Coverage by Conversion Group, Seed and Split"
+              if cleaned else
+              "ADNI Demographic Coverage by Conversion Group, Seed and Split  "
+              "— Reconciled")
+    ax.text((LEFT + RIGHT) / 2, (y_top + y) / 2, _title,
             ha="center", va="center", fontsize=12, fontweight="bold")
     yt = y
     y -= SUB_H
-    ax.text((LEFT + RIGHT) / 2, (yt + y) / 2,
-            "Cell = N subjects · age (mean±sd) · %Female · "
-            "ε2/ε3/ε4 (mean APOE ε-allele dosage 0–2) · "
-            "ε4+ (% ε4-carrier, ε4 dosage ≥ 1).   "
-            "no_cdr_stratified 80/10/10 splits (seeds 0/1/2).  "
-            "Reversions row is ALL reversions in ONE category — no double counting.",
+    _subtitle = (
+        "N subjects · age (mean±sd) · %Female · ε2+ (% ε2-carrier) · "
+        "ε4+ (% ε4-carrier, ε4 dosage ≥ 1).   "
+        "Cohort stratified by baseline diagnosis CN/MCI/AD and "
+        "80/10/10 splits (seeds 0/1/2)."
+        if cleaned else
+        "Cell = N subjects · age (mean±sd) · %Female · "
+        "ε2/ε3/ε4 (mean APOE ε-allele dosage 0–2) · "
+        "ε4+ (% ε4-carrier, ε4 dosage ≥ 1).   "
+        "no_cdr_stratified 80/10/10 splits (seeds 0/1/2).  "
+        "Reversions row is ALL reversions in ONE category — no double counting.")
+    ax.text((LEFT + RIGHT) / 2, (yt + y) / 2, _subtitle,
             ha="center", va="center", fontsize=8.0, fontstyle="italic")
     hline(y_top, lw=1.5)
     hline(y, lw=0.8)
@@ -282,7 +319,7 @@ def main() -> None:
     hline(y, lw=1.2)
     y_data_top = y
 
-    for (gk, gp) in GROUPS:
+    for (gk, gp) in groups:
         yt = y
         y -= R_GRP
         ax.text(cl[0] + 0.06, (yt + y) / 2, gp, ha="left", va="center",
@@ -301,7 +338,7 @@ def main() -> None:
                     fontstyle="italic", color="#444444")
             for j, sp in enumerate(SPLITS):
                 dm = demog.get(sd, {}).get(sp)
-                txt = _cell(_summ(_grp(dm, gk))) if dm is not None else "—"
+                txt = _cell(_summ(_grp(dm, gk)), cleaned) if dm is not None else "—"
                 ax.text(cx[1 + j], ym, txt, ha="center", va="center",
                         fontsize=7.0, color="#222222", linespacing=1.35)
     BOTTOM = y
@@ -338,17 +375,17 @@ def main() -> None:
         "Reversions  =  36 + 121 + 25 + 35 + 203 + 152 + 44  =  616. "
         "Splits 80/10/10 by Patient_ID, seeds 0/1/2."
     )
-    ax.text(LEFT, BOTTOM - 0.16,
-            "\n".join(textwrap.wrap(foot, width=int((RIGHT - LEFT) * 16))),
-            ha="left", va="top", fontsize=7.5)
+    if not cleaned:
+        ax.text(LEFT, BOTTOM - 0.16,
+                "\n".join(textwrap.wrap(foot, width=int((RIGHT - LEFT) * 16))),
+                ha="left", va="top", fontsize=7.5)
 
     plt.tight_layout(pad=0.1)
-    fig.savefig(args.out / f"demographic_coverage_table_reconciled{suffix}.png",
-                bbox_inches="tight", dpi=300)
-    fig.savefig(args.out / f"demographic_coverage_table_reconciled{suffix}.pdf",
-                bbox_inches="tight", dpi=300)
+    stem = "demographic_cleaned" if cleaned else "demographic_coverage_table_reconciled"
+    fig.savefig(args.out / f"{stem}{suffix}.png", bbox_inches="tight", dpi=300)
+    fig.savefig(args.out / f"{stem}{suffix}.pdf", bbox_inches="tight", dpi=300)
     plt.close()
-    print(f"[out] {args.out/('demographic_coverage_table_reconciled'+suffix+'.png')} + .pdf")
+    print(f"[out] {args.out/(stem+suffix+'.png')} + .pdf")
 
 
 if __name__ == "__main__":

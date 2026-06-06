@@ -24,6 +24,7 @@ Usage:
 """
 
 import json
+import textwrap
 import numpy as np
 import pandas as pd
 import matplotlib
@@ -137,7 +138,7 @@ GROUPS_BASE = [
      "enc_task": "T2_multiclass", "bl_metrics": MULTI_METRICS[0],
      "enc_metrics": MULTI_METRICS[1], "headers": MULTI_METRICS[2]},
     grp_binary("sCN vs prog.+AD", "sCN vs progressors+AD (excl. sMCI)", "T1c_scn_prog"),
-    grp_binary("pMCI vs sMCI", "pMCI vs sMCI (baseline MCI)", "T1d_pmci_smci"),
+    grp_binary("sMCI vs pMCI", "pMCI vs sMCI (baseline MCI)", "T1d_pmci_smci"),
     grp_binary("sCN vs pCN", "sCN vs pCN (baseline CN, to MCI/AD)", "T1e_scn_pcn"),
     grp_binary("AD conversion ≤ 3 yrs", "Conversion to AD within 3 years", "T3a_conv3y"),
     grp_binary("AD conversion ≤ 5 yrs", "Conversion to AD within 5 years", "T3b_conv5y"),
@@ -244,10 +245,12 @@ def parse_mean(s):
         return float("-inf")
 
 
-def render_split(split, groups=None, out_name=None):
+def render_split(split, groups=None, out_name=None, clean=False):
     """Render one split. groups=None → the full battery; pass a GROUPS_BASE subset for a focused
     sub-table. out_name=None → 'combined_model_table_{split}'; else use the given stem verbatim.
-    Style/title/footnotes are IDENTICAL to the full table (only the task columns differ)."""
+    Style/title/footnotes are IDENTICAL to the full table (only the task columns differ).
+    clean=True → trimmed 2-line title (no 'No CDR, post-exclusion'), NO footnotes and NO HP
+    superscripts on model labels (HPs are factored out to a separate table_*_hp figure)."""
     stem = out_name if out_name is not None else f"combined_model_table_{split}"
     bl_split = bl_df[bl_df["Split"] == split]
     enc_summary = ENC_SUMMARY[split]
@@ -326,11 +329,12 @@ def render_split(split, groups=None, out_name=None):
     # the AD-horizon (T4) footnote only applies to tables that actually show the T4 column
     _has_t4 = any(g["enc_task"] == "T4_conv_horizon" for g in GROUPS)
     _fn = FOOTNOTES if _has_t4 else [x for x in FOOTNOTES if not x.strip().startswith("AD horizon (T4)")]
-    footnotes = _fn + ([VAL_FOOTNOTE] if split == "val" else [])
+    footnotes = [] if clean else _fn + ([VAL_FOOTNOTE] if split == "val" else [])
     FOOTER_H = 0.16 * len(footnotes) + 0.25
+    TITLE_BAND = 0.80 if clean else ROW_H   # clean title wraps to 3 lines
     n_data_cols = n_total_cols
     fig_w = 0.3 + MODEL_COL_W + STRAT_COL_W + n_data_cols * COL_W + 0.3
-    fig_h = 0.15 + ROW_H * (3 + n_rows) + ROW_H_SUB + 0.10 + FOOTER_H
+    fig_h = 0.15 + TITLE_BAND + ROW_H * (2 + n_rows) + ROW_H_SUB + 0.10 + FOOTER_H
 
     fig, ax = plt.subplots(figsize=(fig_w, fig_h))
     ax.axis("off"); ax.set_xlim(0, fig_w); ax.set_ylim(0, fig_h)
@@ -346,7 +350,7 @@ def render_split(split, groups=None, out_name=None):
     TOP = fig_h - 0.15
     y_cur = TOP
     row_tops = []
-    row_tops.append(y_cur); y_cur -= ROW_H
+    row_tops.append(y_cur); y_cur -= TITLE_BAND
     row_tops.append(y_cur); y_cur -= ROW_H
     row_tops.append(y_cur); y_cur -= ROW_H_SUB
     row_tops.append(y_cur); y_cur -= ROW_H
@@ -381,10 +385,16 @@ def render_split(split, groups=None, out_name=None):
             color="black", linewidth=0.5, linestyle=(0, (3, 3)), zorder=2)
 
     split_word = {"val": "Validation", "test": "Test"}[split]
-    ax.text((LEFT + RIGHT) / 2, row_mid(0),
-            f"Clinical Models (No CDR, post-exclusion): {split_word} Performance at Baseline   "
-            f"(mean ± std, seeds 0/1/2, train-fit / held-out {split}, 80/10/10 stratified split)",
-            ha="center", va="center", fontsize=9, fontweight="bold", color="black")
+    if clean:
+        _title = (f"Clinical Models: {split_word} Performance at Baseline\n"
+                  f"(mean ± std, seeds 0/1/2)\n"
+                  f"train/val/test, 80/10/10, stratified splits on baseline diagnosis")
+    else:
+        _title = (f"Clinical Models (No CDR, post-exclusion): {split_word} Performance at Baseline   "
+                  f"(mean ± std, seeds 0/1/2, train-fit / held-out {split}, 80/10/10 stratified split)")
+    ax.text((LEFT + RIGHT) / 2, row_mid(0), _title,
+            ha="center", va="center", fontsize=9, fontweight="bold", color="black",
+            linespacing=1.4)
 
     col_cursor = 2
     for grp in GROUPS:
@@ -414,7 +424,7 @@ def render_split(split, groups=None, out_name=None):
     STRATEGY_LABELS = {"tabular": "tabular", "frozen": "frozen", "full_ft": "full fine-tune"}
     for r_idx, (strategy, label, model_id) in enumerate(ROW_ENTRIES):
         row_i = 4 + r_idx
-        disp = f"{label}$^{{{SUPERSCRIPT[label]}}}$"
+        disp = label if clean else f"{label}$^{{{SUPERSCRIPT[label]}}}$"
         ax.text(col_left[0] + 0.06, row_mid(row_i), disp,
                 ha="left", va="center", fontsize=7.5, fontweight="bold", color="black")
         ax.text(col_cx[1], row_mid(row_i), STRATEGY_LABELS[strategy],
@@ -446,6 +456,70 @@ def render_split(split, groups=None, out_name=None):
     print(f"  Saved → {OUT_DIR / f'{stem}.png'}")
 
 
+# ── Standalone hyperparameter (HP) reference table ───────────────────────────
+# Holds exactly the a/b/c/d HPs that the clean sub-tables drop from their footers.
+HP_ROWS = [
+    ("Log. Reg.", "a", "L2 penalty, C=1.0, max_iter=2000, class_weight=balanced."),
+    ("SVM", "b", "RBF kernel, C=1.0, gamma=scale, probability=True, class_weight=balanced."),
+    ("XGBoost", "c", "300 trees, max_depth=4, learning_rate=0.05, eval_metric=logloss. "
+                     "All tabular models: median imputation + standardisation (fit on train), seed=42."),
+    ("Encoders (ModernBERT / BioClinical-ModernBERT, base & large)", "d",
+     "AdamW, batch=16, max_len=1024, weight_decay=1e-5, warmup_ratio=0.1, class-weighted "
+     "cross-entropy, early-stopping patience=5, bf16. Frozen: lr=1e-3, 20 epochs (classifier head "
+     "only). Full fine-tune: lr=2e-5, 10 epochs. Seeds 0/1/2; 80/10/10 stratified split."),
+]
+
+
+# The model HPs are IDENTICAL across every classification task (verified in
+# 02h/02m for the tabular battery and 03_encoder_finetune.py for the encoders —
+# lr/epochs depend only on frozen-vs-full-ft, never on the task). Tasks differ
+# only in label set / #classes and cohort, not in any tuning knob. So a single
+# HP reference covers them all.
+HP_TASKS_LINE = (
+    "T1a (CN vs MCI+AD), T1b (CN+MCI vs AD), T2 (CN/MCI/AD), "
+    "T1d (sMCI vs pMCI), T1e (sCN vs pCN), "
+    "T3a/T3b/T3d/T3c (AD conversion ≤ 3/5/7/10 yrs), T4 (AD horizon, 3-class)."
+)
+
+
+def render_hp_table(stem, title, tasks_line=HP_TASKS_LINE):
+    """Standalone HP reference figure + CSV (Ref / Model / Hyperparameters).
+    tasks_line documents which tasks the (shared) HPs cover."""
+    pd.DataFrame([{"Ref": r, "Model": m, "Hyperparameters": h} for (m, r, h) in HP_ROWS],
+                 columns=["Ref", "Model", "Hyperparameters"]).to_csv(
+        OUT_DIR / f"{stem}.csv", index=False)
+    print(f"  Saved → {OUT_DIR / f'{stem}.csv'}")
+
+    WRAP = 118
+    blocks = [textwrap.wrap(f"({r}) {m}: {h}", width=WRAP) for (m, r, h) in HP_ROWS]
+    task_lines = textwrap.wrap(tasks_line, width=WRAP) if tasks_line else []
+    LH, GAP = 0.20, 0.10
+    total = sum(len(b) for b in blocks)
+    fig_w = 11.0
+    fig_h = 0.55 + LH * (total + len(task_lines)) + GAP * (len(blocks) + 1) + 0.20
+    fig, ax = plt.subplots(figsize=(fig_w, fig_h))
+    ax.axis("off"); ax.set_xlim(0, fig_w); ax.set_ylim(0, fig_h)
+    y = fig_h - 0.22
+    ax.text(0.12, y, title, ha="left", va="top", fontsize=11, fontweight="bold", color="black")
+    y -= 0.34
+    for ln in task_lines:               # covered-tasks paragraph (italic)
+        ax.text(0.14, y, ln, ha="left", va="top", fontsize=8.0, fontstyle="italic", color="#444444")
+        y -= LH
+    y -= GAP
+    for lines in blocks:
+        for k, ln in enumerate(lines):
+            ax.text(0.14 if k == 0 else 0.40, y, ln, ha="left", va="top",
+                    fontsize=8.5, fontweight="bold" if k == 0 else "normal", color="#222222")
+            y -= LH
+        y -= GAP
+    ax.add_patch(plt.Rectangle((0.05, 0.05), fig_w - 0.10, fig_h - 0.10,
+                               facecolor="none", edgecolor="black", linewidth=1.2))
+    fig.savefig(OUT_DIR / f"{stem}.pdf", bbox_inches="tight", dpi=300)
+    fig.savefig(OUT_DIR / f"{stem}.png", bbox_inches="tight", dpi=300)
+    plt.close()
+    print(f"  Saved → {OUT_DIR / f'{stem}.png'}")
+
+
 for _split in ("test", "val"):
     print(f"[{_split}]")
     render_split(_split)
@@ -454,13 +528,31 @@ for _split in ("test", "val"):
 # Each tuple: (task-code suffix, list of GROUPS_BASE titles to include).
 SUBTABLES = [
     ("t1t1bt2",    ["CN vs MCI+AD", "CN+MCI vs AD", "CN / MCI / AD (3-class)"]),
-    ("t1d",        ["pMCI vs sMCI"]),
+    ("t1d",        ["sMCI vs pMCI"]),
     ("t1e",        ["sCN vs pCN"]),
     ("t3at3bt3d",  ["AD conversion ≤ 3 yrs", "AD conversion ≤ 5 yrs", "AD conversion ≤ 7 yrs"]),
     ("t4",         ["AD horizon (3-class)"]),
 ]
+# Clean sub-tables: trimmed 3-line title, NO footnotes, NO HP superscripts
+# (HPs are factored out to the single shared table_tall_hp reference).
+CLEAN_SUFFIXES = {"t1d", "t1t1bt2"}
+# Column-header task-code prefixes (clean tables show e.g. "T1a: CN vs MCI+AD").
+TASK_CODE = {
+    "CN vs MCI+AD": "T1a", "CN+MCI vs AD": "T1b", "CN / MCI / AD (3-class)": "T2",
+    "sCN vs prog.+AD": "T1c", "sMCI vs pMCI": "T1d", "sCN vs pCN": "T1e",
+    "AD conversion ≤ 3 yrs": "T3a", "AD conversion ≤ 5 yrs": "T3b",
+    "AD conversion ≤ 7 yrs": "T3d", "AD conversion ≤ 10 yrs": "T3c",
+    "AD horizon (3-class)": "T4",
+}
 for _suffix, _titles in SUBTABLES:
     _grps = [g for g in GROUPS_BASE if g["title"] in _titles]
+    _clean = _suffix in CLEAN_SUFFIXES
+    if _clean:                    # prefix each column header with its task code (T1a/T1b/T2/...)
+        _grps = [{**g, "title": f"{TASK_CODE[g['title']]}: {g['title']}"} for g in _grps]
     for _split in ("test", "val"):
-        render_split(_split, groups=_grps, out_name=f"table_{_split}_{_suffix}")
+        render_split(_split, groups=_grps, out_name=f"table_{_split}_{_suffix}", clean=_clean)
     print(f"[subtable] table_{{val,test}}_{_suffix}  → png/pdf/csv")
+
+# Single shared HP reference — the model HPs are identical across ALL tasks (see HP_TASKS_LINE).
+print("[hp] table_tall_hp")
+render_hp_table("table_tall_hp", "Hyperparameters: clinical models (shared across all tasks)")
