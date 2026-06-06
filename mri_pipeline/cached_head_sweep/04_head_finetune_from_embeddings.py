@@ -48,7 +48,7 @@ import numpy as np
 import pandas as pd
 import torch.nn as nn
 import torch.nn.functional as F
-from sklearn.metrics import balanced_accuracy_score, roc_auc_score
+from sklearn.metrics import balanced_accuracy_score, f1_score, roc_auc_score
 from sklearn.utils.class_weight import compute_class_weight
 from torch.utils.data import Dataset, DataLoader
 
@@ -494,6 +494,7 @@ def main():
     best_metric = -1.0                     # the MONITORED metric (bacc or auc per --select_by)
     best_va_bacc = -1.0                    # val balanced-acc at the best epoch
     best_va_auc = float("nan")             # val macro-AUC at the best epoch
+    best_va_f1 = float("nan")              # val F1 (binary/macro) at the best epoch
     best_val_loss_at_best = float("inf")
     best_epoch = -1
     best_state_mem = None                  # best head state kept in memory (for --metrics_only)
@@ -509,6 +510,7 @@ def main():
         best_metric = ck2.get("best_metric", -1.0)
         best_va_bacc = ck2.get("best_va_bacc", -1.0)
         best_va_auc = ck2.get("best_va_auc", float("nan"))
+        best_va_f1 = ck2.get("best_va_f1", float("nan"))
         best_val_loss_at_best = ck2.get("best_val_loss_at_best", float("inf"))
         best_epoch = ck2.get("best_epoch", -1)
         epochs_since_improve = ck2.get("epochs_since_improve", 0)
@@ -523,6 +525,7 @@ def main():
                     "scheduler": scheduler.state_dict(),
                     "epoch": ep, "best_metric": best_metric,
                     "best_va_bacc": best_va_bacc, "best_va_auc": best_va_auc,
+                    "best_va_f1": best_va_f1,
                     "best_val_loss_at_best": best_val_loss_at_best,
                     "best_epoch": best_epoch,
                     "epochs_since_improve": epochs_since_improve,
@@ -556,6 +559,10 @@ def main():
             va_bacc = float(balanced_accuracy_score(
                 va_labels.astype(int), va_logits.argmax(axis=-1)))
             va_auc = _macro_auc(va_labels, va_logits, num_labels)
+            va_f1 = float(f1_score(
+                va_labels.astype(int), va_logits.argmax(axis=-1),
+                average=("binary" if num_labels == 2 else "macro"),
+                zero_division=0))
             monitor = va_auc if args.select_by == "auc" else va_bacc
             if not np.isfinite(monitor):           # e.g. AUC undefined on a 1-class val fold
                 monitor = -1.0
@@ -563,7 +570,8 @@ def main():
 
             log_rows.append({"epoch": epoch + 1, "lr": cur_lr,
                              "train_loss": tr_loss, "train_acc": tr_acc,
-                             "val_loss": va_loss, "val_bacc": va_bacc, "val_auc": va_auc})
+                             "val_loss": va_loss, "val_bacc": va_bacc,
+                             "val_auc": va_auc, "val_f1": va_f1})
             print(f"  [epoch {epoch+1:>3}/{args.epochs}] lr={cur_lr:.2e}  "
                   f"tr_loss={tr_loss:.4f}  va_loss={va_loss:.4f}  "
                   f"va_bacc={va_bacc:.4f}  va_auc={va_auc:.4f}  (sel={args.select_by})")
@@ -574,6 +582,7 @@ def main():
                 best_metric = monitor
                 best_va_bacc = va_bacc
                 best_va_auc = va_auc
+                best_va_f1 = va_f1
                 best_val_loss_at_best = va_loss
                 best_epoch = epoch + 1
                 epochs_since_improve = 0
@@ -649,6 +658,7 @@ def main():
             "best_epoch":            best_epoch,
             "best_val_balanced_acc": round(float(best_va_bacc), 4),
             "best_val_auc":          (round(float(best_va_auc), 4) if np.isfinite(best_va_auc) else None),
+            "best_val_f1":           (round(float(best_va_f1), 4) if np.isfinite(best_va_f1) else None),
             "select_by":             args.select_by,
             "lr":                    args.lr,
             "weight_decay":          args.weight_decay,

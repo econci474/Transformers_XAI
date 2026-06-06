@@ -350,6 +350,11 @@ def parse_args():
                    help="Dropout before classification head")
     p.add_argument("--label_smoothing", type=float, default=0.0)
     p.add_argument("--no_resume", action="store_true")
+    p.add_argument("--val_test", action="store_true",
+                   help="No training: load best_model.pt and recompute val + "
+                        "test metrics, patching a `val_metrics` block into the "
+                        "existing metrics.json (adds val AUC/F1 to runs that "
+                        "only logged val_bacc). Requires best_model.pt present.")
     p.add_argument("--wandb", action="store_true")
     p.add_argument("--wandb_project", type=str, default="brainmvp-mri-finetune")
     p.add_argument("--wandb_entity", type=str, default=None)
@@ -384,6 +389,33 @@ def parse_args():
     return args
 
 
+def patch_val_test_metrics(metrics_path, val_metrics, test_metrics,
+                           verify=True, tol=0.02):
+    """Recompute-mode writer: add a `val_metrics` block (and refresh
+    `test_metrics`) on an existing metrics.json. If the recomputed test
+    balanced_acc differs from the stored one by > tol, keep the stored
+    test_metrics (likely an env/transform mismatch) but still write
+    val_metrics, and warn — so a checkpoint recompute never silently changes
+    the published test numbers."""
+    metrics_path = Path(metrics_path)
+    if metrics_path.exists():
+        with open(metrics_path) as f:
+            d = json.load(f)
+    else:
+        d = {"config": {}}
+    old = (d.get("test_metrics") or {}).get("balanced_acc")
+    new = test_metrics.get("balanced_acc")
+    if verify and old is not None and new is not None and abs(old - new) > tol:
+        print(f"  [WARN] recomputed test bACC {new:.4f} != stored {old:.4f} "
+              f"(>|{tol}|); keeping stored test_metrics, writing val_metrics only.")
+    else:
+        d["test_metrics"] = test_metrics
+    d["val_metrics"] = val_metrics
+    with open(metrics_path, "w") as f:
+        json.dump(d, f, indent=2)
+    print(f"  [val_test] patched {metrics_path}")
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 def main():
     args = parse_args()
@@ -394,10 +426,15 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     out_dir = (Path(args.out_dir) / MODEL_SLUG / args.task
                / f"seed_{args.seed}" / args.strategy)
+    # --val_test targets an existing run directly: --out_dir IS the run dir
+    # (avoids slug/nesting reconstruction mismatches; the driver passes the
+    # dir holding best_model.pt + metrics.json).
+    if args.val_test:
+        out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # Skip if already done
-    if (out_dir / "metrics.json").exists():
+    # Skip if already done (but --val_test deliberately re-reads an existing run)
+    if (out_dir / "metrics.json").exists() and not args.val_test:
         print(f"  metrics.json already exists at {out_dir} — skipping.")
         return
 
@@ -494,6 +531,26 @@ def main():
     scaler = torch.cuda.amp.GradScaler(enabled=(device.type == "cuda"))
     criterion = nn.CrossEntropyLoss(weight=class_weights,
                                     label_smoothing=args.label_smoothing)
+
+    # ── val/test recompute from a saved checkpoint (no training) ──────────────
+    if args.val_test:
+        bm = out_dir / "best_model.pt"
+        if not bm.exists():
+            print(f"  [ERROR] --val_test: no best_model.pt at {out_dir}")
+            return
+        model.load_state_dict(torch.load(bm, map_location=device)["net"])
+        _, _, va_logits, va_labels = run_one_epoch(
+            model, val_loader, criterion, optimizer, scaler, device, False)
+        _, _, te_logits, te_labels = run_one_epoch(
+            model, test_loader, criterion, optimizer, scaler, device, False)
+        val_metrics, _, _ = compute_test_metrics(
+            va_labels, va_logits, task_cfg["task_type"])
+        test_metrics, _, _ = compute_test_metrics(
+            te_labels, te_logits, task_cfg["task_type"])
+        print(f"  [val_test] val ={val_metrics}")
+        print(f"  [val_test] test={test_metrics}")
+        patch_val_test_metrics(out_dir / "metrics.json", val_metrics, test_metrics)
+        return
 
     wb = init_wandb(args, task_cfg, extra={
         "n_train": len(train_df), "n_val": len(val_df),

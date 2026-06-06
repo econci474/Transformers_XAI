@@ -443,10 +443,42 @@ def parse_args():
                    help="Cap rows per split (smoke test).")
     p.add_argument("--no_resume", action="store_true",
                    help="Ignore any last_checkpoint.pt and start fresh.")
+    p.add_argument("--val_test", action="store_true",
+                   help="No training: load best_model.pt and recompute val + "
+                        "test metrics, patching a `val_metrics` block into the "
+                        "existing metrics.json (adds val AUC/F1 to runs that "
+                        "only logged val_bacc).")
     p.add_argument("--wandb", action="store_true",
                    help="Enable Weights & Biases logging (no-op if absent).")
     p.add_argument("--wandb_project", type=str, default="cnn3d-mri")
     return p.parse_args()
+
+
+def patch_val_test_metrics(metrics_path, val_metrics, test_metrics,
+                           verify=True, tol=0.02):
+    """Recompute-mode writer: add a `val_metrics` block (and refresh
+    `test_metrics`) on an existing metrics.json. If the recomputed test
+    balanced_acc differs from the stored one by > tol, keep the stored
+    test_metrics (likely an env/transform mismatch) but still write
+    val_metrics, and warn — so a checkpoint recompute never silently changes
+    the published test numbers."""
+    metrics_path = Path(metrics_path)
+    if metrics_path.exists():
+        with open(metrics_path) as f:
+            d = json.load(f)
+    else:
+        d = {"config": {}}
+    old = (d.get("test_metrics") or {}).get("balanced_acc")
+    new = test_metrics.get("balanced_acc")
+    if verify and old is not None and new is not None and abs(old - new) > tol:
+        print(f"  [WARN] recomputed test bACC {new:.4f} != stored {old:.4f} "
+              f"(>|{tol}|); keeping stored test_metrics, writing val_metrics only.")
+    else:
+        d["test_metrics"] = test_metrics
+    d["val_metrics"] = val_metrics
+    with open(metrics_path, "w") as f:
+        json.dump(d, f, indent=2)
+    print(f"  [val_test] patched {metrics_path}")
 
 
 # ── Main ───────────────────────────────────────────────────────────────────────
@@ -462,6 +494,9 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model_slug = f"Spasov3DCNN_{args.model}"
     out_dir = Path(args.out_dir) / model_slug / args.task / f"seed_{args.seed}"
+    # --val_test targets an existing run directly: --out_dir IS the run dir.
+    if args.val_test:
+        out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     print("=" * 70)
@@ -550,6 +585,26 @@ def main():
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr,
                                   weight_decay=args.weight_decay)
     scaler = torch.cuda.amp.GradScaler(enabled=(device.type == "cuda"))
+
+    # ── val/test recompute from a saved checkpoint (no training) ──────────────
+    if args.val_test:
+        bm = out_dir / "best_model.pt"
+        if not bm.exists():
+            print(f"  [ERROR] --val_test: no best_model.pt at {out_dir}")
+            return
+        model.load_state_dict(torch.load(bm, map_location=device)["net"])
+        _, _, va_logits, va_labels = run_one_epoch(
+            model, val_loader, criterion, optimizer, scaler, device, False)
+        _, _, te_logits, te_labels = run_one_epoch(
+            model, test_loader, criterion, optimizer, scaler, device, False)
+        val_metrics, _, _ = compute_test_metrics(
+            va_labels, va_logits, task_cfg["task_type"])
+        test_metrics, _, _ = compute_test_metrics(
+            te_labels, te_logits, task_cfg["task_type"])
+        print(f"  [val_test] val ={val_metrics}")
+        print(f"  [val_test] test={test_metrics}")
+        patch_val_test_metrics(out_dir / "metrics.json", val_metrics, test_metrics)
+        return
 
     # ── wandb (gated; no-op without --wandb) ──────────────────────────────────
     wb = None
