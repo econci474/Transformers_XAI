@@ -115,8 +115,26 @@ MODEL_TREES = [
     # (the wide winner, 0.63 > 0.60) — this is the HP-tuned BrainDINO T2 row used by
     # the T2 late-fusion arm. T2-only, so it can't affect other tasks' selection.
     ("BrainDINO-cached", "braindino_outputs/aug_none_T2_wide_winner/BrainDINO_vitb16_frozen_cached/*/seed_*/*/metrics.json"),
-    ("BrainMVP-cached",  "brainmvp_debug/aug_none/BrainMVP_uniformer_frozen_cached/*/seed_*/*/metrics.json"),
-    ("ViT-MAE-cached",   "vit_outputs_debug/aug_none/ViT_B_mae75_frozen_cached/*/seed_*/*/metrics.json"),
+    # Cached BrainMVP/ViT-MAE: the DIAGNOSTIC cells (T1/T1b/T1c/T1d/T2) were
+    # originally computed on stale (pre-June-1) embeddings, so they were RE-RUN on
+    # the canonical June-1 embeddings into a dedicated folder
+    # (cached_embeddings_using_JUN_01). We glob the diagnostic tasks from there, and
+    # the conversion/T1e tasks (which were already run AFTER June-1) from the original
+    # tree — explicit per-task globs so the two sources never overlap (which would
+    # corrupt the HP-winner selection). The original stale diagnostic cells stay on
+    # disk but are NOT globbed.
+    ("BrainMVP-cached",  "cached_embeddings_using_JUN_01/BrainMVP_uniformer_frozen_cached/*/seed_*/*/metrics.json"),
+    ("BrainMVP-cached",  "brainmvp_debug/aug_none/BrainMVP_uniformer_frozen_cached/T1e_pcn_vs_scn/seed_*/*/metrics.json"),
+    ("BrainMVP-cached",  "brainmvp_debug/aug_none/BrainMVP_uniformer_frozen_cached/T3a_conv3y/seed_*/*/metrics.json"),
+    ("BrainMVP-cached",  "brainmvp_debug/aug_none/BrainMVP_uniformer_frozen_cached/T3b_conv5y/seed_*/*/metrics.json"),
+    ("BrainMVP-cached",  "brainmvp_debug/aug_none/BrainMVP_uniformer_frozen_cached/T3c_conv7y/seed_*/*/metrics.json"),
+    ("BrainMVP-cached",  "brainmvp_debug/aug_none/BrainMVP_uniformer_frozen_cached/T4_conv_horizon/seed_*/*/metrics.json"),
+    ("ViT-MAE-cached",   "cached_embeddings_using_JUN_01/ViT_B_mae75_frozen_cached/*/seed_*/*/metrics.json"),
+    ("ViT-MAE-cached",   "vit_outputs_debug/aug_none/ViT_B_mae75_frozen_cached/T1e_pcn_vs_scn/seed_*/*/metrics.json"),
+    ("ViT-MAE-cached",   "vit_outputs_debug/aug_none/ViT_B_mae75_frozen_cached/T3a_conv3y/seed_*/*/metrics.json"),
+    ("ViT-MAE-cached",   "vit_outputs_debug/aug_none/ViT_B_mae75_frozen_cached/T3b_conv5y/seed_*/*/metrics.json"),
+    ("ViT-MAE-cached",   "vit_outputs_debug/aug_none/ViT_B_mae75_frozen_cached/T3c_conv7y/seed_*/*/metrics.json"),
+    ("ViT-MAE-cached",   "vit_outputs_debug/aug_none/ViT_B_mae75_frozen_cached/T4_conv_horizon/seed_*/*/metrics.json"),
 ]
 
 TASK_ORDER = ["T1_binary", "T1b_binary", "T1c_binary", "T1d_binary", "T2_multiclass"]

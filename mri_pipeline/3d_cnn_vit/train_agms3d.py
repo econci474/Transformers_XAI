@@ -724,6 +724,14 @@ def main():
         test_metrics, test_preds, test_probs = compute_test_metrics(
             test_labels, test_logits, task_cfg["task_type"])
         print(f"  Test metrics (image-level): {test_metrics}")
+        # Val-split metrics on the same best weights — a separate held-out cohort
+        # (disjoint 80/10/10), evaluated on its own loader; saved so the VALIDATION
+        # tables fill without a second --val_test pass.
+        _, _, val_logits, val_labels = run_one_epoch(
+            model, val_loader, criterion, optimizer, scaler, device, False)
+        val_metrics, _, _ = compute_test_metrics(
+            val_labels, val_logits, task_cfg["task_type"])
+        print(f"  Val metrics (image-level): {val_metrics}")
         test_diagnostics = compute_diagnostics(
             test_labels.astype(int), test_preds, num_labels, label_names)
 
@@ -780,6 +788,7 @@ def main():
         }
         with open(out_dir / "metrics.json", "w") as f:
             json.dump({"config": config, "test_metrics": test_metrics,
+                       "val_metrics": val_metrics,
                        "test_metrics_subject": test_metrics_subject,
                        "test_diagnostics": test_diagnostics}, f, indent=2)
 
