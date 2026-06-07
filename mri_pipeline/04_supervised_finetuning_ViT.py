@@ -789,14 +789,29 @@ def compute_test_metrics(y_true: np.ndarray, logits: np.ndarray, task_type: str)
             "auc_pr":      float(average_precision_score(y_true, positive)),
         })
     else:
+        # Multiclass OVR-AUC throws if a (small) fold is missing a class — the
+        # len(unique)>1 guard is insufficient (it passes with 2 of 3 classes but
+        # probs has all 3 columns). Guard both AUCs so a degenerate val/test fold
+        # (common for tiny conversion cohorts, e.g. T4 seed folds) yields nan
+        # rather than crashing the whole run after training.
+        n_cls = probs.shape[1]
+        try:
+            auc_ovr = float(roc_auc_score(y_true, probs, multi_class="ovr",
+                                          average="macro", labels=list(range(n_cls)))) \
+                if len(np.unique(y_true)) > 1 else float("nan")
+        except Exception:
+            auc_ovr = float("nan")
+        try:
+            auc_pr = float(average_precision_score(
+                np.eye(n_cls)[y_true], probs, average="macro"))
+        except Exception:
+            auc_pr = float("nan")
         out.update({
             "precision_macro": float(precision_score(y_true, preds, average="macro", zero_division=0)),
             "recall_macro":    float(recall_score(y_true, preds, average="macro", zero_division=0)),
             "macro_f1":        float(f1_score(y_true, preds, average="macro", zero_division=0)),
-            "auc_roc_ovr":     float(roc_auc_score(y_true, probs, multi_class="ovr", average="macro"))
-                               if len(np.unique(y_true)) > 1 else float("nan"),
-            "auc_pr_macro":    float(average_precision_score(
-                np.eye(probs.shape[1])[y_true], probs, average="macro")),
+            "auc_roc_ovr":     auc_ovr,
+            "auc_pr_macro":    auc_pr,
         })
     metrics = {k: round(v, 4) if isinstance(v, float) and not np.isnan(v) else v
                for k, v in out.items()}

@@ -39,7 +39,10 @@ SCRIPT_DIR="${ROOT}/Transformers_XAI/mri_pipeline"
 PRETRAINED_CKPT="${ROOT}/ViT_pretrained/ViT_B_pretrained_noaug_mae75_BRATS2023_IXI_OASIS3_seed_8456_999_077000.pth.tar"
 VIT_INPUTS="${ROOT}/ADNI_SMRIPREP/derivatives/vit_inputs"
 MATCHED="${ROOT}/ADNI_MRI/master_mri_clinical_matched_viscode2_extended_post_exclusion.csv"
-DATA_DIR="${ROOT}/ADNI_CL/no_cdr_stratified_post_exclusion/tabular/baseline"
+DATA_BASE="${ROOT}/ADNI_CL/no_cdr_stratified_post_exclusion/tabular/baseline"
+# T4 uses its OWN split (baseline_T4), stratified on the 3 horizon classes so every
+# seed's val/test fold contains all classes. T3 uses the generic baseline split.
+DATA_T4="${ROOT}/ADNI_CL/no_cdr_stratified_post_exclusion/tabular/baseline_T4"
 mkdir -p "${ROOT}/ADNI_MRI/vit_outputs_conv/slurm_logs"
 
 # ── Build the (strategy, augment, task, seed) job list ───────────────────────
@@ -57,6 +60,9 @@ for cfg in "${CONFIGS[@]}"; do
 done
 echo "[info] ${#JOBS[@]} total jobs (array 0-$(( ${#JOBS[@]} - 1 )))"
 read -r STRATEGY AUGMENT TASK SEED <<< "${JOBS[$SLURM_ARRAY_TASK_ID]}"
+
+# Per-task split: T4 -> baseline_T4 (horizon-stratified); T3 -> baseline.
+if [ "${TASK}" = "T4_conv_horizon" ]; then DATA_DIR="${DATA_T4}"; else DATA_DIR="${DATA_BASE}"; fi
 
 OUT_DIR="${ROOT}/ADNI_MRI/vit_outputs_conv/aug_${AUGMENT}"
 RUN_DIR="${OUT_DIR}/ViT_B_mae75/${TASK}/seed_${SEED}/${STRATEGY}"

@@ -9,13 +9,15 @@
 #SBATCH --gres=gpu:1
 #SBATCH --mem=48G
 #SBATCH --time=12:00:00
-#SBATCH --array=0-32%4
+#SBATCH --array=0-41%4
 # =============================================================================
 # 04i_finetune_BrainMVP_conv_submit_csd3.sh
 #   BrainMVP (UniFormer) fine-tuning to COMPLETE the conversion tables. Matrix
-#   (33 runs):
-#     full_ft × {none, stochastic, plus_original} × T3b only  (T3a/T3c/T4 done)   = 9
+#   (42 runs):
+#     full_ft × {none, stochastic, plus_original} × T3b              = 9
+#     full_ft × {none, stochastic, plus_original} × T4 (baseline_T4) = 9  (redo: was wrong split)
 #     frozen  × {stochastic, plus_original} × {T3a, T3b, T3c, T4} × seeds {0,1,2} = 24
+#   T4 runs use the baseline_T4 (horizon-stratified) split; T3 use baseline.
 #   Each run saves BOTH val_metrics and test_metrics (trainer final eval).
 #
 #   Output tree: brainmvp_debug/aug_<aug>/BrainMVP_uniformer/<task>/seed_<s>/<strategy>/
@@ -37,15 +39,23 @@ SCRIPT_DIR="${ROOT}/Transformers_XAI/mri_pipeline/brain_mvp"
 PRETRAINED_CKPT="${ROOT}/ViT_pretrained/BrainMVP_uniformer.pt"
 BRAINMVP_INPUTS="${ROOT}/ADNI_SMRIPREP/derivatives/brainmvp_inputs"
 MATCHED="${ROOT}/ADNI_MRI/master_mri_clinical_matched_viscode2_extended_post_exclusion.csv"
-DATA_DIR="${ROOT}/ADNI_CL/no_cdr_stratified_post_exclusion/tabular/baseline"
+DATA_BASE="${ROOT}/ADNI_CL/no_cdr_stratified_post_exclusion/tabular/baseline"
+# T4 uses its OWN split (baseline_T4), stratified on the 3 horizon classes so every
+# seed's val/test fold contains all classes. T3 uses the generic baseline split.
+DATA_T4="${ROOT}/ADNI_CL/no_cdr_stratified_post_exclusion/tabular/baseline_T4"
 mkdir -p "${ROOT}/ADNI_MRI/brainmvp_debug/slurm_logs"
 
 # ── Build the (strategy, augment, task, seed) job list ───────────────────────
 SEEDS=(0 1 2)
 JOBS=()
-# full_ft T3b only (3 augments)
+# full_ft T3b (3 augments) — the gap in the diagnostic-era full_ft sweep.
 for aug in none stochastic plus_original; do
   for s in "${SEEDS[@]}"; do JOBS+=("full_ft ${aug} T3b_conv5y ${s}"); done
+done
+# full_ft T4 (3 augments) — redo on baseline_T4 (the pre-existing T4 full_ft used
+# the wrong, baseline-dx-stratified split).
+for aug in none stochastic plus_original; do
+  for s in "${SEEDS[@]}"; do JOBS+=("full_ft ${aug} T4_conv_horizon ${s}"); done
 done
 # frozen, 2 augments, all four conversion tasks
 for aug in stochastic plus_original; do
@@ -55,6 +65,9 @@ for aug in stochastic plus_original; do
 done
 echo "[info] ${#JOBS[@]} total jobs (array 0-$(( ${#JOBS[@]} - 1 )))"
 read -r STRATEGY AUGMENT TASK SEED <<< "${JOBS[$SLURM_ARRAY_TASK_ID]}"
+
+# Per-task split: T4 -> baseline_T4 (horizon-stratified); T3 -> baseline.
+if [ "${TASK}" = "T4_conv_horizon" ]; then DATA_DIR="${DATA_T4}"; else DATA_DIR="${DATA_BASE}"; fi
 
 OUT_DIR="${ROOT}/ADNI_MRI/brainmvp_debug/aug_${AUGMENT}"
 RUN_DIR="${OUT_DIR}/BrainMVP_uniformer/${TASK}/seed_${SEED}/${STRATEGY}"
