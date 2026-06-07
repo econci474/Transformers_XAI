@@ -728,7 +728,7 @@ def render_confusions(preds, framing, picks, out_path, task_label="T2"):
     if not panels:
         return
     n = len(panels)
-    fig, axes = plt.subplots(1, n, figsize=(3.6 * n, 3.9))
+    fig, axes = plt.subplots(1, n, figsize=(3.6 * n, 4.3))
     if n == 1:
         axes = [axes]
     for ax, (label, tp, cm, n_per_seed, n_tot, bacc) in zip(axes, panels):
@@ -745,9 +745,11 @@ def render_confusions(preds, framing, picks, out_path, task_label="T2"):
         tp_line = f"{tp}\n" if tp else ""
         ax.set_title(f"{label}\n{tp_line}{n_per_seed}/seed TEST (Σ{n_tot})  bACC {bacc:.3f}",
                      fontsize=9)
-    fig.suptitle(f"{task_label} {framing} -- per-class confusion (counts pooled across seeds; "
-                 "row-normalised %)", fontsize=11)
-    fig.tight_layout(rect=(0, 0, 1, 0.94))
+    fig.suptitle("Multimodal late integration: Confusion matrix", fontsize=13, fontweight="bold",
+                 y=0.99)
+    fig.text(0.5, 0.925, "counts pooled across seeds, row-normalised %",
+             ha="center", va="center", fontsize=9.5, fontstyle="italic")
+    fig.tight_layout(rect=(0, 0, 1, 0.86))
     fig.savefig(out_path, dpi=170, bbox_inches="tight", pad_inches=0.08)
     plt.close(fig)
     print(f"  confusion: {out_path}")
