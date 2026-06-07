@@ -407,7 +407,7 @@ def render_house(sel, out_path, subtitle="", show_n=True):
     cx_all = (LEFT + RIGHT) / 2
     # title (bold) fills the band above the subtitle strip; N(test) subtitle (italic) sits at the bottom
     ax.text(cx_all, y + SUB_H + (TITLE_H - SUB_H) / 2,
-            "T2 Late Fusion: Best Methods Across Timeframes & MRI Models\n"
+            "T2 Late Fusion\n"
             "mean ± std across seeds 0/1/2 · ranked by Test balanced accuracy\n"
             "clinical (all full fine-tune): T2 3-class = BioClinical-ModernBERT-large (\"BioClin-L-ft\")\n"
             "detectors: T1 = BioClinical-ModernBERT-base (\"BioClin-B-ft\"), "
