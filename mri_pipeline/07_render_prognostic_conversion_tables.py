@@ -59,6 +59,61 @@ m06 = importlib.util.module_from_spec(_spec)
 sys.modules["_06_cross_model"] = m06
 _spec.loader.exec_module(m06)
 
+# 06c provides the clinical-style bordered renderer (render_table) + the aug/HP
+# legend (render_aug_hp). We feed it the conversion-task summary so T1e/T3/T4 get
+# the same publication aesthetic as the diagnostic tables (no footnotes; the key
+# lives in a sibling *_aug_hp.png).
+_06C_PATH = os.path.join(_HERE, "06c_render_styled_cross_model.py")
+_spec_c = importlib.util.spec_from_file_location("_06c_styled", _06C_PATH)
+m06c = importlib.util.module_from_spec(_spec_c)
+sys.modules["_06c_styled"] = m06c
+_spec_c.loader.exec_module(m06c)
+
+
+def _prep_for_06c(df):
+    """Match 06c._load's column massaging so render_table can consume 07's
+    conversion summary directly (display renames + augment fill + placeholder)."""
+    df = df.copy()
+    df["augment"] = df["augment"].fillna("-")
+    df["model"] = df["model"].replace(m06c.MODEL_DISPLAY)
+    df["variant"] = df["variant"].replace(m06c.VARIANT_DISPLAY)
+    df["is_placeholder"] = False
+    return df
+
+
+def _conv_title(split):
+    """3-line title matching the clinical-table aesthetic (Clinical -> MRI,
+    Baseline -> longitudinal)."""
+    w = "Validation" if split == "val" else "Test"
+    return (f"MRI Models: {w} Performance — longitudinal",
+            "(mean ± std, seeds 0/1/2), train/val/test, 80/10/10",
+            "stratified splits on baseline diagnosis")
+
+
+def _render_styled_conv(summ_df, out_root):
+    """Render T1e / T3 / T4 in the 06c clinical style (footnote-free), split so
+    T3 (binary, broader cohort) and T4 (3-class horizon, converter-only cohort)
+    are separate tables. Saves the aug/HP key beside each as *_aug_hp.png."""
+    from pathlib import Path as _Path
+    prev_out = m06c.OUT_DIR
+    m06c.OUT_DIR = _Path(out_root)     # write beside the other styled tables (Path, not str)
+    try:
+        sd = _prep_for_06c(summ_df)
+        GROUPS = [
+            ("mri_t1e", ["T1e_pcn_vs_scn"]),
+            ("mri_t3",  ["T3a_conv3y", "T3b_conv5y", "T3c_conv7y"]),
+            ("mri_t4",  ["T4_conv_horizon"]),
+        ]
+        for stem, tasks in GROUPS:
+            m06c.render_table(sd, "val", tasks, m06c.VAL_METRICS,
+                              f"{stem}_val", title_lines=_conv_title("val"))
+            m06c.render_table(sd, "test", tasks, m06c.TEST_METRICS,
+                              f"{stem}_test", title_lines=_conv_title("test"))
+            m06c.render_aug_hp(f"{stem}_val_aug_hp")
+            m06c.render_aug_hp(f"{stem}_test_aug_hp")
+    finally:
+        m06c.OUT_DIR = prev_out
+
 
 # ---------------------------------------------------------------------------
 # Task groups
@@ -126,10 +181,28 @@ def parse_args():
     return p.parse_args()
 
 
+def _logical_run_key(f, root):
+    """Dedup key that treats the flat and double-nested copies of the SAME run
+    as one: collapse consecutive duplicate path segments (e.g.
+    `brainmvp_debug/brainmvp_debug/...` -> `brainmvp_debug/...`). Without this,
+    a tree present at BOTH nest levels (a botched rsync) double-counts every
+    seed (n=6 instead of 3)."""
+    parts = os.path.relpath(os.path.abspath(f), os.path.abspath(root)).split(os.sep)
+    collapsed = []
+    for p in parts:
+        if collapsed and collapsed[-1] == p:        # drop the repeated tree segment
+            continue
+        collapsed.append(p)
+    return os.path.normcase(os.sep.join(collapsed))
+
+
 def _collect_runs_both_layouts(root):
     """06._collect_runs, but globs BOTH the flat and the double-nested layout
-    per tree and unions (dedup on absolute path) — so the double-nested
-    BrainMVP T4 full_ft runs are captured even though flat BrainMVP runs exist."""
+    per tree and unions — so the double-nested BrainMVP T4 full_ft runs are
+    captured even though flat BrainMVP runs exist. Dedup on the LOGICAL run key
+    (not absolute path) so a run present at both nest levels counts once; sorted
+    order keeps the shorter (flat) path, which is the one our --val_test
+    recompute patches."""
     rows, seen = [], set()
     for model, rel in m06.MODEL_TREES:
         tree = rel.split("/")[0]
@@ -137,7 +210,7 @@ def _collect_runs_both_layouts(root):
         files |= set(glob.glob(os.path.join(root, tree, rel)))          # double-nested
         n_ok = 0
         for f in sorted(files):
-            key = os.path.normcase(os.path.abspath(f))
+            key = (model, _logical_run_key(f, root))
             if key in seen:
                 continue
             seen.add(key)
@@ -375,18 +448,10 @@ def main():
     if t4_ft.empty:
         print("  [WARN] no T4 full_ft rows — check the double-nested glob / scp.")
 
-    _render_group(summ_df, args.out, "cross_model_T3T4",
-                  T3T4_TASKS, T3T4_LABELS, T3T4_CHANCE,
-                  "MRI prognostic/conversion tasks — T3 (conv ≤3/5/7y) + T4 (horizon)\n"
-                  "cross-model results — TEST bACC / val bACC / AUC / macro-F1 (mean ± std across seeds)",
-                  val_title="MRI prognostic/conversion tasks — T3 (conv ≤3/5/7y) + T4 (horizon)\n"
-                  "cross-model results — VALIDATION bACC / AUC / macro-F1 (mean ± std across seeds)")
-    _render_group(summ_df, args.out, "cross_model_T1e",
-                  T1E_TASKS, T1E_LABELS, T1E_CHANCE,
-                  "MRI conversion task T1e (pCN vs sCN) — cross-model results\n"
-                  "TEST bACC / val bACC / AUC / macro-F1 (mean ± std across seeds)",
-                  val_title="MRI conversion task T1e (pCN vs sCN) — cross-model results\n"
-                  "VALIDATION bACC / AUC / macro-F1 (mean ± std across seeds)")
+    # Styled (clinical-aesthetic) conversion tables — footnote-free, T3 and T4
+    # split (different cohorts: T3 binary/broad, T4 3-class horizon/converter-only).
+    # The aug/HP legend is written beside each as *_aug_hp.png.
+    _render_styled_conv(summ_df, args.out)
 
     print("\n" + "=" * 78)
     print("  Done. NOTE: T4 full_ft test sets are tiny (n~12) and prone to overfit — read the")

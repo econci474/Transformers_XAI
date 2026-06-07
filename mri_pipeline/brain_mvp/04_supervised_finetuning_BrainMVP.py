@@ -666,6 +666,15 @@ def main():
             test_labels, test_logits, task_cfg["task_type"])
         print(f"  Test metrics: {test_metrics}")
 
+        # Val-split metrics on the SAME best weights — a separate held-out cohort
+        # from test (disjoint 80/10/10), evaluated on its own loader. Saved here so
+        # the VALIDATION tables fill without a second --val_test pass.
+        _, _, val_logits, val_labels = run_one_epoch(
+            model, val_loader, criterion, optimizer, scaler, device, False)
+        val_metrics, _, _ = compute_test_metrics(
+            val_labels, val_logits, task_cfg["task_type"])
+        print(f"  Val metrics: {val_metrics}")
+
         label_names = class_names_for(task_cfg)
         test_diagnostics = compute_diagnostics(
             test_labels, test_preds, num_labels, label_names)
@@ -707,6 +716,7 @@ def main():
         }
         with open(out_dir / "metrics.json", "w") as f:
             json.dump({"config": config, "test_metrics": test_metrics,
+                       "val_metrics": val_metrics,
                        "test_diagnostics": test_diagnostics}, f, indent=2)
         print(f"  Saved: {out_dir}/metrics.json")
         print("=" * 70)

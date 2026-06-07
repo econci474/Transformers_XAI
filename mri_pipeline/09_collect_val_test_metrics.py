@@ -143,9 +143,9 @@ def _build_cmd(token, run_dir, cfg, args):
                "--augment", cfg.get("augment", "random"),
                "--vit_inputs_dir", args.vit_inputs,
                *_long_args(cfg)]
-        if strategy != "scratch":
-            if not args.vit_ckpt:
-                return None, "needs --vit-ckpt (MAE pretrained)"
+        # --val_test skips the pretrained load (best_model.pt overwrites it), so
+        # --vit-ckpt is optional; pass it only if provided (harmless).
+        if strategy != "scratch" and args.vit_ckpt:
             cmd += ["--pretrained_ckpt", args.vit_ckpt]
         for k_cfg, flag in [("drop_path_rate", "--drop_path_rate"),
                             ("attn_dropout", "--attn_dropout"),

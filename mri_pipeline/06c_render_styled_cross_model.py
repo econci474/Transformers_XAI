@@ -58,11 +58,34 @@ COHORT = {
 # T1d (pMCI vs sMCI) is the MCI-only conversion subset (per-class split not shown).
 N_T1D = {"val": 32, "test": 33}
 
+# Conversion-task held-out N + per-class breakdown (Clinical-table style). These
+# cohorts differ from the diagnostic tasks (T1e = CN-only stable-vs-progress;
+# T3/T4 = AD-conversion subset). Source: dataset_manifest.csv label counts in the
+# val/test split, mean across seeds 0/1/2, rounded. Each entry: an ordered list of
+# (class_label, count) per split; total is the sum.
+N_CONV = {
+    "T1e_pcn_vs_scn":  {"val": [("sCN", 15), ("pCN", 6)],
+                        "test": [("sCN", 18), ("pCN", 4)]},
+    "T3a_conv3y":      {"val": [("non-conv", 35), ("AD≤3yr", 4)],
+                        "test": [("non-conv", 34), ("AD≤3yr", 9)]},
+    "T3b_conv5y":      {"val": [("non-conv", 23), ("AD≤5yr", 6)],
+                        "test": [("non-conv", 23), ("AD≤5yr", 10)]},
+    "T3c_conv7y":      {"val": [("non-conv", 17), ("AD≤7yr", 6)],
+                        "test": [("non-conv", 14), ("AD≤7yr", 11)]},
+    "T4_conv_horizon": {"val": [("<3yr", 6), ("3-7yr", 3), ("≥7yr", 3)],
+                        "test": [("<3yr", 6), ("3-7yr", 4), ("≥7yr", 3)]},
+}
+
 TASK_LABELS = {
     "T1_binary":     "T1a: CN vs MCI+AD",
     "T1b_binary":    "T1b: CN+MCI vs AD",
     "T1d_binary":    "T1d: pMCI vs sMCI",
     "T2_multiclass": "T2: CN / MCI / AD",
+    "T1e_pcn_vs_scn":  "T1e: sCN vs pCN",
+    "T3a_conv3y":      "T3a: conv ≤3y",
+    "T3b_conv5y":      "T3b: conv ≤5y",
+    "T3c_conv7y":      "T3c: conv ≤7y",
+    "T4_conv_horizon": "T4: horizon <3 / 3-7 / ≥7y",
 }
 
 
@@ -71,6 +94,11 @@ def task_subtitle(task, split):
     sp = "val" if split == "val" else "test"
     if task == "T1d_binary":
         return f"N({sp})={N_T1D[split]}", ""
+    if task in N_CONV:
+        per_cls = N_CONV[task][split]
+        total = sum(c for _, c in per_cls)
+        cls_line = ", ".join(f"{lbl}={c}" for lbl, c in per_cls)
+        return f"N({sp})={total}", cls_line
     c = COHORT[split]
     n_line = f"N({sp})={c['total']}"
     if task == "T1_binary":
@@ -209,8 +237,11 @@ def _load(split):
     return df
 
 
-def render_table(df, split, tasks, metrics, out_stem):
-    """Clinical-style bordered table for the given tasks/metrics."""
+def render_table(df, split, tasks, metrics, out_stem, title_lines=None):
+    """Clinical-style bordered table for the given tasks/metrics.
+
+    title_lines: optional (line1_bold, line2_italic, line3_italic) override for
+    the 3-line title; if None, uses the default diagnostic-table title."""
     # rows present for these tasks (drop all-missing rows)
     metric_mean0 = metrics[0][0] + "_mean"
     present = df[df["task"].isin(tasks)].copy()
@@ -313,19 +344,28 @@ def render_table(df, split, tasks, metrics, out_stem):
             hline(row_tops[4 + ri], lw=0.6, ls="--")
 
     # ── Title (three lines: bold headline + two regular sub-lines) ──────────
-    split_word = {"val": "Validation", "test": "Test"}[split]
-    metric_word = ("balanced accuracy (early-stop metric)" if split == "val"
-                   else "Bal.Acc / AUC / F1")
-    line1 = f"MRI models: {split_word} {metric_word} by task"
-    line2 = "(mean ± std across 3 seeds)"
-    line3 = "Models trained using scans over all longitudinal visits, stratified by patient baseline diagnosis"
+    if title_lines is not None:
+        line1, line2, line3 = title_lines
+    else:
+        split_word = {"val": "Validation", "test": "Test"}[split]
+        metric_word = ("balanced accuracy (early-stop metric)" if split == "val"
+                       else "Bal.Acc / AUC / F1")
+        line1 = f"MRI models: {split_word} {metric_word} by task"
+        line2 = "(mean ± std across 3 seeds)"
+        line3 = "Models trained using scans over all longitudinal visits, stratified by patient baseline diagnosis"
     title_fs = 7.5 if n_data_cols <= 3 else 9
     xc = (LEFT + RIGHT) / 2
-    ax.text(xc, row_tops[0] - title_h * 0.30, line1, ha="center", va="center",
-            fontsize=title_fs, fontweight="bold")
-    ax.text(xc, row_tops[0] - title_h * 0.78, line2 + "\n" + line3, ha="center",
-            va="center", fontsize=title_fs - 1.3, fontstyle="italic",
-            color="#333333", linespacing=1.25)
+    if title_lines is not None:
+        # Clinical-table style: all three lines bold + centred, one block.
+        ax.text(xc, row_tops[0] - title_h * 0.5,
+                line1 + "\n" + line2 + "\n" + line3, ha="center", va="center",
+                fontsize=title_fs, fontweight="bold", linespacing=1.4)
+    else:
+        ax.text(xc, row_tops[0] - title_h * 0.30, line1, ha="center", va="center",
+                fontsize=title_fs, fontweight="bold")
+        ax.text(xc, row_tops[0] - title_h * 0.78, line2 + "\n" + line3, ha="center",
+                va="center", fontsize=title_fs - 1.3, fontstyle="italic",
+                color="#333333", linespacing=1.25)
 
     # ── Task group headers + N/per-class subtitle (2 lines) + underline ────
     col_cursor = 2

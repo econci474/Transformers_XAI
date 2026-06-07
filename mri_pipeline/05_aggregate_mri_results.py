@@ -71,6 +71,10 @@ MODEL_TREES = [
     ("ViT-MAE75",        "vit_outputs_hi_lr/aug_*/ViT_B_mae75/*/seed_*/full_ft/metrics.json"),
     ("ViT-MAE75",        "vit_outputs_hi_lr/aug_*/ViT_B_mae75/*/seed_*/frozen/metrics.json"),
     ("ViT-scratch",      "vit_baseline/ViT_B_scratch/*/seed_*/*/metrics.json"),
+    # ViT-MAE conversion-task sweep (T3a/b/c + T4): full_ft {none,random,plus_orig}
+    # + frozen {random,plus_orig}. Dedicated tree so it stays separate from the
+    # diagnostic debug/hi_lr provenance split. Each cell saves val+test inline.
+    ("ViT-MAE75",        "vit_outputs_conv/aug_*/ViT_B_mae75/*/seed_*/*/metrics.json"),
     # NOTE: ViT-Tiny ablation and AG-MS3D rescue2 (flips+strong) were started
     # but only got 1 W&B-uploaded run each before being abandoned. Their
     # MODEL_TREES entries are commented out so the cross-model table doesn't
@@ -105,6 +109,12 @@ MODEL_TREES = [
     # See sync_brainmvp_cached_from_wandb.py if you need to update the shim
     # writer's output path to match.
     ("BrainDINO-cached", "braindino_outputs/aug_none_hp_tuned/BrainDINO_vitb16_frozen_cached/*/seed_*/*/metrics.json"),
+    # Wide T2-only frozen-head HP sweep WINNER (lr1e-03_d0.3_ls0.1_hlinear_focal_std).
+    # Lives in its own tree, so the cached HP-winner filter compares it against the
+    # aug_none_hp_tuned T2 cells and picks whichever has the higher mean val-bACC
+    # (the wide winner, 0.63 > 0.60) — this is the HP-tuned BrainDINO T2 row used by
+    # the T2 late-fusion arm. T2-only, so it can't affect other tasks' selection.
+    ("BrainDINO-cached", "braindino_outputs/aug_none_T2_wide_winner/BrainDINO_vitb16_frozen_cached/*/seed_*/*/metrics.json"),
     ("BrainMVP-cached",  "brainmvp_debug/aug_none/BrainMVP_uniformer_frozen_cached/*/seed_*/*/metrics.json"),
     ("ViT-MAE-cached",   "vit_outputs_debug/aug_none/ViT_B_mae75_frozen_cached/*/seed_*/*/metrics.json"),
 ]
