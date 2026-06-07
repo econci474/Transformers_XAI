@@ -309,6 +309,11 @@ def parse_args():
     p.add_argument("--data_dir", type=str, required=True)
     p.add_argument("--out_dir", type=str, required=True,
                    help="Output dir for metrics.json / best_model.pt / etc.")
+    p.add_argument("--val_test", action="store_true",
+                   help="No training: load best_model.pt from --out_dir (which IS "
+                        "the run dir in this mode) and recompute val + test, patching "
+                        "a `val_metrics` block into metrics.json. Pass the same "
+                        "--head/--standardize/--drop_rate the cell was trained with.")
     p.add_argument("--no_resume", action="store_true")
     p.add_argument("--wandb", action="store_true")
     p.add_argument("--wandb_project", type=str, default=None)
@@ -375,6 +380,34 @@ def _macro_auc(labels, logits, num_labels):
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
+def patch_val_test_metrics(metrics_path, val_metrics, test_metrics,
+                           verify=True, tol=0.02):
+    """Recompute-mode writer: add a `val_metrics` block (and refresh
+    `test_metrics`) on an existing metrics.json. If the recomputed test
+    balanced_acc differs from the stored one by > tol, keep the stored
+    test_metrics (likely an env/transform mismatch) but still write
+    val_metrics, and warn — so a checkpoint recompute never silently changes
+    the published test numbers. Mirrors the other trainers' helper so the
+    `val_metrics` block format (auc_roc_ovr / macro_f1) is identical."""
+    metrics_path = Path(metrics_path)
+    if metrics_path.exists():
+        with open(metrics_path) as f:
+            d = json.load(f)
+    else:
+        d = {"config": {}}
+    old = (d.get("test_metrics") or {}).get("balanced_acc")
+    new = test_metrics.get("balanced_acc")
+    if verify and old is not None and new is not None and abs(old - new) > tol:
+        print(f"  [WARN] recomputed test bACC {new:.4f} != stored {old:.4f} "
+              f"(>|{tol}|); keeping stored test_metrics, writing val_metrics only.")
+    else:
+        d["test_metrics"] = test_metrics
+    d["val_metrics"] = val_metrics
+    with open(metrics_path, "w") as f:
+        json.dump(d, f, indent=2)
+    print(f"  [val_test] patched {metrics_path}")
+
+
 def main():
     args = parse_args()
     task_cfg = TASK_CONFIG[args.task]
@@ -393,10 +426,12 @@ def main():
         hp_name += f"_{args.loss}"
     if args.standardize:
         hp_name += "_std"
-    out_dir = Path(args.out_dir) / args.task / f"seed_{args.seed}" / hp_name
+    # --val_test targets an existing run directly: --out_dir IS the run dir.
+    out_dir = (Path(args.out_dir) if args.val_test
+               else Path(args.out_dir) / args.task / f"seed_{args.seed}" / hp_name)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    if (out_dir / "metrics.json").exists():
+    if (out_dir / "metrics.json").exists() and not args.val_test:
         print(f"  metrics.json already exists at {out_dir} -- skipping.")
         return
 
@@ -484,6 +519,24 @@ def main():
     print(f"  Head={args.head}  loss={args.loss}"
           + (f"(γ={args.focal_gamma})" if args.loss == "focal" else "")
           + f"  standardize={args.standardize}")
+
+    # ── val/test recompute from a saved checkpoint (no training) ──────────────
+    if args.val_test:
+        bm = out_dir / "best_model.pt"
+        if not bm.exists():
+            print(f"  [ERROR] --val_test: no best_model.pt at {out_dir}")
+            return
+        model.load_state_dict(torch.load(bm, map_location=device)["net"])
+        _, va_logits, va_labels = evaluate(model, val_loader, criterion, device)
+        _, te_logits, te_labels = evaluate(model, test_loader, criterion, device)
+        val_metrics,  _, _ = compute_test_metrics(
+            va_labels, va_logits, task_cfg["task_type"])
+        test_metrics, _, _ = compute_test_metrics(
+            te_labels, te_logits, task_cfg["task_type"])
+        print(f"  [val_test] val ={val_metrics}")
+        print(f"  [val_test] test={test_metrics}")
+        patch_val_test_metrics(out_dir / "metrics.json", val_metrics, test_metrics)
+        return
 
     wb = init_wandb(args, task_cfg, extra={
         "n_train": len(train_df), "n_val": len(val_df), "n_test": len(test_df),

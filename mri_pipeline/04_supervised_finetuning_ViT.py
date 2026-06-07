@@ -78,10 +78,10 @@ import warnings
 from datetime import datetime
 from pathlib import Path
 
+import torch  # import torch before numpy/pandas (Windows MKL DLL load order)
+import torch.nn as nn
 import numpy as np
 import pandas as pd
-import torch
-import torch.nn as nn
 from sklearn.metrics import (
     accuracy_score, average_precision_score, balanced_accuracy_score,
     confusion_matrix, f1_score, precision_recall_fscore_support,
@@ -380,6 +380,11 @@ def parse_args():
     # ── Resume ───────────────────────────────────────────────────────────────
     p.add_argument("--no_resume",       action="store_true",
                    help="Ignore any last_checkpoint.pt and start fresh.")
+    p.add_argument("--val_test",        action="store_true",
+                   help="No training: load best_model.pt and recompute val + test, "
+                        "patching a `val_metrics` block into metrics.json. In this "
+                        "mode --out_dir IS the run dir. Pass the same "
+                        "--strategy/--vit_size/--augment the run was trained with.")
     # ── wandb (optional; no-op unless --wandb) ───────────────────────────────
     p.add_argument("--wandb",           action="store_true",
                    help="Enable Weights & Biases logging (no-op if absent).")
@@ -978,6 +983,33 @@ def preflight_check_inputs(splits: dict, sample_k: int = 6) -> None:
 
 
 # ── Main ───────────────────────────────────────────────────────────────────────
+def patch_val_test_metrics(metrics_path, val_metrics, test_metrics,
+                           verify=True, tol=0.02):
+    """Recompute-mode writer: add a `val_metrics` block (and refresh
+    `test_metrics`) on an existing metrics.json. If the recomputed test
+    balanced_acc differs from the stored one by > tol, keep the stored
+    test_metrics (likely an env/transform mismatch) but still write
+    val_metrics, and warn — so a checkpoint recompute never silently changes
+    the published test numbers."""
+    metrics_path = Path(metrics_path)
+    if metrics_path.exists():
+        with open(metrics_path) as f:
+            d = json.load(f)
+    else:
+        d = {"config": {}}
+    old = (d.get("test_metrics") or {}).get("balanced_acc")
+    new = test_metrics.get("balanced_acc")
+    if verify and old is not None and new is not None and abs(old - new) > tol:
+        print(f"  [WARN] recomputed test bACC {new:.4f} != stored {old:.4f} "
+              f"(>|{tol}|); keeping stored test_metrics, writing val_metrics only.")
+    else:
+        d["test_metrics"] = test_metrics
+    d["val_metrics"] = val_metrics
+    with open(metrics_path, "w") as f:
+        json.dump(d, f, indent=2)
+    print(f"  [val_test] patched {metrics_path}")
+
+
 def main():
     args = parse_args()
     task_cfg = TASK_CONFIG[args.task]
@@ -995,6 +1027,9 @@ def main():
     else:
         model_slug = MODEL_SLUG  # full_ft / frozen: pretrained ViT-B
     out_dir = Path(args.out_dir) / model_slug / args.task / f"seed_{args.seed}" / args.strategy
+    # --val_test targets an existing run directly: --out_dir IS the run dir.
+    if args.val_test:
+        out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     print("=" * 70)
@@ -1146,6 +1181,26 @@ def main():
     scaler = torch.cuda.amp.GradScaler(enabled=(device.type == "cuda"))
     criterion = nn.CrossEntropyLoss(weight=class_weights,
                                     label_smoothing=args.label_smoothing)
+
+    # ── val/test recompute from a saved checkpoint (no training) ──────────────
+    if args.val_test:
+        bm = out_dir / "best_model.pt"
+        if not bm.exists():
+            print(f"  [ERROR] --val_test: no best_model.pt at {out_dir}")
+            return
+        model.load_state_dict(torch.load(bm, map_location=device)["net"])
+        _, _, va_logits, va_labels = run_one_epoch(
+            model, val_loader, criterion, optimizer, scaler, device, train=False)
+        _, _, te_logits, te_labels = run_one_epoch(
+            model, test_loader, criterion, optimizer, scaler, device, train=False)
+        val_metrics,  _, _ = compute_test_metrics(
+            va_labels, va_logits, task_cfg["task_type"])
+        test_metrics, _, _ = compute_test_metrics(
+            te_labels, te_logits, task_cfg["task_type"])
+        print(f"  [val_test] val ={val_metrics}")
+        print(f"  [val_test] test={test_metrics}")
+        patch_val_test_metrics(out_dir / "metrics.json", val_metrics, test_metrics)
+        return
 
     # ── wandb (gated; no-op without --wandb) ─────────────────────────────────
     wb = init_wandb(args, task_cfg, extra={

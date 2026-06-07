@@ -150,20 +150,28 @@ def _read_val_metrics(d: dict, run_dir: str, best_epoch) -> dict:
          only, so val_f1 stays None there until Part B re-runs it).
     Returns {"val_auc": float|None, "val_f1": float|None}."""
     out = {"val_auc": None, "val_f1": None}
-    if best_epoch is not None:
-        log = os.path.join(run_dir, "train_log.csv")
-        if os.path.exists(log):
-            try:
-                tl = pd.read_csv(log)
-                if "epoch" in tl.columns:
-                    row = tl[tl["epoch"] == best_epoch]
-                    if not row.empty:
-                        r0 = row.iloc[0]
-                        for col in ("val_auc", "val_f1"):
-                            if col in tl.columns and pd.notna(r0[col]):
-                                out[col] = float(r0[col])
-            except Exception:
-                pass
+    log = os.path.join(run_dir, "train_log.csv")
+    if os.path.exists(log):
+        try:
+            tl = pd.read_csv(log)
+            if "epoch" in tl.columns and len(tl):
+                row = (tl[tl["epoch"] == best_epoch]
+                       if best_epoch is not None else tl.iloc[0:0])
+                # Fallback when best_epoch is missing/not in the log: reproduce the
+                # trainer's early-stop pick (max val_bacc, tie-break lowest val_loss)
+                # so val_auc/f1 are read at the same epoch the checkpoint was saved.
+                if row.empty and "val_bacc" in tl.columns and tl["val_bacc"].notna().any():
+                    t = tl[tl["val_bacc"].notna()].copy()
+                    by = ["val_bacc", "val_loss"] if "val_loss" in t.columns else ["val_bacc"]
+                    asc = [False, True] if "val_loss" in t.columns else [False]
+                    row = t.sort_values(by, ascending=asc).iloc[0:1]
+                if not row.empty:
+                    r0 = row.iloc[0]
+                    for col in ("val_auc", "val_f1"):
+                        if col in tl.columns and pd.notna(r0[col]):
+                            out[col] = float(r0[col])
+        except Exception:
+            pass
     vm = d.get("val_metrics") or {}
     if vm:
         a = vm.get("auc", vm.get("auc_roc", vm.get("auc_roc_ovr")))

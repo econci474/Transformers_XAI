@@ -60,17 +60,22 @@ _spec.loader.exec_module(_05)
 
 
 # Trainer scripts, keyed by the --models token.
+_VIT = _HERE / "04_supervised_finetuning_ViT.py"
 TRAINERS = {
-    "brainmvp": _HERE / "brain_mvp" / "04_supervised_finetuning_BrainMVP.py",
-    "agms3d":   _HERE / "3d_cnn_vit" / "train_agms3d.py",
-    "cnn3d":    _HERE / "3d_conv_net" / "train_3dcnn.py",
+    "brainmvp":    _HERE / "brain_mvp" / "04_supervised_finetuning_BrainMVP.py",
+    "agms3d":      _HERE / "3d_cnn_vit" / "train_agms3d.py",
+    "cnn3d":       _HERE / "3d_conv_net" / "train_3dcnn.py",
+    "vit_mae":     _VIT,
+    "vit_scratch": _VIT,
 }
 
 # Which MODEL_TREES labels (from 05) map to each trainer token.
 MODELS_BY_TOKEN = {
-    "brainmvp": ["BrainMVP"],
-    "agms3d":   ["AG-MS3D-sep", "AG-MS3D-vanilla"],
-    "cnn3d":    ["Spasov-CNN"],
+    "brainmvp":    ["BrainMVP"],
+    "agms3d":      ["AG-MS3D-sep", "AG-MS3D-vanilla"],
+    "cnn3d":       ["Spasov-CNN"],
+    "vit_mae":     ["ViT-MAE75"],
+    "vit_scratch": ["ViT-scratch"],
 }
 
 
@@ -126,6 +131,29 @@ def _build_cmd(token, run_dir, cfg, args):
                "--cnn_inputs_dir", args.cnn_inputs]
         return cmd, None
 
+    if token in ("vit_mae", "vit_scratch"):
+        # ViT rebuilds the model (loading the MAE pretrained ckpt for full_ft/
+        # frozen) BEFORE overwriting with best_model.pt, so non-scratch needs
+        # --vit-ckpt. vit_size/strategy/augment must match the run; drop/attn/ls
+        # don't change tensor shapes but are passed to stay faithful.
+        strategy = cfg.get("strategy", "full_ft")
+        cmd = [py, script, *common,
+               "--strategy", strategy,
+               "--vit_size", cfg.get("vit_size", "base"),
+               "--augment", cfg.get("augment", "random"),
+               "--vit_inputs_dir", args.vit_inputs,
+               *_long_args(cfg)]
+        if strategy != "scratch":
+            if not args.vit_ckpt:
+                return None, "needs --vit-ckpt (MAE pretrained)"
+            cmd += ["--pretrained_ckpt", args.vit_ckpt]
+        for k_cfg, flag in [("drop_path_rate", "--drop_path_rate"),
+                            ("attn_dropout", "--attn_dropout"),
+                            ("label_smoothing", "--label_smoothing")]:
+            if cfg.get(k_cfg) is not None:
+                cmd += [flag, str(cfg[k_cfg])]
+        return cmd, None
+
     return None, f"unknown token {token}"
 
 
@@ -168,6 +196,11 @@ def parse_args():
                         "cnn3d_outputs/, agms3d_outputs/, ...).")
     p.add_argument("--brainmvp-inputs", default="")
     p.add_argument("--cnn-inputs", default="")
+    p.add_argument("--vit-inputs", default="",
+                   help="vit_inputs dir (128^3 volumes) for ViT recompute.")
+    p.add_argument("--vit-ckpt", default="",
+                   help="ViT-B MAE pretrained .pth.tar (needed to build the model "
+                        "before loading best_model.pt; not needed for scratch).")
     p.add_argument("--data-dir", required=True,
                    help="Post-exclusion splits root (seed_*/{train,val,test}.csv).")
     p.add_argument("--matched-labels", required=True)
