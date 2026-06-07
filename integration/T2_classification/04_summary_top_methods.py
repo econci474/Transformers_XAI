@@ -23,6 +23,7 @@ Run:  python integration/T2_classification/04_summary_top_methods.py
 """
 from __future__ import annotations
 
+import argparse
 import glob
 import os
 import re
@@ -67,6 +68,68 @@ def pretty_method(row):
     return core                                                    # detectors / weighted-avg / etc.
 
 
+def cleaned_name(row):
+    """Compact thesis name (the MRI foundation model is shown in its own column, NOT in the name).
+    The CL T2 3-class (formulation A) model is BioClinical-ModernBERT-large/full_ft -> 'BioClin-L-ft';
+    formulation B uses the dedicated T1/T1b binary DETECTORS -> 'CL T1/T1b'."""
+    m = str(row["method"]); tf = row["timeframe"]; fam = str(row.get("family", ""))
+    mfr = re.match(r"^(M12X|M12_DET|M12|BL)\s*/\s*", m)
+    framing = mfr.group(1) if mfr else ""
+    core = m[mfr.end():] if mfr else m
+    # clinical timepoint for the cross-sectional rows (CLbl_Mm12 = @bl, CLm12_Mm12/M12X = @m12)
+    if framing == "BL" or "CLbl" in fam:
+        cl_tp = "@bl"
+    elif framing in ("M12X", "M12", "M12_DET") or "CLm12" in fam:
+        cl_tp = "@m12"
+    else:
+        cl_tp = {"baseline_only": "@bl", "m12_only": "@m12"}.get(tf, "@m12")
+
+    if "MRI-only" in core:
+        return "MRI-only [T2 3-class @m12]"
+    # cross-sectional m12 fusions (CLbl_Mm12 / CLm12_Mm12): CL T2 @tp fused with MRI T2 @m12
+    mm2 = re.match(r"^(weighted-avg(?:-J)?|elastic-net|logreg)\s*/\s*(\w+)$", core)
+    if mm2 and ("CLbl" in fam or "CLm12" in fam):
+        meth, miss = mm2.groups()                      # missing-mode (complete_case) shown via the n column
+        return f"BioClin-L-ft T2 {cl_tp} + MRI T2 @m12  [{meth}]"
+    if "clinical-only" in core:
+        return f"BioClin-L-ft T2 {cl_tp}"
+    if "clinical-temporal-EN" in core:
+        return "BioClin-L-ft T2 @bl+m06+m12  [EN]"
+    # up_to_m12 class-wise detector fusion (A = T2 marginal, B = T1/T1b detectors)
+    mm = re.match(r"^([AB])_(LR|EN|meanP)\s*/\s*(CL\+MRI|CL\+T1b|CL)$", core)
+    if mm:
+        form, comb, src = mm.groups()
+        clin = "BioClin-L-ft T2 @bl+m06+m12" if form == "A" else "CL T1/T1b @bl+m06+m12"
+        mri = {"CL": "", "CL+MRI": " + MRI T1/T1b @m12", "CL+T1b": " + MRI T1b @m12"}[src]
+        wt = {"meanP": "", "LR": "  [logreg]", "EN": "  [EN]"}[comb]
+        return f"{clin}{mri}{wt}"
+    # up_to_m12 remainder-product detectors
+    mm3 = re.match(r"^detector-(structured|EN)\s*/\s*(CL\+MRI|CL)$", core)
+    if mm3:
+        meth, src = mm3.groups()
+        mri = " + MRI T1/T1b @m12" if src == "CL+MRI" else ""
+        return f"CL T1/T1b detectors @bl+m06+m12{mri}  [remainder-{meth}]"
+    # up_to_m12 flat / hierarchical temporal (clinical T2 + MRI T2 3-class)
+    if fam in ("flat", "hierarchical"):
+        return f"BioClin-L-ft T2 @bl+m06+m12 + MRI T2 @m12  [{fam}: {core}]"
+    return core
+
+
+def uses_mri(method):
+    """Whether a method actually fuses MRI (controls the MRI column: model name vs '—')."""
+    s = str(method)
+    if "MRI-only" in s:
+        return True
+    if "clinical-only" in s or "clinical-temporal-EN" in s:
+        return False
+    if re.search(r"/\s*CL\+(MRI|T1b)\b", s):     # class-wise / remainder CL+MRI / CL+T1b
+        return True
+    if re.search(r"/\s*CL\b\s*$", s):            # CL-only source -> no MRI
+        return False
+    # cross-sectional CLbl/CLm12 + flat/hierarchical fusions all consume MRI
+    return bool(re.search(r"(weighted-avg|elastic-net|logreg|avg)", s))
+
+
 def _label(row, idcols):
     parts = []
     for c in idcols:
@@ -85,15 +148,21 @@ def collect():
     for f in files:
         rel = Path(f).relative_to(OUT).parts
         timeframe = rel[0]
-        family = "/".join(rel[1:-1])
-        where = timeframe + (f" / {family}" if family else "")
+        # outputs are namespaced by MRI foundation model: {timeframe}/{BrainMVP|BrainDINO}/{family}/
+        if len(rel) > 1 and rel[1] in ("BrainMVP", "BrainDINO"):
+            mri_model, fam_parts = rel[1], rel[2:-1]
+        else:
+            mri_model, fam_parts = "", rel[1:-1]
+        family = "/".join(fam_parts)
+        where = timeframe + (f" / {mri_model}" if mri_model else "") + (f" / {family}" if family else "")
         d = pd.read_csv(f)
         if "bacc_mean" not in d.columns or "n_test_mean" not in d.columns:
             continue
+        # exclude metric columns AND the val_* tuning columns (which otherwise leak into method labels)
         idcols = [c for c in d.columns if not any(
-            c.startswith(p) for p in ("bacc", "macro", "f1_", "n_test"))]
+            c.startswith(p) for p in ("bacc", "macro", "f1_", "n_test", "val"))]
         for _, r in d.iterrows():
-            rec = {"timeframe": timeframe, "family": family, "where": where,
+            rec = {"timeframe": timeframe, "mri_model": mri_model, "family": family, "where": where,
                    "method": _label(r, idcols), "source_file": str(Path(f).relative_to(OUT))}
             for m in METRIC_MEANS + ["bacc_std", "n_test_mean"]:
                 rec[m] = float(r[m]) if m in d.columns and pd.notna(r[m]) else np.nan
@@ -102,17 +171,31 @@ def collect():
 
 
 def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--cleaned", action="store_true",
+                    help="Write a cleaned thesis table summary_t2_integration_cleaned.{csv,png}: "
+                         "house style (serif/bordered/ruled), NO footnote, CL model named in the "
+                         "title with abbrev BioClin-L-ft in the rows; pins method-6 (T1/T1b) + the "
+                         "new T1b-only temporal variant + the MRI-only ref. Leaves the existing "
+                         "summary_top5_bACC / summary_methods_all_ranked outputs untouched.")
+    args = ap.parse_args()
+
     df = collect()
     if df.empty:
         print("[error] no fusion_metrics.csv found under", OUT); return 1
-    # always name the MRI model: the m12_only/flat MRI-only refs use the BrainMVP T2 3-class head
-    mri_unnamed = df["method"].str.contains("MRI-only", case=False) & ~df["method"].str.contains("BrainMVP")
-    df.loc[mri_unnamed, "method"] = df.loc[mri_unnamed, "method"] + " [BrainMVP T2 3-class, stoch @m12]"
+    # name a bare MRI-only ref (m12_only CLbl/CLm12 'mri_only', no model token) as the T2 3-class head;
+    # the namespaced rows already carry 'BrainMVP'/'BrainDINO' in their source label and mri_model column.
+    mri_unnamed = (df["method"].str.contains("MRI-only", case=False)
+                   & ~df["method"].str.contains("BrainMVP")
+                   & ~df["method"].str.contains("BrainDINO"))
+    df.loc[mri_unnamed, "method"] = df.loc[mri_unnamed, "method"] + " [T2 3-class @m12]"
     df["display"] = df.apply(pretty_method, axis=1)
 
-    # dedup identical-metric rows (same underlying result reported in multiple folders)
-    keytuple = lambda r: tuple(round(r[m], 4) if pd.notna(r[m]) else np.nan
-                               for m in METRIC_MEANS + ["n_test_mean"])
+    # dedup identical-metric rows (same underlying result reported in multiple folders); the MRI model
+    # is part of the key so BrainMVP/BrainDINO rows never collapse into each other.
+    keytuple = lambda r: (r["mri_model"],) + tuple(round(r[m], 4) if pd.notna(r[m]) else np.nan
+                                                    for m in METRIC_MEANS + ["n_test_mean"])
     df["_key"] = df.apply(keytuple, axis=1)
     df["_dups"] = df.groupby("_key")["_key"].transform("size")
     # keep the SHALLOWEST source (attribute a duplicated reference to its top-level timeframe folder)
@@ -124,6 +207,10 @@ def main() -> int:
 
     # full ranked CSV (n>=30 first, then the excluded low-n rows)
     inc = df[df.n_ge_30].copy(); inc.insert(0, "rank", range(1, len(inc) + 1))
+
+    if args.cleaned:
+        return render_cleaned(inc)
+
     exc = df[~df.n_ge_30].copy(); exc.insert(0, "rank", "excluded_n<30")
     cols = (["rank", "timeframe", "family", "method"] + METRIC_MEANS
             + ["bacc_std", "n_test_mean", "_dups", "source_file"])
@@ -146,6 +233,158 @@ def main() -> int:
     print(top.assign(where=top["where"])[show].to_string(index=False))
     print(f"\n  wrote -> {OUT/'summary_top5_bACC.png'}\n         {OUT/'summary_methods_all_ranked.csv'}")
     return 0
+
+
+# --------------------------------------------------------------------------- #
+TOP_N_CLEANED = 10
+
+
+def render_cleaned(inc) -> int:
+    """Cleaned cross-model thesis table: top-N by bACC unioned with the rows the user wants visible,
+    for BOTH MRI models (BrainMVP, BrainDINO): method-6 (A_meanP/CL+MRI), the T1b-only variant
+    (A_meanP/CL+T1b), the CLbl_Mm12 best non-weighted row, and one MRI-only ref."""
+    inc = inc.copy()
+    inc["display"] = inc.apply(cleaned_name, axis=1)
+    inc["mri_disp"] = [r["mri_model"] if (r["mri_model"] and uses_mri(r["method"])) else "—"
+                       for _, r in inc.iterrows()]
+
+    pins = [inc.head(TOP_N_CLEANED)]
+    for model in ("BrainMVP", "BrainDINO"):
+        mm = inc[inc.mri_model == model]
+        pins.append(mm[(mm.timeframe == "up_to_m12") & (mm.method == "A_meanP / CL+MRI")].head(1))
+        pins.append(mm[(mm.timeframe == "up_to_m12") & (mm.method == "A_meanP / CL+T1b")].head(1))
+        pins.append(mm[mm.family.str.contains("CLbl_Mm12", na=False)
+                       & ~mm.method.str.contains("weighted-avg", na=False)].head(1))
+        pins.append(mm[mm.method.str.contains("MRI-only", case=False, na=False)].head(1))
+    sel = (pd.concat(pins)
+           .drop_duplicates(subset=["mri_model", "timeframe", "family", "method"])
+           .sort_values("bacc_mean", ascending=False)
+           # collapse model-agnostic (non-MRI, "—") rows that recur across both model namespaces
+           .drop_duplicates(subset=["mri_disp", "display"], keep="first")
+           .reset_index(drop=True))
+
+    out_cols = (["rank", "display", "mri_disp", "timeframe", "family"]
+                + METRIC_MEANS + ["bacc_std", "n_test_mean"])
+    sel[out_cols].rename(columns={"display": "method", "mri_disp": "MRI"}).to_csv(
+        OUT / "summary_t2_integration_cleaned.csv", index=False)
+    render_house(sel, OUT / "summary_t2_integration_cleaned.png")
+
+    print("=" * 90)
+    print("  T2 cross-model summary — CLEANED (house style, BioClin-L-ft; BrainMVP vs BrainDINO)")
+    print("=" * 90)
+    print(sel[["rank", "mri_disp", "display", "bacc_mean", "bacc_std", "macro_auc_mean",
+               "n_test_mean"]].to_string(index=False))
+    print(f"\n  wrote -> {OUT/'summary_t2_integration_cleaned.png'}"
+          f"\n         {OUT/'summary_t2_integration_cleaned.csv'}")
+    return 0
+
+
+def render_house(sel, out_path):
+    """Manual house-style table (DejaVu Serif, bordered, ruled, italic headers, dashed dividers,
+    bold best-per-column) — mirrors clinical_pipeline/01e_render_t4_stratification.py."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    matplotlib.rcParams["font.family"] = "DejaVu Serif"
+
+    COLS = [("bacc_mean", "Test bACC", "bacc_std"), ("macro_f1_mean", "macro-F1", None),
+            ("macro_auc_mean", "macro-AUC", None), ("f1_CN_mean", "F1 CN", None),
+            ("f1_MCI_mean", "F1 MCI", None), ("f1_AD_mean", "F1 AD", None)]
+    headers = ["#", "Method", "MRI"] + [c[1] for c in COLS] + ["n"]
+    N_LEAD = 3                                          # leading non-metric cols: #, Method, MRI
+
+    body, numeric, is_ref = [], [], []
+    for _, r in sel.iterrows():
+        cells = [str(int(r["rank"])), r["display"], str(r.get("mri_disp", "—"))]
+        nums = []
+        for key, _, stdk in COLS:
+            v = r[key]
+            if pd.isna(v):
+                cells.append("—"); nums.append(np.nan)
+            else:
+                s = f"{v:.3f}" + (f" ± {r[stdk]:.3f}" if stdk and pd.notna(r.get(stdk)) else "")
+                cells.append(s); nums.append(float(v))
+        cells.append(str(int(round(r["n_test_mean"]))))
+        body.append(cells); numeric.append(nums)
+        is_ref.append(str(r["display"]).startswith("MRI-only"))
+    numeric = np.array(numeric, float)
+    best = [int(np.nanargmax(numeric[:, j])) if not np.all(np.isnan(numeric[:, j])) else -1
+            for j in range(len(COLS))]
+
+    # column widths (inches): #, Method (wide, left), MRI, 6 metric cols, n
+    COL_W = [0.45, 4.95, 1.10, 1.45, 1.10, 1.20, 0.90, 0.96, 0.90, 0.50]
+    LEFT, RIGHT_PAD = 0.28, 0.28
+    TITLE_H, HEAD_H, ROW_H = 1.06, 0.40, 0.44
+    TOP_PAD, BOT_PAD = 0.12, 0.12
+    n_rows = len(body)
+    fig_w = LEFT + sum(COL_W) + RIGHT_PAD
+    fig_h = TOP_PAD + TITLE_H + HEAD_H + ROW_H * n_rows + BOT_PAD
+
+    fig, ax = plt.subplots(figsize=(fig_w, fig_h))
+    ax.axis("off"); ax.set_xlim(0, fig_w); ax.set_ylim(0, fig_h)
+    col_left = [LEFT]
+    for w in COL_W:
+        col_left.append(col_left[-1] + w)
+    RIGHT = col_left[-1]
+    col_cx = [(col_left[i] + col_left[i + 1]) / 2 for i in range(len(COL_W))]
+
+    def hline(y, lw=1.0, ls="-"):
+        ax.plot([LEFT, RIGHT], [y, y], color="black", linewidth=lw, linestyle=ls,
+                solid_capstyle="butt", zorder=3)
+
+    y = fig_h - TOP_PAD
+    y_title_top = y
+    y -= TITLE_H
+    ax.text((LEFT + RIGHT) / 2, (y_title_top + y) / 2,
+            "T2 Late Fusion: Best Methods Across Timeframes & MRI Models\n"
+            "mean ± std across seeds 0/1/2 · ranked by Test balanced accuracy\n"
+            "clinical T2 = BioClinical-ModernBERT-large (full fine-tune, \"BioClin-L-ft\")  ·  "
+            "MRI = BrainMVP or BrainDINO (frozen)",
+            ha="center", va="center", fontsize=10.5, fontweight="bold", linespacing=1.5)
+    hline(y_title_top, lw=1.5)
+    hline(y, lw=1.2)
+
+    # header row (italic): #, Method left-aligned; the rest centered
+    y_head_top = y
+    y -= HEAD_H
+    ymid = (y_head_top + y) / 2
+    ax.text(col_left[0] + 0.06, ymid, headers[0], ha="left", va="center",
+            fontsize=9.5, fontstyle="italic")
+    ax.text(col_left[1] + 0.06, ymid, headers[1], ha="left", va="center",
+            fontsize=9.5, fontstyle="italic")
+    for j in range(2, len(headers)):
+        ax.text(col_cx[j], ymid, headers[j], ha="center", va="center",
+                fontsize=9.5, fontstyle="italic")
+    hline(y, lw=1.2)
+
+    y_data_top = y
+    for i, cells in enumerate(body):
+        if is_ref[i]:
+            hline(y, lw=0.6, ls=(0, (3, 3)))      # dashed rule before the MRI-only reference
+        yr_top = y
+        y -= ROW_H
+        ymid = (yr_top + y) / 2
+        ax.text(col_left[0] + 0.06, ymid, cells[0], ha="left", va="center", fontsize=9.0)
+        ax.text(col_left[1] + 0.06, ymid, cells[1], ha="left", va="center", fontsize=9.0)
+        for j in range(2, len(headers)):
+            metric_j = j - N_LEAD                  # metric columns start after #, Method, MRI
+            bold = (0 <= metric_j < len(COLS) and best[metric_j] == i)
+            ax.text(col_cx[j], ymid, cells[j], ha="center", va="center", fontsize=9.0,
+                    fontweight="bold" if bold else "normal")
+    BOTTOM = y
+
+    # dashed vertical dividers between every column
+    for x in col_left[1:-1]:
+        ax.plot([x, x], [BOTTOM, y_data_top], color="black", linewidth=0.7,
+                linestyle=(0, (3, 3)), zorder=2)
+    hline(BOTTOM, lw=1.5)
+    ax.add_patch(plt.Rectangle((LEFT, BOTTOM), RIGHT - LEFT, y_title_top - BOTTOM,
+                               facecolor="none", edgecolor="black", linewidth=1.5, zorder=5))
+
+    fig.savefig(out_path, bbox_inches="tight", dpi=300)
+    fig.savefig(out_path.with_suffix(".pdf"), bbox_inches="tight", dpi=300)
+    plt.close(fig)
+    print(f"  PNG: {out_path}")
 
 
 # --------------------------------------------------------------------------- #

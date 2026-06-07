@@ -65,24 +65,27 @@ MRI_T1_TMPL = ("D:/ADNI_BIDS_project/derivatives/brainmvp_embeddings/T1_binary/"
                "aug_stochastic/seed_{seed}/embeddings_seed_{seed}.csv")
 MRI_T1B_TMPL = ("D:/ADNI_BIDS_project/derivatives/brainmvp_embeddings/T1b_binary/"
                 "aug_stochastic/seed_{seed}/embeddings_seed_{seed}.csv")
+MRI_NAME_DEFAULT = "BrainMVP T1+T1b stoch @m12"   # --mri-name; namespaces the MRI-only ref label
 TPS = ["bl", "m06", "m12"]
 OUT_DIR_DEFAULT = (Path(__file__).resolve().parent / "outputs" / "up_to_m12"
                    / "detectors" / "class_wise_detector_fusion")
 
 FORMS = ["A", "B"]                      # A=clinical T2-marginal, B=clinical binary detector
-MRIS = ["CL", "CL+MRI"]
+# CL+MRI augments BOTH classes (T1->p(CN), T1b->p(AD)); CL+T1b augments p(AD) ONLY (T1b), leaving
+# p(CN) clinical-only (no T1/CN MRI detector) -- the "T1b-only" temporal variant.
+MRIS = ["CL", "CL+MRI", "CL+T1b"]
 KINDS = ["LR", "EN"]
 MCI_COLS = [f"t2_{tp}_1" for tp in TPS]  # clinical T2 P(MCI) @ bl,m06,m12 (both formulations, no MRI)
 
 
 def cn_cols(form, mri):
     base = [f"t2_{tp}_0" for tp in TPS] if form == "A" else [f"cn_{tp}" for tp in TPS]
-    return base + (["mri_cn"] if mri == "CL+MRI" else [])
+    return base + (["mri_cn"] if mri == "CL+MRI" else [])   # CL+T1b: no MRI on CN
 
 
 def ad_cols(form, mri):
     base = [f"t2_{tp}_2" for tp in TPS] if form == "A" else [f"ad_{tp}" for tp in TPS]
-    return base + (["mri_ad"] if mri == "CL+MRI" else [])
+    return base + (["mri_ad"] if mri in ("CL+MRI", "CL+T1b") else [])
 
 
 # --------------------------------------------------------------------------- #
@@ -102,7 +105,7 @@ def load_t2_block(seed, tp):
                              "split": "split" if tp == "m12" else f"_split_{tp}"})
 
 
-def build_frame(seed):
+def build_frame(seed, t1_tmpl=MRI_T1_TMPL, t1b_tmpl=MRI_T1B_TMPL):
     f = load_t2_block(seed, "m12")[["Patient_ID", "split", "y_m12",
                                     "t2_m12_0", "t2_m12_1", "t2_m12_2"]].copy()
     f["y_true"] = f["y_m12"].astype(int)
@@ -112,9 +115,9 @@ def build_frame(seed):
     for tp in TPS:
         f = f.merge(load_bin_prob(seed, tp, T1, "prob_0", f"cn_{tp}"), on="Patient_ID", how="left")
         f = f.merge(load_bin_prob(seed, tp, T1B, "prob_1", f"ad_{tp}"), on="Patient_ID", how="left")
-    f = f.merge(h.load_mri_detector(seed, MRI_T1_TMPL, "m12", "prob_class_0", "mri_cn"),
+    f = f.merge(h.load_mri_detector(seed, t1_tmpl, "m12", "prob_class_0", "mri_cn"),
                 on="Patient_ID", how="left")
-    f = f.merge(h.load_mri_detector(seed, MRI_T1B_TMPL, "m12", "prob_class_1", "mri_ad"),
+    f = f.merge(h.load_mri_detector(seed, t1b_tmpl, "m12", "prob_class_1", "mri_ad"),
                 on="Patient_ID", how="left")
     return f
 
@@ -173,12 +176,12 @@ def _t2_impute(df, prior):
     return np.column_stack(blocks + [ind])
 
 
-def variant_rows():
+def variant_rows(mri_name=MRI_NAME_DEFAULT):
     """(variant, source, label) for the metrics table, in display order."""
     out = [("clinical_only", "CL_m12", "REF  clinical T2 3-class @ m12 (argmax)"),
            ("temporal_CL_T2_EN", "CL bl+m06+m12", "REF  clinical T2 3-class EN @ bl+m06+m12"),
-           ("MRI_only", "BrainMVP T1+T1b stoch @m12",
-            "REF  MRI-only [BrainMVP T1+T1b stoch @m12]  (struct: [t1, (1-t1)(1-t1b), t1b])")]
+           ("MRI_only", mri_name,
+            f"REF  MRI-only [{mri_name}]  (struct: [t1, (1-t1)(1-t1b), t1b])")]
     kd = {"LR": "LR", "EN": "EN", "meanP": "mean(present)"}
     for form in FORMS:
         for mri in MRIS:
@@ -193,11 +196,17 @@ def main() -> int:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--seeds", type=int, nargs="+", default=list(SEEDS_DEFAULT))
     ap.add_argument("--out-dir", type=Path, default=OUT_DIR_DEFAULT)
+    ap.add_argument("--mri-name", default=MRI_NAME_DEFAULT,
+                    help="MRI-model label for the MRI-only ref source (e.g. 'BrainDINO T1+T1b frozen @m12').")
+    ap.add_argument("--mri-t1-template", default=MRI_T1_TMPL,
+                    help="CSV template (with {seed}) for the T1/CN detector probs (prob_class_0).")
+    ap.add_argument("--mri-t1b-template", default=MRI_T1B_TMPL,
+                    help="CSV template (with {seed}) for the T1b/AD detector probs (prob_class_1).")
     args = ap.parse_args()
 
     rows, preds, cov, fails = [], [], [], []
     for seed in args.seeds:
-        f = build_frame(seed)
+        f = build_frame(seed, args.mri_t1_template, args.mri_t1b_template)
         prior = h.class_prior_from_train(f.rename(columns={"y_true": "y_clin"}))
         val, test = f[f.split == "val"], f[f.split == "test"]
         yv = val["y_true"].to_numpy(int)
@@ -249,7 +258,7 @@ def main() -> int:
             mcn, mad = tm["mri_cn"].to_numpy(float), tm["mri_ad"].to_numpy(float)
             Pm = np.clip(np.stack([mcn, (1 - mcn) * (1 - mad), mad], axis=1), 1e-9, None)
             Pm = Pm / Pm.sum(axis=1, keepdims=True)
-            add("MRI_only", "BrainMVP T1+T1b stoch @m12", Pm.argmax(1), Pm, df=tm)
+            add("MRI_only", args.mri_name, Pm.argmax(1), Pm, df=tm)
 
         # ---- class-wise fusion variants (learned LR/EN, + parameter-free present-only mean) ----
         for form in FORMS:
@@ -303,7 +312,7 @@ def main() -> int:
             sub.to_csv(vdir / "failure_table.csv", index=False)
             render_failure(sub, form, mri, kind, vdir)
 
-    render_metrics_png(summary, covdf, out / "fusion_table_detectors.png")
+    render_metrics_png(summary, covdf, out / "fusion_table_detectors.png", args.mri_name)
     print("=" * 94)
     print("  T2 class-wise learned late fusion (per-class LR/EN over clinical timepoints + MRI)")
     print("=" * 94)
@@ -346,7 +355,7 @@ FOOT = [
 ]
 
 
-def render_metrics_png(summary, cov, out_path):
+def render_metrics_png(summary, cov, out_path, mri_name=MRI_NAME_DEFAULT):
     try:
         import matplotlib
         matplotlib.use("Agg")
@@ -355,7 +364,7 @@ def render_metrics_png(summary, cov, out_path):
         print("  [WARN] matplotlib missing -- skip metrics PNG."); return
     idx = {(r["variant"], r["source"]): r for _, r in summary.iterrows()}
     body, numeric = [], []
-    for variant, source, label in variant_rows():
+    for variant, source, label in variant_rows(mri_name):
         if (variant, source) not in idx:
             continue
         r = idx[(variant, source)]
@@ -421,6 +430,8 @@ def _caption(form, mri, kind):
         clin = "clinical = T1/T1b binary detector"
     if mri == "CL+MRI":
         cn = cn + ["P(CN) MRI.T1 @m12"]
+        ad = ad + ["P(AD) MRI.T1b @m12"]
+    elif mri == "CL+T1b":                       # T1b-only: augment AD class only
         ad = ad + ["P(AD) MRI.T1b @m12"]
     gdesc = ("mean of the PRESENT terms (present-only; no imputation, no learned weights)"
              if kind == "meanP" else f"{kind} (class-vs-rest, fit on VAL)")
