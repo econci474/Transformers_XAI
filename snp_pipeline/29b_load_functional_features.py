@@ -1,18 +1,25 @@
 r"""
 29b_load_functional_features.py   (importable + CLI; env: snp / colab)
 =====================================================================
-Concatenate the 4 AlphaGenome npz outputs into a single (128, 23) feature
+Concatenate the 6 AlphaGenome npz outputs into a single (128, 25) feature
 matrix aligned to the recover_all_pool canonical rsID order, ready for
-per-SNP concat in the diff-attention trainer (script 30).
+per-SNP concat in the diff-attention trainer (script 30v3).
 
-Order (matches the per-modality npz column order):
-  [0..4]   eqtl              — 5 brain RNA-seq tracks
-  [5..12]  accessibility     — 8 brain DNase/ATAC max_signed tracks
-  [13..18] TSS               — 6 brain CAGE/PRO-cap max_signed tracks
-  [19]     splicing_merged   — 1 merged scalar
-  [20..22] splicing_components — 3 max-abs (splice_sites, splice_site_usage,
-                                  splice_junctions)
-Total: 5 + 8 + 6 + 1 + 3 = 23 features per SNP.
+Order (matches the per-modality npz column order; STRICT FILTER ALLOW-LIST
+post-2026-06-07 — see 28_extract_alphagenome_scores.py docstring):
+  [0..3]   eqtl                — 4 RNA-seq tracks (3 DLPFC + 1 Hippocampus)
+  [4..6]   accessibility       — 3 DNase tracks (DLPFC + Hippo + Hippo-astro)
+  [7..8]   TSS                 — 2 Hippocampus CAGE tracks
+  [9]      splicing_merged     — 1 merged scalar
+  [10..12] splicing_components — 3 max-abs (sites, usage, junctions)
+  [13..23] chip_histone        — 11 CHIP_HISTONE tracks
+                                  (DLPFC × {H3K27ac, H3K27me3, H3K36me3,
+                                            H3K4me1, H3K4me3, H3K9ac}
+                                   + Layer-of-hippo × {H3K27ac, H3K36me3,
+                                                       H3K4me1, H3K4me3,
+                                                       H3K9ac})
+  [24]     chip_tf             — 1 CHIP_TF track (DLPFC × CTCF)
+Total: 4 + 3 + 2 + 1 + 3 + 11 + 1 = 25 features per SNP.
 
 Default column counts come from `effect_scores.shape[1]` of each npz; if
 your run produces different counts, the helper auto-pads with zeros to a
@@ -25,7 +32,7 @@ Usage as a library:
   mod = importlib.util.module_from_spec(fn); fn.loader.exec_module(mod)
   feat, names, dim = mod.load_functional_features("D:/.../fm_embeddings_short_seq_1kb",
                                                     target_rsids)
-  # feat: (128, 23) float32
+  # feat: (128, 25) float32
 
 Usage as CLI:
   python 29b_load_functional_features.py --base D:/ADNI_SNP_Omni2.5M_20140220 \\
@@ -42,13 +49,15 @@ import numpy as np
 import pandas as pd
 
 FUNCTIONAL_FEATURE_LAYOUT = [
-    ("eqtl",              5),  # alphagenome_eqtl/recover_all_pool_snp_embeddings_eqtl.npz
-    ("accessibility",     8),  # alphagenome_accessibility/...accessibility.npz
-    ("TSS",               6),  # alphagenome_TSS/...TSS.npz
-    ("splicing_merged",   1),  # alphagenome_splicing_merged/...splicing_merged.npz (effect_scores)
-    ("splicing_components", 3),  # same npz, components key (128, 3)
+    ("eqtl",                4),  # 3 DLPFC RNA_SEQ + 1 Hippocampus RNA_SEQ
+    ("accessibility",       3),  # DLPFC DNase + Hippo DNase + Hippo-astro DNase
+    ("TSS",                 2),  # Hippocampus CAGE ×2
+    ("splicing_merged",     1),
+    ("splicing_components", 3),
+    ("chip_histone",       11),  # DLPFC × 6 marks + Layer-of-hippo × 5 marks
+    ("chip_tf",             1),  # DLPFC × CTCF
 ]
-TOTAL_FEATURES = sum(n for _, n in FUNCTIONAL_FEATURE_LAYOUT)  # 23
+TOTAL_FEATURES = sum(n for _, n in FUNCTIONAL_FEATURE_LAYOUT)  # 25
 
 
 def _load_modality_matrix(parent: Path, modality: str, target_rsids: list[str],
@@ -107,12 +116,17 @@ def load_functional_features(parent: Path, target_rsids: list[str]) -> tuple[np.
 
 # ───────────────────────── Modality summaries (for v3 trainer) ─────────────
 
-# Map modality → list of AlphaGenome output_type values that belong to it
+# Map modality → list of AlphaGenome output_type values that belong to it.
+# 2026-06-07 amendment: added chip_histone + chip_tf (CHIP_HISTONE / CHIP_TF
+# scorers added to script 28 alongside the strict-filter allow-list). 6
+# modalities now drive `load_modality_summaries()` → 12 (abs+signed) keys.
 MODALITY_OUTPUT_TYPES = {
-    "eqtl":   ["RNA_SEQ"],
-    "acc":    ["DNASE", "ATAC"],
-    "tss":    ["CAGE", "PROCAP"],
-    "splice": ["SPLICE_SITES", "SPLICE_SITE_USAGE", "SPLICE_JUNCTIONS"],
+    "eqtl":         ["RNA_SEQ"],
+    "acc":          ["DNASE", "ATAC"],
+    "tss":          ["CAGE", "PROCAP"],
+    "splice":       ["SPLICE_SITES", "SPLICE_SITE_USAGE", "SPLICE_JUNCTIONS"],
+    "chip_histone": ["CHIP_HISTONE"],
+    "chip_tf":      ["CHIP_TF"],
 }
 
 

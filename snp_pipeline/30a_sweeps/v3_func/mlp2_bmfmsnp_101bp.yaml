@@ -22,8 +22,8 @@ parameters:
   func_integration_mode:
     values:
       - none
-      - per_snp_zscored_23
-      - per_snp_summaries_8
+      - per_snp_zscored_25
+      - per_snp_summaries_12
       - attn_bias_single
       - attn_bias_per_modality
       - value_mult

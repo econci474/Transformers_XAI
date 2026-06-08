@@ -10,13 +10,16 @@ is verbatim from v2 / `30_train_diff_attention_v2.py`.
 
 Modes (passed via --func-integration-mode):
   - none                                : no func; value = [β, dosage, β·dosage]
-  - per_snp_zscored_23                  : 23-D raw AG features (z-scored) concat
-  - per_snp_summaries_8                 : 8 modality summaries (4 abs + 4 signed)
-                                          z-scored concat
+  - per_snp_zscored_25                  : 25-D raw AG features (z-scored) concat
+  - per_snp_summaries_12                 : 12 modality summaries (6 abs + 6 signed
+                                          across eqtl, acc, tss, splice, chip_histone,
+                                          chip_tf) z-scored concat
   - attn_bias_single                    : value = baseline 3-D; bias += ε · func_imp_abs
   - attn_bias_per_modality              : value = baseline 3-D; bias += Σ_m ε_m · m_abs
-  - value_mult                          : value = 11-D multiplicative block
-  - attn_bias_per_modality_plus_value_mult : combine the two
+  - value_mult                          : value = 15-D multiplicative block (6 modalities)
+  - attn_bias_per_modality_plus_value_mult : per-modality bias + value_mult
+  - attn_bias_per_modality_plus_per_snp_summaries_12 : per-modality bias + 12 summary concat
+  - attn_bias_single_plus_func_imp_abs  : single ε bias + 1-col func_imp_abs concat (4-D value)
 
 For tree heads (`rf`/`xgb`) all ε's are FIXED at 1; the `_fixed_aggregator`
 is extended to honour the same bias formulation.
@@ -67,15 +70,18 @@ DEFAULT_SPLITS = Path("D:/ADNI_BIDS_project/derivatives/clinical/"
 
 ALL_MODES = [
     "none",
-    "per_snp_zscored_23",
-    "per_snp_summaries_8",
+    "per_snp_zscored_25",
+    "per_snp_summaries_12",
     "attn_bias_single",
     "attn_bias_per_modality",
     "value_mult",
     "attn_bias_per_modality_plus_value_mult",
+    # 2026-06-07: 2 new combo modes (user request)
+    "attn_bias_per_modality_plus_per_snp_summaries_12",  # per-modality bias + 12 summaries concat
+    "attn_bias_single_plus_func_imp_abs",                # single ε bias + 1-col func_imp_abs concat
 ]
 
-MODALITIES = ("eqtl", "acc", "tss", "splice")  # canonical order
+MODALITIES = ("eqtl", "acc", "tss", "splice", "chip_histone", "chip_tf")  # canonical order (2026-06-07: added chip_histone + chip_tf)
 
 
 # ── Data loading (paths kept v2-compatible; modes resolved later) ─────────
@@ -266,8 +272,14 @@ TASK_REGISTRY = {
 
 
 def _resolve_ag_parent(base: Path) -> Path:
-    """Find the dir containing alphagenome_<modality>/ subdirs and tidy_long.tsv.gz."""
-    for rel in ("fm_embeddings_short_seq_1kb_with_alphagenome",
+    """Find the dir containing alphagenome_<modality>/ subdirs and tidy_long.tsv.gz.
+    Search names in priority order:
+      - alphagenome_features       (post-2026-06-08 corrected-GTEx layout)
+      - fm_embeddings_short_seq_1kb_with_alphagenome (legacy / original Colab)
+      - fm_embeddings_short_seq_1kb (older fallback)
+    """
+    for rel in ("alphagenome_features",
+                "fm_embeddings_short_seq_1kb_with_alphagenome",
                 "fm_embeddings_short_seq_1kb"):
         p = base / rel
         if (p / "alphagenome_eqtl").exists():
@@ -307,13 +319,20 @@ def _build_value_block(mode: str, beta: np.ndarray, dosage_p: np.ndarray,
     if mode in ("none", "attn_bias_single", "attn_bias_per_modality"):
         return np.concatenate([beta_col, dosage_col, bd_col], axis=1)
 
-    if mode == "per_snp_zscored_23":
+    if mode == "per_snp_zscored_25":
         return np.concatenate([beta_col, dosage_col, bd_col, func_block], axis=1)
 
-    if mode == "per_snp_summaries_8":
+    if mode in ("per_snp_summaries_12",
+                 "attn_bias_per_modality_plus_per_snp_summaries_12"):
         cols = [summaries_z[f"{m}_{kind}"].reshape(S, 1)
                  for m in MODALITIES for kind in ("abs", "signed")]
         return np.concatenate([beta_col, dosage_col, bd_col, *cols], axis=1)
+
+    if mode == "attn_bias_single_plus_func_imp_abs":
+        # baseline 3-D + single column = max across z-scored |modality|
+        func_imp = np.maximum.reduce(
+            [summaries_z[f"{m}_abs"] for m in MODALITIES]).reshape(S, 1).astype(np.float32)
+        return np.concatenate([beta_col, dosage_col, bd_col, func_imp], axis=1)
 
     if mode in ("value_mult", "attn_bias_per_modality_plus_value_mult"):
         # 11-D multiplicative block (user spec 2026-05-26):
@@ -351,11 +370,12 @@ def _build_extra_bias_static(mode: str, summaries_z: dict | None,
                                 P: int, S: int) -> np.ndarray | None:
     """For tree-head fixed aggregator: deterministic (S,) bias (all ε=1).
     Returns (S,) array OR None for modes without bias terms."""
-    if mode == "attn_bias_single":
-        # func_importance = max across 4 abs modalities
+    if mode in ("attn_bias_single", "attn_bias_single_plus_func_imp_abs"):
+        # func_importance = max across abs modalities
         return np.maximum.reduce([summaries_z[f"{m}_abs"] for m in MODALITIES])
     if mode in ("attn_bias_per_modality",
-                "attn_bias_per_modality_plus_value_mult"):
+                "attn_bias_per_modality_plus_value_mult",
+                "attn_bias_per_modality_plus_per_snp_summaries_12"):
         return sum(summaries_z[f"{m}_abs"] for m in MODALITIES)
     return None
 
@@ -391,11 +411,12 @@ class DiffAttnV3(nn.Module):
         else:
             raise ValueError(f"Unsupported head for end-to-end: {head}")
         # Learnable ε's
-        if mode == "attn_bias_single":
+        if mode in ("attn_bias_single", "attn_bias_single_plus_func_imp_abs"):
             self.eps = nn.Parameter(torch.zeros(1))
             self._eps_shape = "single"
         elif mode in ("attn_bias_per_modality",
-                       "attn_bias_per_modality_plus_value_mult"):
+                       "attn_bias_per_modality_plus_value_mult",
+                       "attn_bias_per_modality_plus_per_snp_summaries_12"):
             self.eps = nn.Parameter(torch.zeros(len(MODALITIES)))
             self._eps_shape = "per_modality"
         else:
@@ -764,8 +785,18 @@ def main() -> None:
     ap.add_argument("--wandb-project", "--wandb_project", default=None,
                     dest="wandb_project")
     ap.add_argument("--wandb-entity", "--wandb_entity", default=None, dest="wandb_entity")
+    ap.add_argument("--wandb-group", "--wandb_group", default=None, dest="wandb_group",
+                    help="wandb group tag for batch filtering "
+                          "(e.g. 'strict_v1_layerhippo' for the corrected-GTEx sweep).")
     ap.add_argument("--output-root", "--output_root", type=Path,
                     default=Path("outputs/diff_attn_v3"), dest="output_root")
+    ap.add_argument("--ag-parent", "--ag_parent", type=Path, default=None,
+                    dest="ag_parent",
+                    help="Explicit override for the AlphaGenome parent dir "
+                          "containing alphagenome_<modality>/ subfolders. "
+                          "Default: search heuristic under --base. Set this to "
+                          "outputs/corrected_gtex/fm_embeddings_short_seq_1kb_with_alphagenome/ "
+                          "(2026-06-07 strict-filter rerun).")
     args = ap.parse_args()
     np.random.seed(args.seed); torch.manual_seed(args.seed)
 
@@ -780,6 +811,7 @@ def main() -> None:
         if args.exclude_cn_to_ad:
             _name += "_no_cn_to_ad"
         wb = wandb.init(project=args.wandb_project, entity=args.wandb_entity,
+                         group=args.wandb_group,
                          config=vars(args), name=_name)
 
     # ── Load core tensors ────────────────────────────────────────────────
@@ -808,18 +840,28 @@ def main() -> None:
 
     # ── Load func resources (only what this mode needs) ─────────────────
     mode = args.func_integration_mode
-    needs_per_snp_23  = (mode == "per_snp_zscored_23")
-    needs_summaries   = mode in {"per_snp_summaries_8", "attn_bias_single",
+    needs_per_snp_25  = (mode == "per_snp_zscored_25")
+    needs_summaries   = mode in {"per_snp_summaries_12", "attn_bias_single",
                                    "attn_bias_per_modality", "value_mult",
-                                   "attn_bias_per_modality_plus_value_mult"}
-    ag_parent = _resolve_ag_parent(args.base) if (needs_per_snp_23 or needs_summaries) else None
+                                   "attn_bias_per_modality_plus_value_mult",
+                                   "attn_bias_per_modality_plus_per_snp_summaries_12",
+                                   "attn_bias_single_plus_func_imp_abs"}
+    if needs_per_snp_25 or needs_summaries:
+        ag_parent = (args.ag_parent if args.ag_parent
+                     else _resolve_ag_parent(args.base))
+        if not (ag_parent / "alphagenome_eqtl").exists():
+            raise FileNotFoundError(
+                f"--ag-parent {ag_parent} does not contain alphagenome_eqtl/ — "
+                f"check the path or omit --ag-parent to use the search heuristic.")
+    else:
+        ag_parent = None
 
-    func_raw23 = None
+    func_raw25 = None
     summaries = None
-    if needs_per_snp_23:
-        print(f"[load] 23-D functional features ({ag_parent})")
-        func_raw23, _ = ff.load_functional_features(ag_parent, target_rsids)
-        print(f"  func shape: {func_raw23.shape}")
+    if needs_per_snp_25:
+        print(f"[load] 25-D functional features ({ag_parent})")
+        func_raw25, _ = ff.load_functional_features(ag_parent, target_rsids)
+        print(f"  func shape: {func_raw25.shape}")
     if needs_summaries:
         print(f"[load] modality summaries ({ag_parent})")
         summaries = ff.load_modality_summaries(ag_parent, target_rsids)
@@ -865,11 +907,11 @@ def main() -> None:
     # All target SNPs participate in train; so train_snp_mask is all-True.
     train_snp_mask = np.ones(len(target_rsids), dtype=bool)
     zscore_stats = {}
-    func_raw23_z = None
+    func_raw25_z = None
     summaries_z = None
-    if needs_per_snp_23:
-        func_raw23_z, stats = _zscore_train(func_raw23, train_snp_mask)
-        zscore_stats["func_raw23"] = stats
+    if needs_per_snp_25:
+        func_raw25_z, stats = _zscore_train(func_raw25, train_snp_mask)
+        zscore_stats["func_raw25"] = stats
     if needs_summaries:
         summaries_z = {}
         for k, v in summaries.items():
@@ -887,7 +929,7 @@ def main() -> None:
     def _build(sp):
         d = splits[sp]
         X = _per_patient_values(mode, beta, d["dosage"],
-                                  func_raw23_z, summaries_z, diff)
+                                  func_raw25_z, summaries_z, diff)
         beta_t = beta.copy()
         dxb = beta[None, :] * d["dosage"]
         return X, beta_t, dxb, d["y"]

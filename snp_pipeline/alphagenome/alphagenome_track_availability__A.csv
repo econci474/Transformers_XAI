@@ -1,0 +1,55 @@
+ontology_curie,biosample_name,biosample_type,biosample_life_stage,row_label,output_short,data_source,histone_mark,transcription_factor,name
+CL:0002603,astrocyte of the cerebellum,primary_cell,,astrocyte of the cerebellum,CAGE,fantom,,,hCAGE CL:0002603
+CL:0002605,astrocyte of the cerebral cortex,primary_cell,,astrocyte of the cerebral cortex,CAGE,fantom,,,hCAGE CL:0002605
+UBERON:0001872,parietal lobe,tissue,,Parietal lobe (bulk tissue),CAGE,fantom,,,hCAGE UBERON:0001872
+UBERON:0001954,Ammon's horn,tissue,,Hippocampus (bulk tissue),CAGE,fantom,,,hCAGE UBERON:0001954
+CL:0002603,astrocyte of the cerebellum,primary_cell,,astrocyte of the cerebellum,CAGE,fantom,,,hCAGE CL:0002603
+CL:0002605,astrocyte of the cerebral cortex,primary_cell,,astrocyte of the cerebral cortex,CAGE,fantom,,,hCAGE CL:0002605
+UBERON:0001872,parietal lobe,tissue,,Parietal lobe (bulk tissue),CAGE,fantom,,,hCAGE UBERON:0001872
+UBERON:0001954,Ammon's horn,tissue,,Hippocampus (bulk tissue),CAGE,fantom,,,hCAGE UBERON:0001954
+CL:0000127,astrocyte,primary_cell,unknown,astrocyte (generic),DNASE,encode,,,CL:0000127 DNase-seq
+CL:0002603,astrocyte of the cerebellum,primary_cell,unknown,astrocyte of the cerebellum,DNASE,encode,,,CL:0002603 DNase-seq
+CL:0002604,astrocyte of the hippocampus,primary_cell,unknown,astrocyte of the hippocampus,DNASE,encode,,,CL:0002604 DNase-seq
+CL:0002606,astrocyte of the spinal cord,primary_cell,unknown,astrocyte of the spinal cord,DNASE,encode,,,CL:0002606 DNase-seq
+UBERON:0001954,Ammon's horn,tissue,adult,Hippocampus (bulk tissue),DNASE,encode,,,UBERON:0001954 DNase-seq
+UBERON:0009834,dorsolateral prefrontal cortex,tissue,adult,DLPFC (bulk tissue),DNASE,encode,,,UBERON:0009834 DNase-seq
+CL:0000127,astrocyte,primary_cell,unknown,astrocyte (generic),RNA_SEQ,encode,,,CL:0000127 total RNA-seq
+UBERON:0009834,dorsolateral prefrontal cortex,tissue,adult,DLPFC (bulk tissue),RNA_SEQ,encode,,,UBERON:0009834 total RNA-seq
+CL:0000127,astrocyte,primary_cell,unknown,astrocyte (generic),RNA_SEQ,encode,,,CL:0000127 total RNA-seq
+UBERON:0009834,dorsolateral prefrontal cortex,tissue,adult,DLPFC (bulk tissue),RNA_SEQ,encode,,,UBERON:0009834 total RNA-seq
+UBERON:0001954,Ammon's horn,tissue,adult,Hippocampus (bulk tissue),RNA_SEQ,gtex,,,UBERON:0001954 gtex Brain_Hippocampus polyA plus RNA-seq
+UBERON:0009834,dorsolateral prefrontal cortex,tissue,adult,DLPFC (bulk tissue),RNA_SEQ,gtex,,,UBERON:0009834 gtex Brain_Frontal_Cortex_BA9 polyA plus RNA-seq
+CL:0000127,astrocyte,primary_cell,unknown,astrocyte (generic),CHIP_HISTONE,encode,H2AFZ,,CL:0000127 Histone ChIP-seq H2AFZ
+CL:0000127,astrocyte,primary_cell,unknown,astrocyte (generic),CHIP_HISTONE,encode,H3K27ac,,CL:0000127 Histone ChIP-seq H3K27ac
+CL:0000127,astrocyte,primary_cell,unknown,astrocyte (generic),CHIP_HISTONE,encode,H3K27me3,,CL:0000127 Histone ChIP-seq H3K27me3
+CL:0000127,astrocyte,primary_cell,unknown,astrocyte (generic),CHIP_HISTONE,encode,H3K36me3,,CL:0000127 Histone ChIP-seq H3K36me3
+CL:0000127,astrocyte,primary_cell,unknown,astrocyte (generic),CHIP_HISTONE,encode,H3K4me1,,CL:0000127 Histone ChIP-seq H3K4me1
+CL:0000127,astrocyte,primary_cell,unknown,astrocyte (generic),CHIP_HISTONE,encode,H3K4me2,,CL:0000127 Histone ChIP-seq H3K4me2
+CL:0000127,astrocyte,primary_cell,unknown,astrocyte (generic),CHIP_HISTONE,encode,H3K4me3,,CL:0000127 Histone ChIP-seq H3K4me3
+CL:0000127,astrocyte,primary_cell,unknown,astrocyte (generic),CHIP_HISTONE,encode,H3K79me2,,CL:0000127 Histone ChIP-seq H3K79me2
+CL:0000127,astrocyte,primary_cell,unknown,astrocyte (generic),CHIP_HISTONE,encode,H3K9ac,,CL:0000127 Histone ChIP-seq H3K9ac
+CL:0000127,astrocyte,primary_cell,unknown,astrocyte (generic),CHIP_HISTONE,encode,H4K20me1,,CL:0000127 Histone ChIP-seq H4K20me1
+CL:0002603,astrocyte of the cerebellum,primary_cell,unknown,astrocyte of the cerebellum,CHIP_HISTONE,encode,H3K4me3,,CL:0002603 Histone ChIP-seq H3K4me3
+CL:0002606,astrocyte of the spinal cord,primary_cell,unknown,astrocyte of the spinal cord,CHIP_HISTONE,encode,H3K4me3,,CL:0002606 Histone ChIP-seq H3K4me3
+UBERON:0009834,dorsolateral prefrontal cortex,tissue,adult,DLPFC (bulk tissue),CHIP_HISTONE,encode,H3K27ac,,UBERON:0009834 Histone ChIP-seq H3K27ac
+UBERON:0009834,dorsolateral prefrontal cortex,tissue,adult,DLPFC (bulk tissue),CHIP_HISTONE,encode,H3K27me3,,UBERON:0009834 Histone ChIP-seq H3K27me3
+UBERON:0009834,dorsolateral prefrontal cortex,tissue,adult,DLPFC (bulk tissue),CHIP_HISTONE,encode,H3K36me3,,UBERON:0009834 Histone ChIP-seq H3K36me3
+UBERON:0009834,dorsolateral prefrontal cortex,tissue,adult,DLPFC (bulk tissue),CHIP_HISTONE,encode,H3K4me1,,UBERON:0009834 Histone ChIP-seq H3K4me1
+UBERON:0009834,dorsolateral prefrontal cortex,tissue,adult,DLPFC (bulk tissue),CHIP_HISTONE,encode,H3K4me3,,UBERON:0009834 Histone ChIP-seq H3K4me3
+UBERON:0009834,dorsolateral prefrontal cortex,tissue,adult,DLPFC (bulk tissue),CHIP_HISTONE,encode,H3K9ac,,UBERON:0009834 Histone ChIP-seq H3K9ac
+CL:0000127,astrocyte,primary_cell,unknown,astrocyte (generic),CHIP_TF,encode,,CTCF,CL:0000127 TF ChIP-seq CTCF
+CL:0000127,astrocyte,primary_cell,unknown,astrocyte (generic),CHIP_TF,encode,,EZH2,CL:0000127 TF ChIP-seq EZH2
+CL:0002606,astrocyte of the spinal cord,primary_cell,unknown,astrocyte of the spinal cord,CHIP_TF,encode,,CTCF,CL:0002606 TF ChIP-seq CTCF
+UBERON:0009834,dorsolateral prefrontal cortex,tissue,adult,DLPFC (bulk tissue),CHIP_TF,encode,,CTCF,UBERON:0009834 TF ChIP-seq CTCF
+CL:0000127,astrocyte,primary_cell,unknown,astrocyte (generic),SPLICE_SITE_USAGE,encode,,,usage_CL:0000127 total RNA-seq
+UBERON:0001954,Ammon's horn,tissue,adult,Hippocampus (bulk tissue),SPLICE_SITE_USAGE,gtex,,,usage_UBERON:0001954 gtex Brain_Hippocampus polyA plus RNA-seq
+UBERON:0009834,dorsolateral prefrontal cortex,tissue,adult,DLPFC (bulk tissue),SPLICE_SITE_USAGE,gtex,,,usage_UBERON:0009834 gtex Brain_Frontal_Cortex_BA9 polyA plus RNA-seq
+UBERON:0009834,dorsolateral prefrontal cortex,tissue,adult,DLPFC (bulk tissue),SPLICE_SITE_USAGE,encode,,,usage_UBERON:0009834 total RNA-seq
+CL:0000127,astrocyte,primary_cell,unknown,astrocyte (generic),SPLICE_SITE_USAGE,encode,,,usage_CL:0000127 total RNA-seq
+UBERON:0001954,Ammon's horn,tissue,adult,Hippocampus (bulk tissue),SPLICE_SITE_USAGE,gtex,,,usage_UBERON:0001954 gtex Brain_Hippocampus polyA plus RNA-seq
+UBERON:0009834,dorsolateral prefrontal cortex,tissue,adult,DLPFC (bulk tissue),SPLICE_SITE_USAGE,gtex,,,usage_UBERON:0009834 gtex Brain_Frontal_Cortex_BA9 polyA plus RNA-seq
+UBERON:0009834,dorsolateral prefrontal cortex,tissue,adult,DLPFC (bulk tissue),SPLICE_SITE_USAGE,encode,,,usage_UBERON:0009834 total RNA-seq
+CL:0000127,astrocyte,primary_cell,unknown,astrocyte (generic),SPLICE_JUNCTIONS,encode,,,junction_CL:0000127 total RNA-seq
+UBERON:0001954,Ammon's horn,tissue,adult,Hippocampus (bulk tissue),SPLICE_JUNCTIONS,gtex,,,junction_UBERON:0001954 gtex Brain_Hippocampus polyA plus RNA-seq
+UBERON:0009834,dorsolateral prefrontal cortex,tissue,adult,DLPFC (bulk tissue),SPLICE_JUNCTIONS,gtex,,,junction_UBERON:0009834 gtex Brain_Frontal_Cortex_BA9 polyA plus RNA-seq
+UBERON:0009834,dorsolateral prefrontal cortex,tissue,adult,DLPFC (bulk tissue),SPLICE_JUNCTIONS,encode,,,junction_UBERON:0009834 total RNA-seq
