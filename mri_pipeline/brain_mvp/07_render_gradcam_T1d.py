@@ -95,7 +95,7 @@ def main() -> int:
     cam_sum = {0: None, 1: None}
     inp_sum = {0: None, 1: None}
     cnt = {0: 0, 1: 0}
-    exemplars = {0: [], 1: []}
+    cand = {0: [], 1: []}   # (prob1, pid, vis, cam_path, inp_path) — confidence-ranked exemplars
     miss = 0
     for _, r in man.iterrows():
         if correct_only and int(r["correct"]) != 1:
@@ -111,8 +111,7 @@ def main() -> int:
         cam_sum[lab] = cam if cam_sum[lab] is None else cam_sum[lab] + cam
         inp_sum[lab] = inp if inp_sum[lab] is None else inp_sum[lab] + inp
         cnt[lab] += 1
-        if len(exemplars[lab]) < args.n_exemplars:
-            exemplars[lab].append((r["Patient_ID"], r["adni_viscode"], float(r["prob1"]), cam, inp))
+        cand[lab].append((float(r["prob1"]), r["Patient_ID"], r["adni_viscode"], cam_p, inp_p))
 
     print(f"  averaged: sMCI={cnt[0]} pMCI={cnt[1]} (skipped {miss})")
     if cnt[0] == 0 and cnt[1] == 0:
@@ -135,9 +134,16 @@ def main() -> int:
                  f"gradcam_group_{CLASS_NAME[lab]}", thr)
         print(f"  wrote group {CLASS_NAME[lab]} montages (n={cnt[lab]})")
 
-    # ── exemplars ────────────────────────────────────────────────────────────────
+    # ── exemplars: most-confident correct predictions ────────────────────────────
+    # pMCI panel -> highest p_pMCI; sMCI panel -> lowest p_pMCI (= highest p_sMCI).
     for lab in (0, 1):
-        for (pid, vis, p1, cam, inp) in exemplars[lab]:
+        ranked = sorted(cand[lab], key=lambda t: t[0], reverse=(lab == 1))
+        picks = ranked[:args.n_exemplars]
+        print(f"  {CLASS_NAME[lab]} exemplars (p_pMCI): "
+              f"{['%.2f' % p for p, *_ in picks]}")
+        for (p1, pid, vis, cam_p, inp_p) in picks:
+            cam = np.load(cam_p).astype(np.float32)
+            inp = np.load(inp_p).astype(np.float32)
             thr = args.thresh * float(cam.max()) if args.thresh > 0 else None
             montages(_img(cam), _img(inp),
                      f"{CLASS_NAME[lab]} {pid} {vis} (p_pMCI={p1:.2f})",
