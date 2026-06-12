@@ -26,11 +26,14 @@ import pandas as pd
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(HERE, "outputs")
-ARCH_DISP = {"mlp_concat": "MLP-concat", "cross_attn": "Cross-attn", "cross_attn_x": "X-attn (CLS)"}
+# Feature-fusion display labels (cross_attn is self-attention over the concatenated token set — a
+# misnomer; cross_attn_x is the true bidirectional cross-attention over one CLS per modality).
+FUSION_DISP = {"mlp_concat": "MLP", "cross_attn": "Self-attention", "cross_attn_x": "Cross-attention"}
 MRI_DISP = {"A": "BrainDINO-T2", "B": "BrainMVP-T1b"}
-ARM_DISP = {"BL": "Baseline", "M12": "1-year (m12)", "LONG": "Longitudinal"}
-LOSS_DISP = {"ce": "CE", "ce_patient": "CE + patient",
-             "ce_patient_label": "CE + patient + label"}
+CLIN_DISP = "BioClin-L · T2 (CN/MCI/AD)"          # clinical encoder, constant across arms
+TIMEFRAME = {"BL": "Baseline", "M12": "1-year (m12)", "LONG": "Longitudinal"}
+LOSS_DISP = {"ce": "CE", "ce_patient": "CE + SigLIP(pat)",
+             "ce_patient_label": "CE + SigLIP(pat,lab)"}
 LOSS_ORDER = ["ce", "ce_patient", "ce_patient_label"]
 ARM_ORDER = ["M12", "LONG"]
 
@@ -86,35 +89,82 @@ def load_unimodal_refs():
     return pd.read_csv(p)
 
 
+def _agg_label(arch, arm, clin_pool):
+    """How the per-modality / per-visit CLS vectors are combined into the joint representation."""
+    if arch == "mlp_concat":
+        return "concatenation"                         # all tokens concatenated, then MLP
+    if arch == "cross_attn":
+        return "mean-pool"                             # self-attention over tokens, then mean-pool
+    if arch == "cross_attn_x":                         # bidirectional cross-attn over single CLS
+        return clin_pool if arm == "LONG" else "single CLS"   # LONG: mean/mamba visit pooling
+    return "—"
+
+
+def _fusion_row(arm, b):
+    loss = b["loss"]
+    loss_str = LOSS_DISP[loss] + ("" if loss == "ce" else
+        f" · λ={b['lam']:g}" + (f" wu{int(b['warmup'])}" if b["warmup"] else ""))
+    return {"block": "fusion", "section": f"fusion::{TIMEFRAME[arm]}", "ref_kind": "",
+            "clin": CLIN_DISP, "timeframe": TIMEFRAME[arm],
+            "mri": MRI_DISP[b["variant"]], "fusion": FUSION_DISP[b["arch"]], "emb": "CLS",
+            "agg": _agg_label(b["arch"], arm, b["clin_pool"]), "loss_str": loss_str,
+            "sig_acc": "", "sig_auc": "",
+            **{k: b[k] for k in ("bacc_m", "bacc_s", "auc_m", "auc_s",
+                                 "f1_m", "f1_s", "valbacc_m", "n_test")}}
+
+
 def headline(full, uni):
-    """Condition = (arm, loss): best over variant+arch (lambda already tuned in `full`).
-    References = the two UNIMODAL 1-year predictions (clinical, MRI), with a significance marker
-    (best 1-year fusion vs that reference, McNemar exact)."""
+    """Per (arm, loss): the best fusion over variant+arch (λ tuned in `full`); PLUS one best-mamba
+    row per timeframe (where mamba exists — LONG only) to expose mamba's ceiling; then the unimodal
+    references. Each reference carries TWO markers: accuracy (McNemar exact) and AUC (OVO-pairwise
+    DeLong), both vs the best fusion of that timeframe. Rows are ordered by test bACC within each
+    timeframe group. Columns are decomposed (clinical / timeframe / MRI / fusion / emb / agg / loss)."""
     rows = []
     for arm in ARM_ORDER:
         for loss in LOSS_ORDER:
             sub = full[(full.clin_arm == arm) & (full.loss == loss)]
-            if sub.empty:
-                continue
-            b = sub.loc[sub["bacc_m"].idxmax()]
-            arch_disp = ARCH_DISP[b["arch"]] + (
-                f" ({b['clin_pool']})" if b["arch"] == "cross_attn_x" and arm == "LONG" else "")
-            cfg = f"{MRI_DISP[b['variant']]} · {arch_disp}" + (
-                "" if loss == "ce" else
-                f" · λ={b['lam']:g}" + (f" (wu{int(b['warmup'])})" if b['warmup'] else ""))
-            rows.append({"block": "fusion", "method": ARM_DISP[arm], "loss_str": LOSS_DISP[loss],
-                         "cfg": cfg, **{k: b[k] for k in ("bacc_m", "bacc_s", "auc_m", "auc_s",
-                                        "f1_m", "f1_s", "valbacc_m", "n_test")}})
-    for _, r in uni.iterrows():
-        lbl = r["label"].replace("Clinical-only 1-year (unimodal)", "Clinical-only (unimodal)") \
-                        .replace("MRI-only 1-year (unimodal)", "MRI-only (unimodal)")
-        rows.append({"block": "ref", "method": "1-year (m12)", "loss_str": f"{lbl} [{r['sig']}]",
-                     "cfg": "own softmax (no head)",
+            if not sub.empty:
+                rows.append(_fusion_row(arm, sub.loc[sub["bacc_m"].idxmax()]))
+        # best mamba-aggregation fusion for this timeframe (mamba pools >1 visit → LONG only)
+        mam = full[(full.clin_arm == arm) & (full.arch == "cross_attn_x")
+                   & (full.clin_pool == "mamba")]
+        if not mam.empty:
+            rows.append(_fusion_row(arm, mam.loc[mam["bacc_m"].idxmax()]))
+    # ── unimodal references (own softmax, no head) — grouped clinical vs imaging ──
+    REF_TF = {"clinical_only_1yr": "1-year (m12)", "clinical_only_long": "Longitudinal",
+              "mri_only_1yr": "1-year (m12)", "mri_mvp_1yr": "1-year (m12)"}
+    REF_CLIN = {"clinical_only_1yr": CLIN_DISP, "clinical_only_long": CLIN_DISP,
+                "mri_only_1yr": "—", "mri_mvp_1yr": "—"}
+    REF_MRI = {"clinical_only_1yr": "—", "clinical_only_long": "—",
+               "mri_only_1yr": "BrainDINO-T2", "mri_mvp_1yr": "BrainMVP-T1b*"}
+    REF_KIND = {"clinical_only_1yr": "clinical", "clinical_only_long": "clinical",
+                "mri_only_1yr": "imaging", "mri_mvp_1yr": "imaging"}
+    uni = uni.set_index("ref")
+    for ref in ["clinical_only_1yr", "clinical_only_long", "mri_only_1yr", "mri_mvp_1yr"]:
+        if ref not in uni.index:
+            continue
+        r = uni.loc[ref]
+        rows.append({"block": "ref", "section": f"ref::{REF_KIND[ref]}", "ref_kind": REF_KIND[ref],
+                     "clin": REF_CLIN[ref], "timeframe": REF_TF[ref],
+                     "mri": REF_MRI[ref], "fusion": "—", "emb": "CLS",
+                     "agg": "—", "loss_str": "—",
+                     "sig_acc": str(r.get("sig_acc", r.get("sig", ""))),
+                     "sig_auc": str(r.get("sig_auc", "")),
                      "bacc_m": r["balanced_acc_m"], "bacc_s": r["balanced_acc_s"],
                      "auc_m": r["auc_roc_ovr_m"], "auc_s": r["auc_roc_ovr_s"],
                      "f1_m": r["macro_f1_m"], "f1_s": r["macro_f1_s"],
                      "valbacc_m": np.nan, "n_test": r["n"]})
-    return pd.DataFrame(rows)
+    # order: fusion block before refs; fusion by timeframe then bACC desc; refs by clinical-then-
+    # imaging then bACC desc (so clinical and imaging references are separated into blocks).
+    df = pd.DataFrame(rows)
+    tf_order = {"1-year (m12)": 0, "Longitudinal": 1, "Baseline": 2}
+    kind_order = {"clinical": 0, "imaging": 1}
+    df["_blk"] = (df["block"] == "ref").astype(int)
+    df["_sec"] = [tf_order.get(t, 9) if b == "fusion" else kind_order.get(k, 9)
+                  for b, t, k in zip(df["block"], df["timeframe"], df["ref_kind"])]
+    df = (df.sort_values(["_blk", "_sec", "bacc_m"], ascending=[True, True, False])
+            .drop(columns=["_blk", "_sec"]).reset_index(drop=True))
+    return df
 
 
 def _fmt(m, s):
@@ -122,24 +172,28 @@ def _fmt(m, s):
 
 
 def _cells(r):
-    vb = f"{r['valbacc_m']:.2f}" if pd.notna(r["valbacc_m"]) else "--"
-    return [r["method"], r["loss_str"], r["cfg"],
-            _fmt(r["bacc_m"], r["bacc_s"]), _fmt(r["auc_m"], r["auc_s"]),
-            _fmt(r["f1_m"], r["f1_s"]), vb, f"{r['n_test']:.0f}"]
+    bacc = _fmt(r["bacc_m"], r["bacc_s"]) + (f" [{r['sig_acc']}]" if r["sig_acc"] else "")
+    auc = _fmt(r["auc_m"], r["auc_s"]) + (f" [{r['sig_auc']}]" if r["sig_auc"] else "")
+    return [r["clin"], r["timeframe"], r["mri"], r["fusion"], r["emb"], r["agg"], r["loss_str"],
+            bacc, auc, _fmt(r["f1_m"], r["f1_s"]), f"{r['n_test']:.0f}"]
 
 
 def render_png(tab, out_png):
     matplotlib.rcParams["font.family"] = "DejaVu Serif"
-    LEAD = ["Clinical arm", "Loss", "Best config (tuned)"]
-    headers = LEAD + ["Test bACC", "macro-AUC", "macro-F1", "Val bACC", "n"]
+    LEAD = ["Clinical (model · task)", "Timeframe", "MRI @ m12", "Feature fusion",
+            "Emb", "Aggregation", "Loss"]
+    headers = LEAD + ["Test bACC", "macro-AUC", "macro-F1", "n"]
     body = [_cells(r) for _, r in tab.iterrows()]
     numeric = np.array([[r["bacc_m"], r["auc_m"], r["f1_m"]] for _, r in tab.iterrows()], float)
     best = [int(np.nanargmax(numeric[:, j])) for j in range(3)]
-    rules = [i > 0 and tab.iloc[i]["block"] != tab.iloc[i - 1]["block"] for i in range(len(tab))]
+    # rule whenever the section changes: fusion timeframe groups (M12→LONG), fusion→ref, and the
+    # clinical→imaging reference split.
+    sec = tab["section"].tolist()
+    rules = [i > 0 and sec[i] != sec[i - 1] for i in range(len(tab))]
 
-    COL_W = [1.95, 3.30, 4.05, 1.55, 1.55, 1.55, 1.20, 0.55]
+    COL_W = [2.70, 1.45, 1.55, 2.35, 0.55, 1.65, 3.00, 1.85, 1.85, 1.35, 0.50]
     LEFT, RIGHT_PAD = 0.28, 0.28
-    TITLE_H, HEAD_H, ROW_H, TOP_PAD, BOT_PAD = 1.70, 0.40, 0.46, 0.12, 0.12
+    TITLE_H, HEAD_H, ROW_H, TOP_PAD, BOT_PAD = 2.15, 0.42, 0.46, 0.12, 0.12
     fig_w = LEFT + sum(COL_W) + RIGHT_PAD
     fig_h = TOP_PAD + TITLE_H + HEAD_H + ROW_H * len(body) + BOT_PAD
     fig, ax = plt.subplots(figsize=(fig_w, fig_h))
@@ -148,7 +202,7 @@ def render_png(tab, out_png):
     for w in COL_W:
         cl.append(cl[-1] + w)
     RIGHT = cl[-1]; ccx = [(cl[i] + cl[i + 1]) / 2 for i in range(len(COL_W))]
-    LEFT_COLS = {0, 1, 2}
+    LEFT_COLS = {0, 1, 2, 3, 4, 5, 6}
 
     def hline(yy, lw=1.0, ls="-"):
         ax.plot([LEFT, RIGHT], [yy, yy], color="black", linewidth=lw, linestyle=ls,
@@ -157,17 +211,18 @@ def render_png(tab, out_png):
     y = fig_h - TOP_PAD; y_top = y; y -= TITLE_H
     ax.text((LEFT + RIGHT) / 2, y + TITLE_H / 2,
             "Cross-modal fusion — best hyperparameter-tuned per condition · 12-month T2 (CN/MCI/AD)\n"
-            "Fusion tuned over {MRI variant, architecture, λ∈{0.01,0.1,0.5,1.0}}; SigLIP λ>0.01 use warmup=10\n"
-            "mean ± std seeds 0/1/2 · references = unimodal own-softmax (no head); [sig] = best 1-yr fusion vs ref\n"
-            "(McNemar exact): * p<0.05, ** p<0.01, *** p<0.001, n.s. = not significant · M12 n≈451",
-            ha="center", va="center", fontsize=10.5, fontweight="bold", linespacing=1.5)
+            "Clinical encoder = BioClinical-ModernBERT-large (full-FT), CLS pooling · MRI = single m12 scan\n"
+            "Fusion tuned over {MRI variant, architecture, λ∈{0.01,0.1,0.5,1.0}}; SigLIP λ>0.01 use warmup=10 · mean ± std seeds 0/1/2\n"
+            "References = unimodal own-softmax (no head), grouped clinical / imaging. Markers vs best fusion: accuracy = McNemar exact [on bACC]; AUC = OVO-pairwise DeLong [on macro-AUC]\n"
+            "* p<0.05, ** p<0.01, *** p<0.001, n.s. = not significant · macro-AUC shown is OVR (descriptive) · M12 n≈451, LONG n≈478 · BrainMVP-T1b* reference uses BrainMVP's T2 multiclass head (T1b is binary)",
+            ha="center", va="center", fontsize=9.5, fontweight="bold", linespacing=1.5)
     hline(y_top, lw=1.5); hline(y, lw=1.2)
     yh = y; y -= HEAD_H; ym = (yh + y) / 2
     for j, h in enumerate(headers):
         if j in LEFT_COLS:
-            ax.text(cl[j] + 0.06, ym, h, ha="left", va="center", fontsize=9.5, fontstyle="italic")
+            ax.text(cl[j] + 0.06, ym, h, ha="left", va="center", fontsize=8.8, fontstyle="italic")
         else:
-            ax.text(ccx[j], ym, h, ha="center", va="center", fontsize=9.5, fontstyle="italic")
+            ax.text(ccx[j], ym, h, ha="center", va="center", fontsize=8.8, fontstyle="italic")
     hline(y, lw=1.2); y_data_top = y
     for i, cells in enumerate(body):
         if rules[i]:
@@ -177,10 +232,9 @@ def render_png(tab, out_png):
             mj = j - len(LEAD)
             bold = (0 <= mj < 3 and best[mj] == i)
             if j in LEFT_COLS:
-                ax.text(cl[j] + 0.06, ym, txt, ha="left", va="center", fontsize=9.0,
-                        fontweight="bold" if (j == 1 and tab.iloc[i]["block"] == "ref") else "normal")
+                ax.text(cl[j] + 0.06, ym, txt, ha="left", va="center", fontsize=8.5)
             else:
-                ax.text(ccx[j], ym, txt, ha="center", va="center", fontsize=9.0,
+                ax.text(ccx[j], ym, txt, ha="center", va="center", fontsize=8.5,
                         fontweight="bold" if bold else "normal")
     BOTTOM = y
     for x in cl[1:-1]:
@@ -195,35 +249,57 @@ def render_png(tab, out_png):
     print(f"  PNG: {out_png}")
 
 
-def write_tex(tab, out_tex):
+def write_tex(tab, out_tex, include_n=True):
     def esc(s):
-        return str(s).replace("·", r"$\cdot$").replace("λ", r"$\lambda$").replace("≈", r"$\approx$")
+        return (str(s).replace("·", r"$\cdot$").replace("λ", r"$\lambda$")
+                .replace("≈", r"$\approx$").replace("—", "--").replace("±", r"$\pm$"))
+
+    def num(m, s, marker=""):
+        body = (f"${m:.2f} \\pm {s:.2f}$" if pd.notna(s) else f"${m:.2f}$") if pd.notna(m) else "--"
+        return body + (f"~[{marker}]" if marker else "")
+
+    colspec = "lll l l l l ccc" + (" c" if include_n else "")
+    head = (r"\textbf{Clinical (model $\cdot$ task)} & \textbf{Timeframe} & \textbf{MRI @ m12} & "
+            r"\textbf{Feature fusion} & \textbf{Emb} & \textbf{Aggregation} & \textbf{Loss} & "
+            r"\textbf{Test bACC} & \textbf{macro-AUC} & \textbf{macro-F1}"
+            + (r" & \textbf{n}" if include_n else "") + r" \\")
     L = [r"% Joined best-per-condition table (03c_summary_joined.py)",
-         r"\begin{table}[ht]", r"\centering", r"\small", r"\begin{tabular}{lll ccc c c}",
-         r"\toprule",
-         r"\textbf{Clinical arm} & \textbf{Loss} & \textbf{Best config (tuned)} & "
-         r"\textbf{Test bACC} & \textbf{macro-AUC} & \textbf{macro-F1} & \textbf{Val bACC} & "
-         r"\textbf{n} \\", r"\midrule"]
-    prev = None
+         r"\begin{table}[ht]", r"\centering", r"\scriptsize",
+         r"\begin{tabular}{" + colspec + "}", r"\toprule", head, r"\midrule"]
+    prev_sec = None
     for _, r in tab.iterrows():
-        if prev is not None and r["block"] != prev:
+        if prev_sec is not None and r["section"] != prev_sec:
             L.append(r"\midrule")
-        prev = r["block"]
-        c = _cells(r)
-        c = [esc(c[0]), esc(c[1]), esc(c[2])] + [f"${x.replace('±', chr(92)+'pm')}$" for x in c[3:6]] + [c[6], c[7]]
+        prev_sec = r["section"]
+        c = [esc(r["clin"]), esc(r["timeframe"]), esc(r["mri"]), esc(r["fusion"]), esc(r["emb"]),
+             esc(r["agg"]), esc(r["loss_str"]),
+             num(r["bacc_m"], r["bacc_s"], r["sig_acc"]), num(r["auc_m"], r["auc_s"], r["sig_auc"]),
+             num(r["f1_m"], r["f1_s"])] + ([f"{r['n_test']:.0f}"] if include_n else [])
         L.append(" & ".join(c) + r" \\")
     L += [r"\bottomrule", r"\end{tabular}",
           r"\caption{Best hyperparameter-tuned cross-modal fusion per condition for the 12-month "
-          r"three-way diagnosis (CN/MCI/AD). Each fusion row is the best over MRI variant "
-          r"(BrainDINO/BrainMVP), architecture (MLP-concat/cross-attention) and contrastive weight "
-          r"$\lambda\in\{0.01,0.1,0.5,1.0\}$ ($\lambda>0.01$ with warmup=10, min\_epochs=30). "
-          r"\emph{References are the unimodal 1-year predictions} (each model's own softmax, no "
-          r"retrained head): the clinical 1-year model (T2\_m12) and BrainDINO-T2 at the m12 scan. "
-          r"The bracketed marker is the significance of the best 1-year fusion vs that reference "
-          r"(exact McNemar, pooled over the three test folds): $^{*}p<0.05$, $^{**}p<0.01$, "
-          r"$^{***}p<0.001$, n.s.\ = not significant. Best 1-year fusion vs clinical-1-year: n.s.\ "
-          r"($+0.03$ bACC, McNemar $p=1.0$, paired-$t$ $p=0.56$); vs MRI-1-year: $^{***}$ "
-          r"(MRI alone $\approx$ chance). M12 cohort n$\approx$451. Mean $\pm$ std over seeds 0/1/2, 2 dp.}",
+          r"three-way diagnosis (CN/MCI/AD). Clinical encoder = BioClinical-ModernBERT-large "
+          r"(full fine-tune), CLS pooling; MRI = a single m12 scan (BrainDINO-T2 or BrainMVP-T1b). "
+          r"Each fusion row is the best over MRI variant, fusion architecture (MLP / self-attention "
+          r"over concatenated tokens / bidirectional CLS cross-attention) and contrastive weight "
+          r"$\lambda\in\{0.01,0.1,0.5,1.0\}$ ($\lambda>0.01$ with warmup=10, min\_epochs=30); one "
+          r"best-mamba row per timeframe is added where mamba applies (LONG only). The "
+          r"\emph{Aggregation} column gives how the CLS vectors are combined: concatenation (MLP), "
+          r"mean-pool after self-attention, or mean/mamba pooling of the three clinical visits for "
+          r"the cross-attention models (whose two updated CLS are then concatenated). "
+          r"\emph{References are unimodal own-softmax predictions} (no retrained "
+          r"head), grouped into clinical and imaging: the clinical 1-year model (T2\_m12) and "
+          r"longitudinal clinical model (T2\_long, m12 row); and the imaging models at the m12 scan, "
+          r"BrainDINO-T2 and BrainMVP-T1b$^{*}$. $^{*}$The fused variant~B uses BrainMVP-T1b (binary) "
+          r"embeddings, which have no 3-way own softmax; the BrainMVP reference therefore uses "
+          r"BrainMVP's T2 multiclass head. Two markers per reference give the "
+          r"significance of the best fusion of that timeframe vs the reference: the \textbf{accuracy} "
+          r"marker (on bACC) is an exact \textbf{McNemar} test on per-patient correctness; the "
+          r"\textbf{AUC} marker (on macro-AUC) is \textbf{OVO-pairwise DeLong} (Hand--Till, mean of "
+          r"the CN/MCI, CN/AD, MCI/AD pairwise tests), both pooled over the three test folds: "
+          r"$^{*}p<0.05$, $^{**}p<0.01$, $^{***}p<0.001$, n.s.\ = not significant. The displayed "
+          r"macro-AUC is one-vs-rest (descriptive); the DeLong test uses the OVO formulation. M12 "
+          r"cohort n$\approx$451, LONG n$\approx$478. Mean $\pm$ std over seeds 0/1/2, 2 dp.}",
           r"\label{tab:xmodal_joined}", r"\end{table}"]
     open(out_tex, "w", encoding="utf-8").write("\n".join(L) + "\n")
     print(f"  TEX: {out_tex}")
@@ -242,11 +318,14 @@ def main():
     print(f"  CSV: summary_joined.csv ({len(tab)} rows) + summary_joined_full.csv ({len(full)} conditions)")
     render_png(tab, os.path.join(OUT, "summary_joined.png"))
     write_tex(tab, os.path.join(OUT, "summary_joined.tex"))
+    write_tex(tab, os.path.join(OUT, "summary_joined_no_n.tex"), include_n=False)
     print("\n  Joined best-per-condition (Test bACC, 2dp):")
     for _, r in tab.iterrows():
         tag = "REF " if r["block"] == "ref" else "fuse"
-        print(f"    [{tag}] {r['method']:14s} {r['loss_str']:34s} "
-              f"{r['bacc_m']:.2f}±{r['bacc_s']:.2f}  AUC {r['auc_m']:.2f}  ({r['cfg']})")
+        mk = f" [acc {r['sig_acc']} / AUC {r['sig_auc']}]" if r["block"] == "ref" else ""
+        cfg = "unimodal own-softmax" if r["block"] == "ref" else f"{r['mri']} · {r['fusion']} · {r['agg']}"
+        print(f"    [{tag}] {r['timeframe']:13s} {r['loss_str']:30s} "
+              f"{r['bacc_m']:.2f}±{r['bacc_s']:.2f}  AUC {r['auc_m']:.2f}  ({cfg}){mk}")
 
 
 if __name__ == "__main__":
