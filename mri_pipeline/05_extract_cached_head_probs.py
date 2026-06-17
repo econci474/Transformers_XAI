@@ -3,7 +3,7 @@
 ===============================
 Generalised per-scan probability extractor for the frozen cached-head models
 (BrainDINO / BrainMVP / ViT-MAE). Companion to
-`05_extract_embeddings_braindino_frozen.py` (BrainDINO-only); this one takes
+`brain_dino/05_extract_embeddings_braindino_frozen.py` (BrainDINO-only); this one takes
 `--arch` so the same code produces fusion-ready per-patient probability CSVs
 for any of the three cached encoders, on any task — built to supply the
 T3/T4 late-fusion arm with BrainMVP/ViT-MAE cached probs (no extractor for

@@ -29,7 +29,7 @@ Pipeline per (task, aug, seed):
   5. Save NPZ + CSV with full identifier set (bids_sub, Patient_ID, RID,
      adni_viscode, VISCODE_2, mri_date) + label + per-seed split + probs.
 
-Output schema (matches `05_extract_embeddings_braindino_frozen.py` in the
+Output schema (matches `brain_dino/05_extract_embeddings_braindino_frozen.py` in the
 sibling top-level mri_pipeline directory, so downstream code reads them the
 same way):
   embeddings   : (N, 512) float32

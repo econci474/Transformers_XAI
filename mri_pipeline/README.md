@@ -27,10 +27,10 @@ mri_pipeline/
   03c_match_mri_to_clinical_viscode2.py  MRI<->clinical match (ADNI VISCODE2) — CANONICAL training labels
   04_supervised_finetuning.py            shared 3D-ViT trainer + library (task config / label & metric
                                          helpers) — imported by exact path by the other arms' trainers
-  05_extract_cached_head_probs.py        per-scan probabilities for late fusion
-  05_extract_embeddings_braindino_frozen.py  per-scan frozen embeddings for fusion
+  05_extract_cached_head_probs.py        per-scan probabilities for late fusion (cross-model)
   vit_mae/      ViT-MAE arm — 03_prepare_ViT.py, 03d_extract_vit_mae_embeddings.py, ViT 04* submit scripts
-  brain_dino/   BrainDINO arm — 01 prep, 02 finetune (frozen/full_ft/LoRA), 03 extract embeddings
+  brain_dino/   BrainDINO arm — 01 prep, 02 finetune (frozen/full_ft/LoRA), 03 extract embeddings,
+                05_extract_embeddings_braindino_frozen.py (head -> probs+embeddings for fusion)
   brain_mvp/    BrainMVP arm — 03 prep, 04 finetune, 05 extract; 06/07 T1d Grad-CAM (real-MNI overlay)
   agms3d/       AG-MS3D-CNN arm — AGMS3DCNN.py + train_agms3d.py
   3d_conv_net/  Spasov 3D-CNN baselines — 00 prep, 3DCNN/3DSCNN, train_3dcnn.py
