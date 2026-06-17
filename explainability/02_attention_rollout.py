@@ -187,6 +187,8 @@ def main():
     import torch
     ap = argparse.ArgumentParser()
     ap.add_argument("--ckpt_root", type=str, default=str(CKPT_ROOT_DEFAULT))
+    ap.add_argument("--data_dir", type=str, default=str(DATA_DIR),
+                    help="dir CONTAINING seed_*/test.csv (verbose baseline); override on HPC")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--n_per_class", type=int, default=3, help="correct exemplars per class")
     ap.add_argument("--n_wrong", type=int, default=2, help="high-confidence misclassifications")
@@ -203,7 +205,7 @@ def main():
         print(f"\n{'='*70}\n  {cfg['title']}  ({slug})\n{'='*70}")
         model, tok, dev = load_eager(ckpt)
 
-        df = pd.read_csv(DATA_DIR / f"seed_{args.seed}" / "test.csv", low_memory=False)
+        df = pd.read_csv(Path(args.data_dir) / f"seed_{args.seed}" / "test.csv", low_memory=False)
         df[cfg["label_col"]] = df[cfg["label_col"]].map(cfg["label_map"])
         df = df.dropna(subset=[cfg["label_col"], TEXT_COL]).reset_index(drop=True)
         df[cfg["label_col"]] = df[cfg["label_col"]].astype(int)
