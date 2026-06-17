@@ -30,7 +30,6 @@ mri_pipeline/
   05_extract_cached_head_probs.py        per-scan probabilities for late fusion
   05_extract_embeddings_braindino_frozen.py  per-scan frozen embeddings for fusion
   08_hp_optuna_full_ft.py                Optuna full-finetune HP search (BrainMVP / ViT-MAE)
-  09_collect_val_test_metrics.py         recompute val+test metrics from saved checkpoints
   vit_mae/      ViT-MAE arm — 03_prepare_ViT.py, 03d_extract_vit_mae_embeddings.py, ViT 04* submit scripts
   brain_dino/   BrainDINO arm — 01 prep, 02 finetune (frozen/full_ft/LoRA), 03 extract embeddings
   brain_mvp/    BrainMVP arm — 03 prep, 04 finetune, 05 extract; 06/07 T1d Grad-CAM (real-MNI overlay)
@@ -53,7 +52,7 @@ mri_pipeline/
    / AG-MS3D / 3D-CNN / cached-head trainers import its task config + label/metric helpers via importlib.
 3. **Cached-head sweep** — `cached_head_sweep/`: train heads on cached embeddings → `05b_select_best_hp_per_task`
    → `04_finalize_winner` (materialise the winner checkpoint).
-4. **HP search / metric collection** — `08_hp_optuna_full_ft.py`, `09_collect_val_test_metrics.py`.
+4. **HP search** — `08_hp_optuna_full_ft.py` (Optuna full-finetune search).
 5. **Aggregate & render** — `tables/05_aggregate_mri_results.py` aggregates every `metrics.json`
    (mean ± std over seeds, true val macro-F1); `tables/06*/07*` render the thesis cross-model tables.
 6. **Explainability** — `brain_mvp/06_gradcam_T1d.py` + `07_render_gradcam_T1d.py` (T1d saliency
