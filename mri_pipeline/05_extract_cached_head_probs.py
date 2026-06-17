@@ -83,7 +83,7 @@ def n_classes_for_task(task: str) -> int:
 
 def task_label(task: str, row: pd.Series):
     """Task-specific class label for one master row, or None if ineligible.
-    Mirrors TASK_CONFIG in 04_supervised_finetuning_ViT.py."""
+    Mirrors TASK_CONFIG in 04_supervised_finetuning.py."""
     visit_diag = row.get("Label_visit_diag")
     cg = row.get("conversion_group")
     # --- diagnostic tasks (kept for parity with the braindino extractor) ---
@@ -101,7 +101,7 @@ def task_label(task: str, row: pd.Series):
         # Conversion task among CN-baseline subjects: sCN (stable) vs pCN
         # (progressed to MCI OR AD). Subject-level labels broadcast onto every
         # visit row via the pCN_to_AD / pCN_to_MCI / sCN columns. Mirrors
-        # TASK_CONFIG["T1e_pcn_vs_scn"] in 04_supervised_finetuning_ViT.py.
+        # TASK_CONFIG["T1e_pcn_vs_scn"] in 04_supervised_finetuning.py.
         if row.get("sCN") == 1:
             return 0
         if row.get("pCN_to_AD") == 1 or row.get("pCN_to_MCI") == 1:

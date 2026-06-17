@@ -127,9 +127,9 @@ if [ -f "${METRICS}" ]; then
     exit 0
 fi
 
-# No --pretrained_ckpt: scratch = random init (04_supervised_finetuning_ViT.py
+# No --pretrained_ckpt: scratch = random init (04_supervised_finetuning.py
 # requires the checkpoint only for full_ft / frozen).
-python "${SCRIPT_DIR}/04_supervised_finetuning_ViT.py" \
+python "${SCRIPT_DIR}/04_supervised_finetuning.py" \
     --task                "${TASK}" \
     --seed                "${SEED}" \
     --strategy            "${STRATEGY}" \

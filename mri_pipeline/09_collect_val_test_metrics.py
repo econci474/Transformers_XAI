@@ -60,7 +60,7 @@ _spec.loader.exec_module(_05)
 
 
 # Trainer scripts, keyed by the --models token.
-_VIT = _HERE / "04_supervised_finetuning_ViT.py"
+_VIT = _HERE / "04_supervised_finetuning.py"
 TRAINERS = {
     "brainmvp":    _HERE / "brain_mvp" / "04_supervised_finetuning_BrainMVP.py",
     "agms3d":      _HERE / "agms3d" / "train_agms3d.py",

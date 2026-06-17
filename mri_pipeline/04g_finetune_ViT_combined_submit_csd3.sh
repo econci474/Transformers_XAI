@@ -168,7 +168,7 @@ if [ -f "${CKPT}" ]; then
     echo "  last_checkpoint.pt found -- python will AUTO-RESUME this combo."
 fi
 
-python "${SCRIPT_DIR}/04_supervised_finetuning_ViT.py" \
+python "${SCRIPT_DIR}/04_supervised_finetuning.py" \
     --task                "${TASK}" \
     --seed                "${SEED}" \
     --strategy            "${STRATEGY}" \

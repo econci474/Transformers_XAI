@@ -18,7 +18,7 @@
 # 768-d frozen-encoder embeddings.
 #
 # 1 task x 3 seeds x 3 LRs x 3 drops x 2 LSs = 54 cells.
-# T1e is registered in mri_pipeline/04_supervised_finetuning_ViT.py
+# T1e is registered in mri_pipeline/04_supervised_finetuning.py
 # TASK_CONFIG with pos_cols=["pCN_to_AD","pCN_to_MCI"] / neg_col="sCN".
 #
 # Submit:  sbatch mri_pipeline/cached_head_sweep/04_braindino_head_sweep_T1e_submit_csd3.sh

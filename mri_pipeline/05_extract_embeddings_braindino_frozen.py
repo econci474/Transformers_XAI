@@ -116,7 +116,7 @@ HP_WINNERS = {
 }
 
 # Per-task label-builder logic from the project's MRI master columns.
-# Aligns with TASK_CONFIG in 04_supervised_finetuning_ViT.py.
+# Aligns with TASK_CONFIG in 04_supervised_finetuning.py.
 def task_label(task: str, row: pd.Series) -> int | None:
     """Compute the task-specific class label for one MRI master row.
     Returns None if the row is not eligible for this task."""

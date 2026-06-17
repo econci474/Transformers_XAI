@@ -79,7 +79,7 @@ if [ -f "${RUN_DIR}/metrics.json" ]; then
   echo "  metrics.json exists -- skipping."; exit 0
 fi
 
-conda run -n mri python "${SCRIPT_DIR}/04_supervised_finetuning_ViT.py" \
+conda run -n mri python "${SCRIPT_DIR}/04_supervised_finetuning.py" \
     --task "${TASK}" --seed "${SEED}" --strategy "${STRATEGY}" \
     --vit_size base --augment "${AUGMENT}" --long all \
     --pretrained_ckpt "${PRETRAINED_CKPT}" \

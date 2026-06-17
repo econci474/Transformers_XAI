@@ -22,7 +22,7 @@
 #   3. Subject-level 80/10/10 train/val/test from clinical_pipeline stratified
 #      splits at baseline (seeds 0, 1, 2)
 #
-# Label resolution (session_policy='current' in 04_supervised_finetuning_ViT.py):
+# Label resolution (session_policy='current' in 04_supervised_finetuning.py):
 #   - ses-bl   -> Label_bl_multi  (baseline diagnosis)
 #   - ses-m12+ -> Label_visit_diag (per-visit diagnosis)
 #
@@ -130,7 +130,7 @@ if [ -f "${METRICS}" ]; then
     exit 0
 fi
 
-python "${SCRIPT_DIR}/04_supervised_finetuning_ViT.py" \
+python "${SCRIPT_DIR}/04_supervised_finetuning.py" \
     --task                "${TASK}" \
     --seed                "${SEED}" \
     --strategy            "${STRATEGY}" \

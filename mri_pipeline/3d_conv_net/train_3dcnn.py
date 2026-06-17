@@ -40,9 +40,9 @@ Model
 Loaded via importlib (filenames start with a digit). The classifier head is
 sized `n_outputs = num_labels` (2 or 3) and trained with CrossEntropyLoss
 (class-weighted for the CN/MCI/AD imbalance) — uniform across binary and
-3-class tasks, matching 04_supervised_finetuning_ViT.py.
+3-class tasks, matching 04_supervised_finetuning.py.
 
-Method (mirrors mri_pipeline/04_supervised_finetuning_ViT.py)
+Method (mirrors mri_pipeline/04_supervised_finetuning.py)
 -------------------------------------------------------------
 - Best checkpoint / early stopping on **val balanced accuracy** (tie-break on
   lower val_loss).
@@ -297,7 +297,7 @@ def build_dataset(df: pd.DataFrame, train: bool) -> Dataset:
                    transform=_train_transform() if train else _eval_transform())
 
 
-# ── Metrics (mirror 04_supervised_finetuning_ViT.py) ──────────────────────────
+# ── Metrics (mirror 04_supervised_finetuning.py) ──────────────────────────
 def compute_test_metrics(y_true: np.ndarray, logits: np.ndarray, task_type: str):
     """Returns (scalar_metrics_dict, preds, probs). logits: [N, num_labels]."""
     probs = torch.softmax(torch.from_numpy(np.asarray(logits, dtype=np.float64)),

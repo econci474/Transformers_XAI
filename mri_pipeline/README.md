@@ -46,7 +46,7 @@ modalities. Subject/session exclusions come from `bidsification/exclusions.py`
 - `brain_mvp/03_prepare_BrainMVP.py` → `04_supervised_finetuning_BrainMVP.py` → `05_extract_brainmvp_full_ft_embeddings.py`; `06_gradcam_T1d.py` + `07_render_gradcam_T1d.py` (T1d saliency on the real MNI T1w).
 - `3d_conv_net/00_prepare_CNN_inputs.py` → `train_3dcnn.py` (Spasov vanilla/separable).
 - `agms3d/train_agms3d.py` (AG-MS3D-CNN).
-- `04_supervised_finetuning_ViT.py` — the ViT trainer **and shared library**: its task config and label/metric helpers are imported (by exact path, via importlib) by the BrainDINO / BrainMVP / 3D-CNN / cached-head trainers, so its filename is intentionally stable.
+- `04_supervised_finetuning.py` — the ViT trainer **and shared library**: its task config and label/metric helpers are imported (by exact path, via importlib) by the BrainDINO / BrainMVP / 3D-CNN / cached-head trainers, so its filename is intentionally stable.
 
 **Cached-head HP sweep** (`cached_head_sweep/`)
 - `04_head_finetune_from_embeddings.py` — train a head on cached embeddings over the HP grid.

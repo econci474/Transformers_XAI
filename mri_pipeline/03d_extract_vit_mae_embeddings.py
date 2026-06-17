@@ -46,7 +46,7 @@ sys.path.insert(0, str(REPO_ROOT))
 
 # Reuse ViT trainer's encoder builder + checkpoint loader
 _vit_spec = importlib.util.spec_from_file_location(
-    "_vit_pipeline", THIS_DIR / "04_supervised_finetuning_ViT.py")
+    "_vit_pipeline", THIS_DIR / "04_supervised_finetuning.py")
 _vit = importlib.util.module_from_spec(_vit_spec)
 sys.modules["_vit_pipeline"] = _vit
 _vit_spec.loader.exec_module(_vit)
@@ -151,7 +151,7 @@ def main():
     print(f"  Scans to extract     : {len(df_all)}")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    # Same architecture as in 04_supervised_finetuning_ViT.py line 985.
+    # Same architecture as in 04_supervised_finetuning.py line 985.
     # n_classes doesn't matter -- we replace the head with Identity anyway.
     model = Vision_Transformer3D(
         img_size=(128, 128, 128), patch_size=16, in_chans=1,

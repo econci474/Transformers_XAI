@@ -1,5 +1,5 @@
 """
-04_supervised_finetuning_ViT.py
+04_supervised_finetuning.py
 ================================
 Supervised fine-tuning of the MAE-pretrained ViT-B/3D
 (qasymjomart/ViT_recipe_for_AD) on ADNI baseline T1w MRIs preprocessed by
@@ -63,7 +63,7 @@ Output layout (matches clinical pipeline)
 
 Smoke-test usage (local Windows, mri conda env, 28 actual baseline scans)
 --------------------------------------------------------------------------
-  python mri_pipeline/04_supervised_finetuning_ViT.py \
+  python mri_pipeline/04_supervised_finetuning.py \
       --task T1_binary --seed 0 --strategy full_ft \
       --pretrained_ckpt "D:/ViT_B_pretrained_.../p_noaug_..._077000.pth" \
       --epochs 2 --num_workers 0
@@ -1050,7 +1050,7 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
 
     print("=" * 70)
-    print(f"  04_supervised_finetuning_ViT — {args.task} | seed={args.seed} | {args.strategy}")
+    print(f"  04_supervised_finetuning — {args.task} | seed={args.seed} | {args.strategy}")
     print(f"  Device: {device}")
     print(f"  Output: {out_dir}")
     print("=" * 70)

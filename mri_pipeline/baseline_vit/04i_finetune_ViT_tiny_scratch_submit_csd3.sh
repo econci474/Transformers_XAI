@@ -22,7 +22,7 @@
 # where transformers can train from random init on small medical datasets
 # (DeiT-Tiny on tiny medical cohorts is the canonical reference).
 #
-# Architecture (via --vit_size tiny in 04_supervised_finetuning_ViT.py):
+# Architecture (via --vit_size tiny in 04_supervised_finetuning.py):
 #   embed_dim = 192,  depth = 12,  n_heads = 3,  mlp_ratio = 4.0
 #   patch_size = 16,  img_size = 128^3,  global_avg_pool = False (CLS token)
 #
@@ -197,7 +197,7 @@ fi
 # NOTE: --pretrained_ckpt intentionally omitted (scratch = random init).
 #       --vit_size tiny + --strategy scratch is the only valid combo for Tiny
 #       (the trainer enforces this at parse_args).
-python "${SCRIPT_DIR}/04_supervised_finetuning_ViT.py" \
+python "${SCRIPT_DIR}/04_supervised_finetuning.py" \
     --task                "${TASK}" \
     --seed                "${SEED}" \
     --strategy            "${STRATEGY}" \

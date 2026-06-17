@@ -26,7 +26,7 @@
 # negatives with right-censored subjects (significant bias at 7y/10y).
 #
 # T3a/b/c/d are registered in TASK_CONFIG
-# (mri_pipeline/04_supervised_finetuning_ViT.py).
+# (mri_pipeline/04_supervised_finetuning.py).
 #
 # Submit:  sbatch mri_pipeline/cached_head_sweep/04_brainmvp_head_sweep_T3abcd_submit_csd3.sh
 # =============================================================================

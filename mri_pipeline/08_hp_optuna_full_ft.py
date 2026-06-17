@@ -74,7 +74,7 @@ def bmvp_space(trial):
 
 
 ARCHS = {
-    "vit_mae":  dict(script=MRI / "04_supervised_finetuning_ViT.py", model_slug="ViT_B_mae75",
+    "vit_mae":  dict(script=MRI / "04_supervised_finetuning.py", model_slug="ViT_B_mae75",
                      pretrained=VIT_PRE, inputs_flag="--vit_inputs_dir", inputs=VIT_IN,
                      space=vit_space, wandb_project="vit_mae_T2_optuna"),
     "brainmvp": dict(script=MRI / "brain_mvp" / "04_supervised_finetuning_BrainMVP.py",

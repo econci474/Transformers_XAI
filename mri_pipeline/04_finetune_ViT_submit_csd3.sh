@@ -150,7 +150,7 @@ if [ -f "${METRICS}" ]; then
     exit 0
 fi
 
-python "${SCRIPT_DIR}/04_supervised_finetuning_ViT.py" \
+python "${SCRIPT_DIR}/04_supervised_finetuning.py" \
     --task                "${TASK}" \
     --seed                "${SEED}" \
     --strategy            "${STRATEGY}" \

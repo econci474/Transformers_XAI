@@ -17,7 +17,7 @@
 # COMPARISON sweep -- isolated in its own W&B project `vit_mae_hi_lr` so the
 # new run set doesn't visually mix with the prior 24 runs in `vit_debugging`.
 # Same trainer
-# (04_supervised_finetuning_ViT.py), same architecture (ViT-B/16 mae75), with
+# (04_supervised_finetuning.py), same architecture (ViT-B/16 mae75), with
 # a single-variable change:
 #
 #   --lr 1e-3            (vs the trainer's full_ft default of 1e-4)
@@ -169,7 +169,7 @@ if [ -f "${CKPT}" ]; then
     echo "  last_checkpoint.pt found -- python will AUTO-RESUME this combo."
 fi
 
-python "${SCRIPT_DIR}/04_supervised_finetuning_ViT.py" \
+python "${SCRIPT_DIR}/04_supervised_finetuning.py" \
     --task                "${TASK}" \
     --seed                "${SEED}" \
     --strategy            "${STRATEGY}" \

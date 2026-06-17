@@ -4,7 +4,7 @@ test_vit_preprocessing.py
 Unit tests for the ViT preprocessing pipeline and the training-time input gate:
 
   * 03_prepare_ViT.py               -- build_transform() correctness
-  * 04_supervised_finetuning_ViT.py -- preflight_check_inputs() accepts good
+  * 04_supervised_finetuning.py -- preflight_check_inputs() accepts good
                                        volumes and rejects malformed ones;
                                        TASK_CONFIG label maps are consistent.
 
@@ -48,7 +48,7 @@ def _load_script(filename: str, modname: str):
 
 
 prep = _load_script("03_prepare_ViT.py", "_prep_vit")
-train = _load_script("04_supervised_finetuning_ViT.py", "_train_vit")
+train = _load_script("04_supervised_finetuning.py", "_train_vit")
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────

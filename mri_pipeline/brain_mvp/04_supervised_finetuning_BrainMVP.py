@@ -54,7 +54,7 @@ from _vit_recipe.checkpoint import load_pretrained_checkpoint  # noqa: unused bu
 # Import shared functions from ViT pipeline
 import importlib.util
 _vit_spec = importlib.util.spec_from_file_location(
-    "_vit_pipeline", MRI_DIR / "04_supervised_finetuning_ViT.py")
+    "_vit_pipeline", MRI_DIR / "04_supervised_finetuning.py")
 _vit = importlib.util.module_from_spec(_vit_spec)
 # Prevent main() from firing on import
 sys.modules["_vit_pipeline"] = _vit

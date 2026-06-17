@@ -52,7 +52,7 @@ BMVP_CROP                 = _bmvp.BMVP_CROP
 
 # Shared ViT-pipeline utilities
 _vit_spec = importlib.util.spec_from_file_location(
-    "_vit_pipeline", MRI_DIR / "04_supervised_finetuning_ViT.py")
+    "_vit_pipeline", MRI_DIR / "04_supervised_finetuning.py")
 _vit = importlib.util.module_from_spec(_vit_spec)
 sys.modules["_vit_pipeline"] = _vit
 _vit_spec.loader.exec_module(_vit)

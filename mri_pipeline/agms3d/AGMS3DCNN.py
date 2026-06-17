@@ -242,7 +242,7 @@ class AGMS3DCNN(nn.Module):
         in_channels: 1 for single-channel T1 (default).
         n_outputs:   number of classes (2 for binary tasks, 3 for T2_multiclass).
                      Train with ``nn.CrossEntropyLoss`` (same convention as
-                     04_supervised_finetuning_ViT.py and train_3dcnn.py).
+                     04_supervised_finetuning.py and train_3dcnn.py).
         dropout:     per-block and head dropout probability.
         base:        starting channel count (paper default: 32). Channels
                      double only at the two downsampling steps -> reaches

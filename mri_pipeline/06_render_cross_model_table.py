@@ -210,7 +210,7 @@ HP_KEY_LINES = [
 # do not all record an `augment` field in metrics.json. The values below are
 # derived from each trainer's own _train_transform (verified by inspecting
 # the trainer source):
-#   - ViT (04_supervised_finetuning_ViT.py): --augment {none,random,plus_original};
+#   - ViT (04_supervised_finetuning.py): --augment {none,random,plus_original};
 #     "random" = RandFlip x3 + RandRotate90 + RandScaleIntensity + RandShiftIntensity,
 #     all on-the-fly stochastic. Recorded explicitly in metrics.json.
 #   - BrainMVP (brain_mvp/04_supervised_finetuning_BrainMVP.py): --augment

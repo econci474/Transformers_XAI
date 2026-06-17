@@ -19,7 +19,7 @@
 # scoped to T1e only (and the existing sweep's TASKS list doesn't include
 # T1e). 1 task x 3 seeds x 3 LRs x 3 drops x 2 LSs = 54 cells.
 #
-# T1e is registered in mri_pipeline/04_supervised_finetuning_ViT.py
+# T1e is registered in mri_pipeline/04_supervised_finetuning.py
 # TASK_CONFIG so the head trainer (which imports TASK_CONFIG via
 # importlib) picks it up without code changes here. The label resolver
 # supports pos_cols=["pCN_to_AD","pCN_to_MCI"] / neg_col="sCN".

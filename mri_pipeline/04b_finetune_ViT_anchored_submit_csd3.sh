@@ -19,7 +19,7 @@
 # Why a sister script instead of the master 04 sweep:
 #   The master sweep (04_finetune_ViT_submit_csd3.sh) used --long 1, but T3a/T3b
 #   were silently restricted to ses-bl by the legacy session_policy='baseline_only'.
-#   Now that 04_supervised_finetuning_ViT.py uses session_policy='baseline_anchored'
+#   Now that 04_supervised_finetuning.py uses session_policy='baseline_anchored'
 #   with a m12 cap, T3a/T3b respect --long 1 (bl + m12 paired with the same
 #   subject-level Label_3y / Label_5y). To preserve the old T3a/T3b bl-only
 #   results for comparison, this script writes to a sister OUT_DIR.
@@ -122,7 +122,7 @@ if [ -f "${METRICS}" ]; then
     exit 0
 fi
 
-python "${SCRIPT_DIR}/04_supervised_finetuning_ViT.py" \
+python "${SCRIPT_DIR}/04_supervised_finetuning.py" \
     --task                "${TASK}" \
     --seed                "${SEED}" \
     --strategy            "${STRATEGY}" \
