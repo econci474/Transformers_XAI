@@ -29,7 +29,6 @@ mri_pipeline/
                                          helpers) — imported by exact path by the other arms' trainers
   05_extract_cached_head_probs.py        per-scan probabilities for late fusion
   05_extract_embeddings_braindino_frozen.py  per-scan frozen embeddings for fusion
-  08_hp_optuna_full_ft.py                Optuna full-finetune HP search (BrainMVP / ViT-MAE)
   vit_mae/      ViT-MAE arm — 03_prepare_ViT.py, 03d_extract_vit_mae_embeddings.py, ViT 04* submit scripts
   brain_dino/   BrainDINO arm — 01 prep, 02 finetune (frozen/full_ft/LoRA), 03 extract embeddings
   brain_mvp/    BrainMVP arm — 03 prep, 04 finetune, 05 extract; 06/07 T1d Grad-CAM (real-MNI overlay)
@@ -38,6 +37,7 @@ mri_pipeline/
   cached_head_sweep/  frozen-encoder head HP sweep — 04 train, 05b select winner, 04_finalize_winner,
                       04c_render_sweep_table
   tables/       cross-model result tables — 05_aggregate_mri_results + 06/06b/06c/07 renderers + macro-F1
+  optuna_sweep/ exploratory Optuna full-finetune HP search (ViT-MAE / BrainMVP) — not used for final models
   baseline_vit/ from-scratch ViT control submits (ViT-tiny scratch, ViT high-LR)
   _vit_recipe/  shared 3D ViT-B/16 architecture + MAE checkpoint loading
   tests/        test_vit_preprocessing.py (ViT preprocessing + shared-trainer input-gate smoke)

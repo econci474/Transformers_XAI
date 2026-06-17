@@ -45,7 +45,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-MRI = Path(__file__).resolve().parent
+MRI = Path(__file__).resolve().parent.parent   # mri_pipeline/ (this script lives in optuna_sweep/)
 
 # ── CSD3 post-exclusion paths (same master/splits as the cached-head + fusion) ──
 DEF_MASTER = "/home/ec474/rds/hpc-work/ADNI_MRI/master_mri_clinical_matched_viscode2_extended_post_exclusion.csv"

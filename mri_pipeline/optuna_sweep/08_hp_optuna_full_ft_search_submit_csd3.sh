@@ -44,7 +44,7 @@ conda run -n mri python -c "import torch, optuna" \
 
 ARCH="${ARCH:?set ARCH=brainmvp or ARCH=vit_mae via --export=ALL,ARCH=...}"
 export WANDB_MODE="${WANDB_MODE:-offline}"
-SCRIPT_DIR="/home/ec474/rds/hpc-work/Transformers_XAI/mri_pipeline"
+SCRIPT_DIR="/home/ec474/rds/hpc-work/Transformers_XAI/mri_pipeline/optuna_sweep"
 STUDY_DIR="/home/ec474/rds/hpc-work/ADNI_MRI/optuna/${ARCH}_T2"
 mkdir -p "${STUDY_DIR}" /home/ec474/rds/hpc-work/ADNI_MRI/optuna/slurm_logs
 export WANDB_DIR="${STUDY_DIR}"
