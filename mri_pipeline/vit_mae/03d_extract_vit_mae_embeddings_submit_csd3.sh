@@ -27,7 +27,7 @@ module load cuda/12.1
 source "$(conda info --base)/etc/profile.d/conda.sh"
 conda activate mri
 
-SCRIPT_DIR="/home/ec474/rds/hpc-work/Transformers_XAI/mri_pipeline"
+SCRIPT_DIR="/home/ec474/rds/hpc-work/Transformers_XAI/mri_pipeline/vit_mae"
 PRETRAINED_CKPT="/home/ec474/rds/hpc-work/ViT_pretrained/ViT_B_pretrained_noaug_mae75_BRATS2023_IXI_OASIS3_seed_8456_999_077000.pth.tar"
 VIT_INPUTS_DIR="/home/ec474/rds/hpc-work/ADNI_SMRIPREP/derivatives/vit_inputs"
 MATCHED_LABELS_CSV="/home/ec474/rds/hpc-work/ADNI_MRI/master_mri_clinical_matched_viscode2_extended_post_exclusion.csv"

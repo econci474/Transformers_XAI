@@ -39,14 +39,15 @@ import monai.transforms as mt
 from monai.data import Dataset as MonaiDataset
 from torch.utils.data import DataLoader
 
-THIS_DIR = Path(__file__).resolve().parent     # mri_pipeline/
-REPO_ROOT = THIS_DIR.parent
-sys.path.insert(0, str(THIS_DIR))
-sys.path.insert(0, str(REPO_ROOT))
+THIS_DIR = Path(__file__).resolve().parent     # mri_pipeline/vit_mae/
+MRI_DIR = THIS_DIR.parent                       # mri_pipeline/
+REPO_ROOT = MRI_DIR.parent                      # repo root
+sys.path.insert(0, str(MRI_DIR))                # for _vit_recipe + the shared trainer
+sys.path.insert(0, str(REPO_ROOT))              # for bidsification.exclusions
 
-# Reuse ViT trainer's encoder builder + checkpoint loader
+# Reuse ViT trainer's encoder builder + checkpoint loader (shared trainer at mri_pipeline/)
 _vit_spec = importlib.util.spec_from_file_location(
-    "_vit_pipeline", THIS_DIR / "04_supervised_finetuning.py")
+    "_vit_pipeline", MRI_DIR / "04_supervised_finetuning.py")
 _vit = importlib.util.module_from_spec(_vit_spec)
 sys.modules["_vit_pipeline"] = _vit
 _vit_spec.loader.exec_module(_vit)

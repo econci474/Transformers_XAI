@@ -47,7 +47,7 @@ def _load_script(filename: str, modname: str):
     return mod
 
 
-prep = _load_script("03_prepare_ViT.py", "_prep_vit")
+prep = _load_script("vit_mae/03_prepare_ViT.py", "_prep_vit")
 train = _load_script("04_supervised_finetuning.py", "_train_vit")
 
 

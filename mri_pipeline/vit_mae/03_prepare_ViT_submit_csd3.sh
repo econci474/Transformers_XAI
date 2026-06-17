@@ -31,7 +31,7 @@ source "$(conda info --base)/etc/profile.d/conda.sh"
 conda activate mri
 
 # Hardcoded paths (BASH_SOURCE doesn't work — SLURM copies .sh to spool dir)
-SCRIPT_DIR="/home/ec474/rds/hpc-work/Transformers_XAI/mri_pipeline"
+SCRIPT_DIR="/home/ec474/rds/hpc-work/Transformers_XAI/mri_pipeline/vit_mae"
 SMRIPREP_DIR="/home/ec474/rds/hpc-work/ADNI_SMRIPREP/derivatives/smriprep_sessionwise/smriprep"
 OUT_ROOT="/home/ec474/rds/hpc-work/ADNI_SMRIPREP/derivatives/vit_inputs"
 
