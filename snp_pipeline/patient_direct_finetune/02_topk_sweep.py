@@ -1,29 +1,29 @@
 """
-18b_patient_classification_finetune_topk_sweep.py
-==================================================
+02_topk_sweep.py (patient_direct_finetune)
+==========================================
 Resumable hyperparameter-sweep driver for the BMFM-DNA-REF + LoRA patient
-classifier (`18_patient_classification_finetune.py`), restricted to the
+classifier (`01_finetune.py` in this folder), restricted to the
 existing windows that contain the **Top-K SNPs by |GWAS z-score|**.
 
-Design (keeps script 18 UNMODIFIED for the data path):
+Design (keeps the finetune script UNMODIFIED for the data path):
   * Rank SNPs that appear in ≥1 existing window by |z_score|, take the top-K,
     keep the already-built windows that contain any of them.
   * Write a FILTERED windows.tsv (same columns, kept rows, original order) and
-    pass it to script 18 as `--windows`. script 18's `build_chrom_map()`
+    pass it to the finetune script as `--windows`. the finetune script's `build_chrom_map()`
     already yields contiguous chrom indices from whatever windows.tsv it is
-    given, so NO change to script 18 is needed — the dataset only tokenises
+    given, so NO change to the finetune script is needed — the dataset only tokenises
     the kept windows ⇒ ≈ (K/183)× the cost (~7× faster at K=25).
   * Per HP point, pass a UNIQUE `--output-root <base>/<hp_tag>` and
     `--wandb-run-name topk<K>__<hp_tag>` so out_dir / resumable checkpoint /
     W&B runs never collide; skip a point whose final metrics.json exists
     (resumable across Colab sessions).
 
-The cosine-LR schedule is the one (default-guarded) addition inside script 18
+The cosine-LR schedule is the one (default-guarded) addition inside the finetune script
 (`--lr-scheduler cosine --warmup-frac …`); everything else is its existing CLI.
 
 Usage (Colab)
 -------------
-    python snp_pipeline/18b_patient_classification_finetune_topk_sweep.py \\
+    python snp_pipeline/patient_direct_finetune/02_topk_sweep.py \\
         --base-root /content/drive/MyDrive/ADNI_SNP/classification_finetune_topk \\
         --tier 1 --seeds 0
     # add --dry-run to print the selection + commands without running
@@ -37,7 +37,7 @@ from pathlib import Path
 
 import pandas as pd
 
-SCRIPT18 = Path(__file__).parent / "18_patient_classification_finetune.py"
+SCRIPT18 = Path(__file__).parent / "01_finetune.py"
 DRIVE = "/content/drive/MyDrive/ADNI_SNP"
 
 # Fixed = the 183-window anchor config (for a like-for-like comparison).
@@ -116,7 +116,7 @@ def main() -> None:
     ap.add_argument("--epochs", type=int, default=50)
     ap.add_argument("--patience", type=int, default=6)
     ap.add_argument("--wandb-project", default="bmfm_classification_lora_ft_topk")
-    ap.add_argument("--device", default=None, help="pass-through to script 18")
+    ap.add_argument("--device", default=None, help="pass-through to the finetune script")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--write-selection-only", action="store_true",
                     help="Write the Top-K provenance TSVs (windows + SNP-level) "

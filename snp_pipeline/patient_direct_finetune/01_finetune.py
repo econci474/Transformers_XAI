@@ -1,6 +1,6 @@
 """
-18_patient_classification_finetune.py
-======================================
+01_finetune.py (patient_direct_finetune)
+=========================================
 End-to-end per-patient classifier: raw BMFM-DNA-REF + LoRA + aggregator + MLP.
 
 Tests whether the GWAS-regression intermediate task is necessary by
@@ -35,7 +35,7 @@ Usage on Colab A100
 -------------------
 After mounting Drive + installing BMFM + cloning the repo:
 
-    python snp_pipeline/18_patient_classification_finetune.py \\
+    python snp_pipeline/patient_direct_finetune/01_finetune.py \\
         --sequences /content/drive/MyDrive/ADNI_SNP/inputs/patient_sequences/all_patients.csv \\
         --windows   /content/drive/MyDrive/ADNI_SNP/inputs/windows/windows.tsv \\
         --splits-root /content/drive/MyDrive/ADNI_SNP/splits/no_cdr_stratified_ever_convert/baseline \\

@@ -1,8 +1,9 @@
 """
 colab_setup_env.py
 ===================
-Codify the (hard-won) Colab A100 environment that ``bmfm_targets`` + script 18
-(``18_patient_classification_finetune.py``) need to import and run.
+Codify the (hard-won) Colab A100 environment that ``bmfm_targets`` and the
+per-patient direct-finetune scripts (``patient_direct_finetune/01_finetune.py``
+and ``02_topk_sweep.py``) need to import and run.
 
 A fresh Colab VM ships packages that break BMFM in non-obvious ways. This
 module makes the working environment **reproducible and idempotent** so the
