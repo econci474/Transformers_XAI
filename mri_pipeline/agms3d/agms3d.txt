@@ -1,0 +1,2 @@
+AG-MS3D-CNN for the classification branch only 
+https://www.nature.com/articles/s41598-025-09351-x 

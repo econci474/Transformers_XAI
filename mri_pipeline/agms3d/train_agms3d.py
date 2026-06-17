@@ -74,7 +74,7 @@ from monai.data import Dataset
 
 warnings.filterwarnings("ignore")
 
-THIS_DIR = Path(__file__).resolve().parent          # mri_pipeline/3d_cnn_vit
+THIS_DIR = Path(__file__).resolve().parent          # mri_pipeline/agms3d
 REPO_ROOT = THIS_DIR.parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 from bidsification.exclusions import is_excluded_subject

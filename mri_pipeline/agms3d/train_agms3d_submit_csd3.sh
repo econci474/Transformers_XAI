@@ -52,8 +52,8 @@
 #   4. mkdir -p /home/ec474/rds/hpc-work/ADNI_MRI/agms3d_outputs/slurm_logs
 #      (the #SBATCH --output dir must exist BEFORE submitting).
 #
-# Submit:  sbatch mri_pipeline/3d_cnn_vit/train_agms3d_submit_csd3.sh
-# Smoke 1: sbatch --array=0 mri_pipeline/3d_cnn_vit/train_agms3d_submit_csd3.sh
+# Submit:  sbatch mri_pipeline/agms3d/train_agms3d_submit_csd3.sh
+# Smoke 1: sbatch --array=0 mri_pipeline/agms3d/train_agms3d_submit_csd3.sh
 # Already-completed runs (metrics.json present) are auto-skipped.
 # =============================================================================
 
@@ -68,7 +68,7 @@ conda activate mri
 export WANDB_MODE=offline
 
 # -- Hardcoded paths (BASH_SOURCE unreliable: SLURM copies .sh to spool dir) --
-SCRIPT_DIR="/home/ec474/rds/hpc-work/Transformers_XAI/mri_pipeline/3d_cnn_vit"
+SCRIPT_DIR="/home/ec474/rds/hpc-work/Transformers_XAI/mri_pipeline/agms3d"
 CNN_INPUTS_DIR="/home/ec474/rds/hpc-work/ADNI_SMRIPREP/derivatives/cnn_inputs"
 MATCHED_LABELS_CSV="/home/ec474/rds/hpc-work/ADNI_MRI/master_mri_clinical_matched_viscode2_extended_post_exclusion.csv"
 DATA_DIR="/home/ec474/rds/hpc-work/ADNI_CL/no_cdr_stratified_post_exclusion/tabular/baseline"

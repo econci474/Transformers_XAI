@@ -11,7 +11,7 @@ The original paper is a multi-task brain-tumor model on BraTS (4-channel
 multi-modal MRI; segmentation + classification + volume estimation heads).
 This file ports the *backbone + attention gate + classification head* to the
 ADNI diagnostic harness as instructed in
-``mri_pipeline/3d_cnn_vit/3d_cnn_vit.txt``:
+``mri_pipeline/agms3d/agms3d.txt``:
 
     "Adapt this architecture from Nature paper: AG-MS3D-CNN for the
      classification branch only."
@@ -93,7 +93,7 @@ class SeparableConv3d(nn.Module):
     3-pathway design that is roughly 5-8x fewer params overall.
 
     Duplicated from ``3d_conv_net/3DSCNN.py:SeparableConv3d`` (the plan keeps
-    ``3d_cnn_vit/`` self-contained to avoid the cross-folder importlib
+    ``agms3d/`` self-contained to avoid the cross-folder importlib
     coupling that has bitten BrainMVP <-> ViT this session).
     """
 

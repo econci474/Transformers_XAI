@@ -63,7 +63,7 @@ _spec.loader.exec_module(_05)
 _VIT = _HERE / "04_supervised_finetuning_ViT.py"
 TRAINERS = {
     "brainmvp":    _HERE / "brain_mvp" / "04_supervised_finetuning_BrainMVP.py",
-    "agms3d":      _HERE / "3d_cnn_vit" / "train_agms3d.py",
+    "agms3d":      _HERE / "agms3d" / "train_agms3d.py",
     "cnn3d":       _HERE / "3d_conv_net" / "train_3dcnn.py",
     "vit_mae":     _VIT,
     "vit_scratch": _VIT,

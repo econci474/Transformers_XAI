@@ -26,7 +26,7 @@
 #
 # Run (from the output folder):
 #   cd /home/ec474/rds/hpc-work/ADNI_MRI
-#   sbatch /home/ec474/rds/hpc-work/Transformers_XAI/mri_pipeline/3d_cnn_vit/04k_finetune_AGMS3D_vanilla_submit_csd3.sh
+#   sbatch /home/ec474/rds/hpc-work/Transformers_XAI/mri_pipeline/agms3d/04k_finetune_AGMS3D_vanilla_submit_csd3.sh
 # =============================================================================
 
 module purge
@@ -36,7 +36,7 @@ conda run -n mri python -c "import torch, monai, sklearn, pandas" \
     || { echo "[ERROR] mri env missing deps"; exit 1; }
 
 ROOT="/home/ec474/rds/hpc-work"
-SCRIPT_DIR="${ROOT}/Transformers_XAI/mri_pipeline/3d_cnn_vit"
+SCRIPT_DIR="${ROOT}/Transformers_XAI/mri_pipeline/agms3d"
 CNN_INPUTS="${ROOT}/ADNI_SMRIPREP/derivatives/cnn_inputs"
 MATCHED="${ROOT}/ADNI_MRI/master_mri_clinical_matched_viscode2_extended_post_exclusion.csv"
 DATA_DIR="${ROOT}/ADNI_CL/no_cdr_stratified_post_exclusion/tabular/baseline"

@@ -218,7 +218,7 @@ HP_KEY_LINES = [
 #   - BrainDINO (brain_dino/02_supervised_finetuning_BrainDINO.py): cached-head
 #     pipeline used to date is encoder-frozen + deterministic forward, so no
 #     train-time aug -> "none".
-#   - AG-MS3D legacy + rescue1 (3d_cnn_vit/train_agms3d.py at args.strong_aug=False):
+#   - AG-MS3D legacy + rescue1 (agms3d/train_agms3d.py at args.strong_aug=False):
 #     RandFlipd x3 (3 axes), nothing else. Not recorded in metrics.json -> "flips".
 #   - AG-MS3D rescue2 (--strong_aug): RandFlip x3 + RandAffine + RandGaussianNoise
 #     + RandBiasField + RandAdjustContrast. Recorded as `strong_aug: True` in

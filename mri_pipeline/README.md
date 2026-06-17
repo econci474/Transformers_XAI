@@ -29,7 +29,7 @@ modalities. Subject/session exclusions come from `bidsification/exclusions.py`
 | ViT-MAE75 | MAE-pretrained 3D ViT-B/16 (`_vit_recipe/`) | root `03/04`, `03d` |
 | BrainDINO | DINOv3 ViT-B/16 (per-slice) | `brain_dino/` |
 | BrainMVP  | UniFormer-Small | `brain_mvp/` |
-| AG-MS3D-CNN | attention-gated multi-scale 3D CNN | `3d_cnn_vit/` |
+| AG-MS3D-CNN | attention-gated multi-scale 3D CNN | `agms3d/` |
 | Spasov 3D-CNN | vanilla / separable 3D CNN baselines | `3d_conv_net/` |
 | Cached-head | frozen-encoder embeddings + linear/MLP head | `cached_head_sweep/` |
 
@@ -45,7 +45,7 @@ modalities. Subject/session exclusions come from `bidsification/exclusions.py`
 - `brain_dino/01_*` prep → `02_supervised_finetuning_BrainDINO.py` (frozen / full_ft / LoRA) → `03_extract_braindino_embeddings.py`.
 - `brain_mvp/03_prepare_BrainMVP.py` → `04_supervised_finetuning_BrainMVP.py` → `05_extract_brainmvp_full_ft_embeddings.py`; `06_gradcam_T1d.py` + `07_render_gradcam_T1d.py` (T1d saliency on the real MNI T1w).
 - `3d_conv_net/00_prepare_CNN_inputs.py` → `train_3dcnn.py` (Spasov vanilla/separable).
-- `3d_cnn_vit/train_agms3d.py` (AG-MS3D-CNN).
+- `agms3d/train_agms3d.py` (AG-MS3D-CNN).
 - `04_supervised_finetuning_ViT.py` — the ViT trainer **and shared library**: its task config and label/metric helpers are imported (by exact path, via importlib) by the BrainDINO / BrainMVP / 3D-CNN / cached-head trainers, so its filename is intentionally stable.
 
 **Cached-head HP sweep** (`cached_head_sweep/`)
