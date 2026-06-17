@@ -132,6 +132,9 @@ def main() -> int:
                     help="root of sMRIprep MNI T1w (sub-*/ses-*/anat/*_res-1_desc-preproc_T1w.nii.gz)")
     ap.add_argument("--out-dir", default=None, help="default: <gradcam-dir>/figures")
     ap.add_argument("--n-exemplars", type=int, default=3)
+    ap.add_argument("--include", nargs="*", default=None,
+                    help="Patient_IDs to always render as exemplars regardless of "
+                         "ranking / correctness (e.g. --include 005_S_0448)")
     ap.add_argument("--all-scans", action="store_true",
                     help="include misclassified scans in the group mean (default: correct-only)")
     ap.add_argument("--n-cuts", type=int, default=7, help="slices per montage axis")
@@ -203,14 +206,19 @@ def main() -> int:
     cam_sum = {0: None, 1: None}
     t1w_sum = {0: None, 1: None}
     cnt = {0: 0, 1: 0}
-    cand = {0: [], 1: []}    # (prob1, pid, vis, cam_path, t1w_path) — confidence-ranked
+    cand = {0: [], 1: []}    # (prob1, pid, vis, cam_path, t1w_path, is_correct)
+    include = set(args.include or [])
     miss = 0
     grp_shape = None
     grp_aff = None
     for _, r in man.iterrows():
-        if correct_only and int(r["correct"]) != 1:
-            continue
         lab = int(r["label"])
+        pid = r["Patient_ID"]
+        is_corr = int(r["correct"]) == 1
+        use_for_group = is_corr or not correct_only
+        # process the scan if it feeds the group mean OR is a force-included exemplar
+        if not (use_for_group or pid in include):
+            continue
         cam_p = resolve_cam(r["cam_path"], r["seed"])
         t1w_p = find_smriprep_t1w(r["bids_sub"], r["adni_viscode"], args.smriprep_dir)
         if not (os.path.isfile(cam_p) and t1w_p and os.path.isfile(t1w_p)):
@@ -226,10 +234,11 @@ def main() -> int:
                   f"cam{cam_mni.shape} t1w{bg.shape} vs {grp_shape}", file=sys.stderr)
             miss += 1
             continue
-        cam_sum[lab] = cam_mni if cam_sum[lab] is None else cam_sum[lab] + cam_mni
-        t1w_sum[lab] = bg if t1w_sum[lab] is None else t1w_sum[lab] + bg
-        cnt[lab] += 1
-        cand[lab].append((float(r["prob1"]), r["Patient_ID"], r["adni_viscode"], cam_p, t1w_p))
+        cand[lab].append((float(r["prob1"]), pid, r["adni_viscode"], cam_p, t1w_p, is_corr))
+        if use_for_group:
+            cam_sum[lab] = cam_mni if cam_sum[lab] is None else cam_sum[lab] + cam_mni
+            t1w_sum[lab] = bg if t1w_sum[lab] is None else t1w_sum[lab] + bg
+            cnt[lab] += 1
 
     print(f"  back-projected: sMCI={cnt[0]} pMCI={cnt[1]} (skipped {miss})")
     if cnt[0] == 0 and cnt[1] == 0:
@@ -254,14 +263,22 @@ def main() -> int:
                  f"gradcam_group_{CLASS_NAME[lab]}", thr)
         print(f"  wrote group {CLASS_NAME[lab]} montages (n={cnt[lab]})")
 
-    # ── exemplars: most-confident correct predictions ────────────────────────────
+    # ── exemplars: most-confident correct predictions (+ any --include subjects) ──
     # pMCI panel -> highest p_pMCI; sMCI panel -> lowest p_pMCI (= highest p_sMCI).
     for lab in (0, 1):
-        ranked = sorted(cand[lab], key=lambda t: t[0], reverse=(lab == 1))
+        ranked = sorted([c for c in cand[lab] if c[5]], key=lambda t: t[0],
+                        reverse=(lab == 1))
         picks = ranked[:args.n_exemplars]
+        # force-included subjects, in addition to the top-N (skip dups)
+        chosen_ids = {c[1] for c in picks}
+        extra = [c for c in cand[lab] if c[1] in include and c[1] not in chosen_ids]
+        picks = picks + extra
+        if not picks:
+            continue
         print(f"  {CLASS_NAME[lab]} exemplars (p_pMCI): "
-              f"{['%.2f' % p for p, *_ in picks]}")
-        for (p1, pid, vis, cam_p, t1w_p) in picks:
+              f"{['%.2f' % p for p, *_ in picks]}"
+              + (f"  [+included: {[c[1] for c in extra]}]" if extra else ""))
+        for (p1, pid, vis, cam_p, t1w_p, _corr) in picks:
             cam96 = np.load(cam_p).astype(np.float32)
             cam_mni, aff = backproject(cam96, t1w_p, chain)
             bg = nib.load(t1w_p).get_fdata().astype(np.float32)
