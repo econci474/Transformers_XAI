@@ -152,10 +152,16 @@ def render_text_overlay(text, words, block_imp, title, out_png):
         norm = imp
     cmap = plt.get_cmap("OrRd")
 
-    fig = plt.figure(figsize=(15, 9))
-    gs = fig.add_gridspec(1, 2, width_ratios=[3.0, 1.0], wspace=0.04)
-    axt = fig.add_subplot(gs[0]); axt.axis("off"); axt.set_xlim(0, 1); axt.set_ylim(0, 1)
+    fig = plt.figure(figsize=(16, 9.5))
+    # 2x2: text (top-left) + a thin horizontal colorbar in its OWN row beneath the text (bottom-left),
+    # with the per-block bar spanning the full height on the right. This keeps the colorbar out from
+    # between the panels (its old placement overlapped the block bar) and gives the bar labels room.
+    gs = fig.add_gridspec(2, 2, width_ratios=[3.0, 1.05], height_ratios=[24, 1],
+                          wspace=0.26, hspace=0.08)
+    axt = fig.add_subplot(gs[0, 0]); axt.axis("off"); axt.set_xlim(0, 1); axt.set_ylim(0, 1)
     axt.set_title(title, fontsize=11, fontweight="bold", loc="left")
+    cax = fig.add_subplot(gs[1, 0])                 # dedicated colorbar axis (horizontal, under the text)
+    axb = fig.add_subplot(gs[:, 1])                 # per-block bar, full height, own column
 
     x, y = 0.01, 0.97
     line_h, max_x = 0.022, 0.99
@@ -172,14 +178,18 @@ def render_text_overlay(text, words, block_imp, title, out_png):
         axt.text(x, y, word, fontsize=8.0, ha="left", va="top",
                  bbox=dict(boxstyle="round,pad=0.05", fc=bg, ec="none"))
         x += wlen
-    # block bar
-    axb = fig.add_subplot(gs[1])
+
+    # block bar (own column, full height)
     bi = pd.Series(block_imp).sort_values()
     axb.barh(bi.index, bi.values, color="#c0392b")
     axb.set_title("per-block attention", fontsize=9)
     axb.tick_params(axis="y", labelsize=7.5); axb.tick_params(axis="x", labelsize=7)
+
+    # colorbar in its dedicated axis (no longer overlapping the block bar)
     sm = cm.ScalarMappable(cmap=cmap, norm=colors.Normalize(0, 1))
-    cb = fig.colorbar(sm, ax=axt, fraction=0.025, pad=0.01); cb.set_label("word attention (rollout, norm.)", fontsize=7.5)
+    cb = fig.colorbar(sm, cax=cax, orientation="horizontal")
+    cb.set_label("word attention (rollout, normalised)", fontsize=8)
+    cb.ax.tick_params(labelsize=7)
     fig.savefig(out_png, dpi=200, bbox_inches="tight"); plt.close(fig)
 
 
