@@ -1,6 +1,6 @@
 #!/bin/bash
 # =============================================================================
-# 09_bmfm_gwas_regression_finetuning_sweep.sh
+# 04_finetune_sweep.sh (gwas_signed_regression)
 # =============================================================================
 # SLURM array job for hyperparameter sweep of BMFM-DNA-SNP GWAS z-score
 # regression fine-tuning on the CSD3 SL2 ampere (A100) partition.
@@ -34,7 +34,7 @@
 #   3. This script and the YAML config pushed to ~/ADNI_SNP/ or cloned from git
 #
 # Usage:
-#   sbatch 09_bmfm_gwas_regression_finetuning_sweep.sh
+#   sbatch 04_finetune_sweep.sh
 #   # Monitor:
 #   squeue -u ec474
 #   # Logs:
@@ -135,7 +135,7 @@ export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 bmfm-targets-run \
     --config-path "$SCRIPT_DIR" \
-    -cn 09_bmfm_gwas_regression_finetuning \
+    -cn 04_finetune \
     input_directory="$INPUT_DIRECTORY" \
     working_dir="$OUTPUT_DIRECTORY" \
     "checkpoint='ibm-research/biomed.dna.snp.modernbert.113m.v1'" \

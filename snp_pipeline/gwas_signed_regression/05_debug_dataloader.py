@@ -9,9 +9,9 @@ would explain the val_loss=0 / R²=1 trivial-prediction artefact on the combos
 and by_chrom runs)?
 
 Usage (CSD3 login node, env bmfm; no GPU needed):
-    python snp_pipeline/11_debug_bmfm_dataloader.py \
-        --config-path /home/ec474/rds/hpc-work/Transformers_XAI/snp_pipeline \
-        -cn 09_bmfm_gwas_regression_finetuning \
+    python snp_pipeline/gwas_signed_regression/05_debug_dataloader.py \
+        --config-path /home/ec474/rds/hpc-work/Transformers_XAI/snp_pipeline/gwas_signed_regression \
+        -cn 04_finetune \
         input_directory=/home/ec474/rds/hpc-work/ADNI_SNP/bmfm_gwas_signed_regression_without_ukb_augmented_by_chrom_combos \
         working_dir=/tmp/bmfm_probe \
         "checkpoint='ibm-research/biomed.dna.ref.modernbert.113m.v1'"

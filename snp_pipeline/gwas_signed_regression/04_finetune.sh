@@ -48,11 +48,12 @@ INPUT_DIRECTORY="/home/ec474/rds/hpc-work/ADNI_SNP/bmfm_gwas_signed_regression_w
 # Where to write checkpoints, predictions, logs:
 OUTPUT_DIRECTORY="/home/ec474/rds/hpc-work/ADNI_SNP/bmfm_gwas_regression_output/bmfm_gwas_combos_ref_lr1e6_2ep"
 
-# Directory containing 09_bmfm_gwas_regression_finetuning.yaml
+# Directory containing 04_finetune.yaml (this script's directory).
 # NOTE: Cannot use BASH_SOURCE[0] here — SLURM copies the .sh to a spool
 # directory (/var/spool/slurm/...) so dirname resolves to the wrong path.
 # Hardcode to the actual git clone location on CSD3:
-SCRIPT_DIR="/home/ec474/rds/hpc-work/Transformers_XAI/snp_pipeline"
+SCRIPT_DIR="/home/ec474/rds/hpc-work/Transformers_XAI/snp_pipeline/gwas_signed_regression"
+PARENT_DIR="/home/ec474/rds/hpc-work/Transformers_XAI/snp_pipeline"
 
 # =============================================================================
 # ── Environment ───────────────────────────────────────────────────────────────
@@ -88,7 +89,7 @@ mkdir -p logs
 # =============================================================================
 # =============================================================================
 # ── Fine-tuning run ───────────────────────────────────────────────────────────
-# Hydra config: 09_bmfm_gwas_regression_finetuning.yaml (in SCRIPT_DIR)
+# Hydra config: 04_finetune.yaml (in SCRIPT_DIR)
 # This extends dna_finetune_train_and_test_config with:
 #   - regression label (z_score, is_regression_label=true)
 #   - MSE loss
@@ -102,9 +103,9 @@ mkdir -p logs
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 export TORCHDYNAMO_DISABLE=1   # Triton/icx compiler crashes on CSD3 — keep with SDPA too
 
-python "$SCRIPT_DIR/force_sdpa_wrapper.py" \
+python "$PARENT_DIR/force_sdpa_wrapper.py" \
     --config-path "$SCRIPT_DIR" \
-    -cn 09_bmfm_gwas_regression_finetuning \
+    -cn 04_finetune \
     input_directory="$INPUT_DIRECTORY" \
     working_dir="$OUTPUT_DIRECTORY" \
     "checkpoint='ibm-research/biomed.dna.ref.modernbert.113m.v1'"

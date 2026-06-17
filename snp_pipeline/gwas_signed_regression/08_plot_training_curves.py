@@ -1,6 +1,6 @@
 """
-plot_training_curves.py
-========================
+08_plot_training_curves.py (gwas_signed_regression)
+====================================================
 Read TFEvents files from a Lightning log directory and plot train/val loss.
 Saves metrics to JSON and plots to PNG.
 
@@ -8,8 +8,8 @@ Does NOT launch the TensorBoard server — avoids the pkg_resources issue.
 
 Usage
 -----
-  python plot_training_curves.py
-  python plot_training_curves.py --logdir path/to/lightning_logs --out results/
+  python 08_plot_training_curves.py
+  python 08_plot_training_curves.py --logdir path/to/lightning_logs --out results/
 """
 import os
 import json

@@ -1,6 +1,6 @@
 """
-08e_augment_bmfm_gwas_regression_by_chrom.py
-=============================================
+03_augment_by_chrom.py (gwas_signed_regression)
+================================================
 Generate chromosome-level multi-SNP sequences (up to ~8,192 bp) for
 BMFM-DNA-SNP signed regression fine-tuning.
 
@@ -44,10 +44,10 @@ Output
 
 Usage
 -----
-  python 08e_augment_bmfm_gwas_regression_by_chrom.py
-  python 08e_augment_bmfm_gwas_regression_by_chrom.py --max-len 4096  # smaller windows
-  python 08e_augment_bmfm_gwas_regression_by_chrom.py --min-flank 20 # left-flank window
-  python 08e_augment_bmfm_gwas_regression_by_chrom.py --check          # dry run
+  python 03_augment_by_chrom.py
+  python 03_augment_by_chrom.py --max-len 4096  # smaller windows
+  python 03_augment_by_chrom.py --min-flank 20  # left-flank window
+  python 03_augment_by_chrom.py --check          # dry run
 """
 
 import argparse

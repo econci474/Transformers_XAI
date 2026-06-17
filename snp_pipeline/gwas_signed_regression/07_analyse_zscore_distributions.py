@@ -1,6 +1,6 @@
 """
-analyse_zscore_distributions.py
-=================================
+07_analyse_zscore_distributions.py (gwas_signed_regression)
+============================================================
 Compare z-score distributions across BMFM regression input datasets.
 
 Datasets compared:
@@ -11,7 +11,7 @@ Datasets compared:
   08f  - Combinatorial EA/OA (if generated)
 
 Usage:
-  python snp_pipeline/analyse_zscore_distributions.py
+  python snp_pipeline/gwas_signed_regression/07_analyse_zscore_distributions.py
 """
 import pathlib
 import pandas as pd

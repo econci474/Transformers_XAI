@@ -1,6 +1,6 @@
 """
-08d_augment_bmfm_gwas_regression.py
-=====================================
+02_augment_rc.py (gwas_signed_regression)
+==========================================
 Augment the BMFM-DNA-SNP signed regression dataset with reverse complement
 sequences.
 
@@ -34,8 +34,8 @@ Augmentation logic
 
 Usage
 -----
-  python 08d_augment_bmfm_gwas_regression.py
-  python 08d_augment_bmfm_gwas_regression.py --check   # dry-run: show counts only
+  python 02_augment_rc.py
+  python 02_augment_rc.py --check   # dry-run: show counts only
 """
 
 import argparse
