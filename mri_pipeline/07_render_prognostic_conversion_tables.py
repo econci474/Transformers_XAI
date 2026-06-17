@@ -81,11 +81,17 @@ def _prep_for_06c(df):
     return df
 
 
-def _conv_title(split):
+def _conv_title(split, stem=None):
     """3-line title matching the clinical-table aesthetic (Clinical -> MRI,
-    Baseline -> longitudinal)."""
+    Baseline -> longitudinal). T4 is a converter-only horizon model whose splits
+    are stratified on the conversion window, NOT baseline diagnosis -- so it gets
+    a task-specific third line (and a comma instead of the em-dash)."""
     w = "Validation" if split == "val" else "Test"
-    return (f"MRI Models: {w} Performance — longitudinal",
+    if stem == "mri_t4":
+        return (f"MRI Models: {w} Performance, longitudinal",
+                "(mean ± std, seeds 0/1/2), train/val/test, 80/10/10",
+                "stratified on conversion window (cohort = pMCI + pCN_to_AD)")
+    return (f"MRI Models: {w} Performance, longitudinal",
             "(mean ± std, seeds 0/1/2), train/val/test, 80/10/10",
             "stratified splits on baseline diagnosis")
 
@@ -106,9 +112,9 @@ def _render_styled_conv(summ_df, out_root):
         ]
         for stem, tasks in GROUPS:
             m06c.render_table(sd, "val", tasks, m06c.VAL_METRICS,
-                              f"{stem}_val", title_lines=_conv_title("val"))
+                              f"{stem}_val", title_lines=_conv_title("val", stem))
             m06c.render_table(sd, "test", tasks, m06c.TEST_METRICS,
-                              f"{stem}_test", title_lines=_conv_title("test"))
+                              f"{stem}_test", title_lines=_conv_title("test", stem))
             m06c.render_aug_hp(f"{stem}_val_aug_hp")
             m06c.render_aug_hp(f"{stem}_test_aug_hp")
     finally:

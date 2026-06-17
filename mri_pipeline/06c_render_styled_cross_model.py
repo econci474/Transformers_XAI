@@ -85,7 +85,7 @@ TASK_LABELS = {
     "T3a_conv3y":      "T3a: conv ≤3y",
     "T3b_conv5y":      "T3b: conv ≤5y",
     "T3c_conv7y":      "T3c: conv ≤7y",
-    "T4_conv_horizon": "T4: horizon <3 / 3-7 / ≥7y",
+    "T4_conv_horizon": "T4: AD conversion window (3 class)",
 }
 
 

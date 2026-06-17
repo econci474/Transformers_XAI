@@ -357,7 +357,7 @@ def _summarise(df):
         # Val AUC/F1 at the best epoch (read_run pulls these from train_log.csv
         # or a val_metrics block). Missing for trainers that never logged them
         # (BrainMVP/AG-MS3D/3D-CNN) and val_f1 for cached-head -> None -> "—".
-        for vmetric in ["val_auc", "val_f1"]:
+        for vmetric in ["val_auc", "val_f1", "val_macro_f1"]:
             v = pd.to_numeric(sub.get(vmetric), errors="coerce").dropna().to_numpy()
             rec[f"{vmetric}_mean"] = float(v.mean()) if len(v) else None
             rec[f"{vmetric}_std"]  = float(v.std())  if len(v) else None

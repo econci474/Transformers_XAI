@@ -211,6 +211,45 @@ def _read_val_metrics(d: dict, run_dir: str, best_epoch) -> dict:
     return out
 
 
+def _val_macro_f1(d: dict):
+    """True macro-averaged val F1, reconstructed exactly from the stored binary
+    val rates (no raw predictions needed).
+
+    Multiclass runs store `macro_f1` directly. Binary runs store accuracy,
+    sensitivity (= positive recall) and specificity (= negative recall), from
+    which the confusion matrix is recoverable up to scale: the class ratio
+    r = n_neg/n_pos = (sens - acc)/(acc - spec) follows from
+    acc = (sens + spec*r)/(1 + r). Setting n_pos = 1, n_neg = r gives the full 2x2
+    (TP=sens, FN=1-sens, TN=spec*r, FP=r*(1-spec)), hence both class F1s and their
+    mean. Using accuracy (rather than precision) makes this exact even when a class
+    is perfectly classified (spec == 1 or sens == 1). Returns None when there is no
+    `val_metrics` block (e.g. cached-head runs whose val came only from train_log)
+    or the rates are too degenerate to invert."""
+    vm = d.get("val_metrics") or {}
+    if not vm:
+        return None
+    if vm.get("macro_f1") is not None:
+        return float(vm["macro_f1"])
+    acc = vm.get("accuracy")
+    sens = vm.get("sensitivity", vm.get("recall"))
+    spec = vm.get("specificity")
+    if None in (acc, sens, spec):
+        return None
+    denom = acc - spec
+    if abs(denom) < 1e-9:
+        return None
+    r = (sens - acc) / denom          # n_neg / n_pos
+    if r <= 0:
+        return None
+    tp, fn = sens, 1.0 - sens
+    tn, fp = spec * r, r * (1.0 - spec)
+    prec_p = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+    f1p = (2 * prec_p * sens / (prec_p + sens)) if (prec_p + sens) > 0 else 0.0
+    prec_n = tn / (tn + fn) if (tn + fn) > 0 else 0.0
+    f1n = (2 * prec_n * spec / (prec_n + spec)) if (prec_n + spec) > 0 else 0.0
+    return float((f1p + f1n) / 2)
+
+
 def read_run(path: str, model: str) -> dict:
     """Parse one metrics.json into a flat record (defensive — schemas vary)."""
     with open(path) as f:
@@ -242,6 +281,7 @@ def read_run(path: str, model: str) -> dict:
         # Val AUC/F1 at the best epoch (train_log.csv or a val_metrics block).
         "val_auc":      val_xtra["val_auc"],
         "val_f1":       val_xtra["val_f1"],
+        "val_macro_f1": _val_macro_f1(d),
         "path":         path,
     }
 

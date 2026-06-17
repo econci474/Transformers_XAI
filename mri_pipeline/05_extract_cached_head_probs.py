@@ -97,6 +97,16 @@ def task_label(task: str, row: pd.Series):
         if visit_diag != "MCI":
             return None
         return 0 if cg == "sMCI" else (1 if cg == "pMCI" else None)
+    if task == "T1e_pcn_vs_scn":
+        # Conversion task among CN-baseline subjects: sCN (stable) vs pCN
+        # (progressed to MCI OR AD). Subject-level labels broadcast onto every
+        # visit row via the pCN_to_AD / pCN_to_MCI / sCN columns. Mirrors
+        # TASK_CONFIG["T1e_pcn_vs_scn"] in 04_supervised_finetuning_ViT.py.
+        if row.get("sCN") == 1:
+            return 0
+        if row.get("pCN_to_AD") == 1 or row.get("pCN_to_MCI") == 1:
+            return 1
+        return None
     if task == "T2_multiclass":
         return {"CN": 0, "MCI": 1, "AD": 2}.get(visit_diag, None)
     # --- conversion tasks (T3 binary, baseline-anchored, filter_non_ad) ---

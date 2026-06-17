@@ -4,7 +4,6 @@
 #SBATCH --output=/home/ec474/rds/hpc-work/ADNI_MRI/braindino_outputs/slurm_logs/bdino_frozen_%A_%a.log
 #SBATCH --error=/home/ec474/rds/hpc-work/ADNI_MRI/braindino_outputs/slurm_logs/bdino_frozen_%A_%a.err
 #SBATCH -p ampere
-#SBATCH --exclude=gpu-q-[15,64,68-75,81-82,86-90]
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --gres=gpu:1
