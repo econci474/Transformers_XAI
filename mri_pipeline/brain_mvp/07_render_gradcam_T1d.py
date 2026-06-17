@@ -167,15 +167,17 @@ def main() -> int:
     def _overlay(bg_img, stat_img, mode, title, thr):
         """High-res anatomy + a single semi-transparent hot overlay/colorbar via
         plot_stat_map (it manages the one-colorbar-per-figure rule). `dim=0`
-        keeps the anatomy at full brightness; `alpha` sets overlay transparency
-        (flows through **kwargs to imshow); one-sided 0..vmax colorbar."""
+        keeps the anatomy at full brightness; overlay transparency is set via
+        `transparency` (nilearn >=0.13) or `alpha` (older); one-sided 0..vmax cbar."""
         kw = dict(bg_img=bg_img, display_mode=mode, cut_coords=args.n_cuts,
                   colorbar=True, threshold=thr, cmap="hot", title=title,
                   black_bg=False, dim=0, symmetric_cbar=False, vmax=1.0)
-        try:
-            return plotting.plot_stat_map(stat_img, alpha=args.alpha, **kw)
-        except TypeError:   # older nilearn that doesn't forward alpha
-            return plotting.plot_stat_map(stat_img, **kw)
+        for name in ("transparency", "alpha"):   # transparency renamed alpha in 0.13
+            try:
+                return plotting.plot_stat_map(stat_img, **{name: args.alpha}, **kw)
+            except TypeError:
+                continue
+        return plotting.plot_stat_map(stat_img, **kw)
 
     def montages(stat_img, bg_img, title, stem, thr):
         for mode, tag in (("z", "axial"), ("y", "coronal"), ("x", "sagittal")):
