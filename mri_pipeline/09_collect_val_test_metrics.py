@@ -53,7 +53,7 @@ _REPO = _HERE.parent
 # Reuse the aggregator's run-discovery globs + config reader (single source of
 # truth for where each model's runs live on disk).
 _spec = importlib.util.spec_from_file_location(
-    "_05_aggregate", str(_HERE / "05_aggregate_mri_results.py"))
+    "_05_aggregate", str(_HERE / "tables" / "05_aggregate_mri_results.py"))
 _05 = importlib.util.module_from_spec(_spec)
 sys.modules["_05_aggregate"] = _05
 _spec.loader.exec_module(_05)

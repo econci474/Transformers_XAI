@@ -16,7 +16,7 @@ Training:
 - Max --epochs (default 50 -- head converges fast on cached features).
 
 Metrics.json schema: identical to 02_supervised_finetuning_BrainDINO.py
-output, so 05_aggregate_mri_results.py and 06_render_cross_model_table.py
+output, so tables/05_aggregate_mri_results.py and tables/06_render_cross_model_table.py
 ingest unchanged.
 
 Usage example:
