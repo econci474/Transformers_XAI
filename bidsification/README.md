@@ -17,6 +17,19 @@ This pipeline takes pre-processed N3m-corrected NIfTI files from `sourcedata/ADN
 | `05_build_participants_tsv.py` | Builds `bids/participants.tsv` + `participants.json` from ADNIMERGE + APOERES |
 | `06_populate_phenotype.py` | Copies key clinical CSVs into `bids/phenotype/` as TSVs + JSON sidecars |
 | `07_generate_scans_tsv.py` | Generates per-session `*_scans.tsv` files with acquisition dates |
+| `08_patch_phenotype_json.py` | Post-hoc QA: adds ADNI data-dictionary descriptions to phenotype JSON sidecars (re-runnable; adds missing keys only) |
+| `09_extract_dicom_tags.py` | Post-hoc validation: pulls acquisition tags (TR/TE/TI/FlipAngle…) from raw DICOMs into the T1w JSON sidecars |
+| `10_snp_mri_overlap.py` | Cohort QA: subjects with **both** SNP + 3T T1w MRI → `subjects_with_snp_and_mri.tsv` + PLINK keep-list |
+| `11_longitudinal_scan_histogram.py` | Cohort QA: per-subject visit table + scan-count histogram for the SNP+MRI cohort |
+| `12_run_smriprep_local.py` | Runs sMRIprep in Docker (parallel containers) on the SNP+MRI cohort |
+
+Scripts 01–07 are the core BIDS conversion; 08–11 are post-hoc validation/QA; 12 runs preprocessing.
+
+### Subject / session exclusions
+`exclusions.py` is the **single source of truth** for subject- and session-level exclusions
+(site-381 cohort, corrupted MRI, scanner-malfunction sessions). It is imported by the core
+scripts here **and** across `clinical_pipeline/` and `mri_pipeline/` — apply it via
+`is_excluded_subject` / `is_excluded_session` rather than duplicating the list.
 
 ## Running the Pipeline
 

@@ -38,7 +38,7 @@ Inputs
                        train/val/test). Labels and image paths come from the
                        matched_labels_csv. Splits are reused from the clinical
                        pipeline so test subjects stay consistent across modalities
-                       (per tool.md cross-modality consistency).
+                       (cross-modality consistency; see mri_pipeline/README.md).
 
 Output layout (matches clinical pipeline)
 -----------------------------------------
