@@ -1,6 +1,6 @@
 """
-08h_prepare_bmfm_gwas_classification_inputs.py
-================================================
+01_prepare_inputs.py (gwas_classification)
+===========================================
 Prepare BMFM-DNA-SNP classification dataset with binned z-score labels.
 
 For each label=1 (GW-significant) SNP:
@@ -39,9 +39,9 @@ Output
 
 Usage
 -----
-  python 08h_prepare_bmfm_gwas_classification_inputs.py
-  python 08h_prepare_bmfm_gwas_classification_inputs.py --check
-  python 08h_prepare_bmfm_gwas_classification_inputs.py --max-null 2000
+  python 01_prepare_inputs.py
+  python 01_prepare_inputs.py --check
+  python 01_prepare_inputs.py --max-null 2000
 """
 
 import argparse

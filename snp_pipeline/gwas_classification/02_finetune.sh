@@ -1,6 +1,6 @@
 #!/bin/bash
 # =============================================================================
-# 10_bmfm_gwas_classification_finetuning.sh
+# 02_finetune.sh (gwas_classification)
 # =============================================================================
 # SLURM job script for BMFM-DNA-SNP fine-tuning on binned z-score
 # classification (7 classes: {-3, -2, -1, 0, +1, +2, +3}).
@@ -9,14 +9,14 @@
 # Task   : Classification — predict binned z-score from allele-specific DNA
 # Data   : ~350 GW-sig × 2 alleles + N null SNPs  (from 08h)
 # Input  : bmfm_gwas_classification_without_ukb/ (train/dev/test.csv)
-# Config : 10_bmfm_gwas_classification_finetuning.yaml
+# Config : 02_finetune.yaml
 #
 # GPU estimate:
 #   ModernBERT 113M @ bf16, 2048 tokens, batch=4 → ~6 GB VRAM.
 #   With ~280k+ rows, training is longer than regression (hours).
 #
 # Usage:
-#   sbatch 10_bmfm_gwas_classification_finetuning.sh
+#   sbatch 02_finetune.sh
 #
 # Transfer dataset to CSD3 first:
 #   scp -r D:/ADNI_SNP_Omni2.5M_20140220/bmfm_inputs/bmfm_gwas_classification_without_ukb \
@@ -46,8 +46,9 @@ INPUT_DIRECTORY="/home/ec474/rds/hpc-work/ADNI_SNP/bmfm_gwas_classification_with
 # Where to write checkpoints, predictions, logs:
 OUTPUT_DIRECTORY="/home/ec474/rds/hpc-work/ADNI_SNP/bmfm_gwas_classification_output/cls_snp_lr1e5_5ep"
 
-# Directory containing 10_bmfm_gwas_classification_finetuning.yaml
-SCRIPT_DIR="/home/ec474/rds/hpc-work/Transformers_XAI/snp_pipeline"
+# Directory containing 02_finetune.yaml (this script's directory).
+SCRIPT_DIR="/home/ec474/rds/hpc-work/Transformers_XAI/snp_pipeline/gwas_classification"
+PARENT_DIR="/home/ec474/rds/hpc-work/Transformers_XAI/snp_pipeline"
 
 # =============================================================================
 # ── Environment ───────────────────────────────────────────────────────────────
@@ -82,7 +83,7 @@ mkdir -p logs
 
 # =============================================================================
 # ── Fine-tuning run ───────────────────────────────────────────────────────────
-# Hydra config: 10_bmfm_gwas_classification_finetuning.yaml (in SCRIPT_DIR)
+# Hydra config: 02_finetune.yaml (in SCRIPT_DIR)
 # This extends dna_finetune_train_and_test_config with:
 #   - classification label (z_bin, 7 classes)
 #   - cross-entropy loss
@@ -95,9 +96,9 @@ mkdir -p logs
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 export TORCHDYNAMO_DISABLE=1   # Triton/icx compiler crashes on CSD3
 
-python "$SCRIPT_DIR/force_sdpa_wrapper.py" \
+python "$PARENT_DIR/force_sdpa_wrapper.py" \
     --config-path "$SCRIPT_DIR" \
-    -cn 10_bmfm_gwas_classification_finetuning \
+    -cn 02_finetune \
     input_directory="$INPUT_DIRECTORY" \
     working_dir="$OUTPUT_DIRECTORY" \
     "checkpoint='ibm-research/biomed.dna.snp.modernbert.113m.v1'"
