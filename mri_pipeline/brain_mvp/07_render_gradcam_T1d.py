@@ -162,17 +162,17 @@ def main() -> int:
         return str(alt)
 
     def _overlay(bg_img, stat_img, mode, title, thr):
-        """plot_anat + semi-transparent add_overlay; fall back if a kwarg is
-        rejected by this nilearn build (so it runs first-try on HPC)."""
-        disp = plotting.plot_anat(bg_img, display_mode=mode, cut_coords=args.n_cuts,
-                                  black_bg=False, title=title)
+        """High-res anatomy + a single semi-transparent hot overlay/colorbar via
+        plot_stat_map (it manages the one-colorbar-per-figure rule). `dim=0`
+        keeps the anatomy at full brightness; `alpha` sets overlay transparency
+        (flows through **kwargs to imshow); one-sided 0..vmax colorbar."""
+        kw = dict(bg_img=bg_img, display_mode=mode, cut_coords=args.n_cuts,
+                  colorbar=True, threshold=thr, cmap="hot", title=title,
+                  black_bg=False, dim=0, symmetric_cbar=False, vmax=1.0)
         try:
-            disp.add_overlay(stat_img, cmap="hot", threshold=thr, colorbar=True,
-                             alpha=args.alpha, vmin=0.0, vmax=1.0)
-        except TypeError:
-            disp.add_overlay(stat_img, cmap="hot", threshold=thr, colorbar=True,
-                             alpha=args.alpha)
-        return disp
+            return plotting.plot_stat_map(stat_img, alpha=args.alpha, **kw)
+        except TypeError:   # older nilearn that doesn't forward alpha
+            return plotting.plot_stat_map(stat_img, **kw)
 
     def montages(stat_img, bg_img, title, stem, thr):
         for mode, tag in (("z", "axial"), ("y", "coronal"), ("x", "sagittal")):
