@@ -1,0 +1,5 @@
+Github: 
+https://github.com/NWPU-903PR/3DSC-TF/tree/master 
+
+Adapt this architecture from Nature paper: AG-MS3D-CNN for the classification branch only 
+https://www.nature.com/articles/s41598-025-09351-x 

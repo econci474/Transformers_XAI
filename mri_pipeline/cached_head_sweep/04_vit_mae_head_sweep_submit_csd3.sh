@@ -87,7 +87,7 @@ echo "============================================================"
 
 if [ ! -f "${EMBEDDINGS_PT}" ]; then
     echo "[ERROR] Cached embeddings not found: ${EMBEDDINGS_PT}"
-    echo "        Run 03c_extract_vit_mae_embeddings.py first."; exit 1
+    echo "        Run 03d_extract_vit_mae_embeddings.py first."; exit 1
 fi
 if [ ! -f "${MATCHED_LABELS_CSV}" ]; then
     echo "[ERROR] Matched labels CSV not found"; exit 1

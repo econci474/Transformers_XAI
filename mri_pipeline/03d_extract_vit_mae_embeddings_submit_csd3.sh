@@ -12,7 +12,7 @@
 #SBATCH --mem=48G
 #SBATCH --time=01:30:00
 # =============================================================================
-# 03c_extract_vit_mae_embeddings_submit_csd3.sh
+# 03d_extract_vit_mae_embeddings_submit_csd3.sh
 # =============================================================================
 # Single non-array GPU job. Forwards every preprocessed ViT input scan
 # through the frozen MAE-pretrained Vision_Transformer3D encoder, takes
@@ -54,7 +54,7 @@ if [ ! -f "${MATCHED_LABELS_CSV}" ]; then
     echo "[ERROR] Matched labels CSV not found: ${MATCHED_LABELS_CSV}"; exit 1
 fi
 
-python "${SCRIPT_DIR}/03c_extract_vit_mae_embeddings.py" \
+python "${SCRIPT_DIR}/03d_extract_vit_mae_embeddings.py" \
     --pretrained_ckpt        "${PRETRAINED_CKPT}" \
     --vit_inputs_dir         "${VIT_INPUTS_DIR}" \
     --matched_labels_csv     "${MATCHED_LABELS_CSV}" \

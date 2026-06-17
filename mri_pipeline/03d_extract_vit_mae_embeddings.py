@@ -1,5 +1,5 @@
 """
-03c_extract_vit_mae_embeddings.py
+03d_extract_vit_mae_embeddings.py
 ==================================
 One-time extraction of frozen ViT-MAE75 ViT-B/16 3D pooled-CLS
 embeddings for every preprocessed (sub, ses) scan.

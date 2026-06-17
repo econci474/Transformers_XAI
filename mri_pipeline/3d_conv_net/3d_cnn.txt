@@ -1,0 +1,10 @@
+3D Convolutional Network: 
+https://github.com/xmuyzz/3D-CNN-PyTorch/blob/master/models/C3DNet.py
+
+Also Spasov: https://pubmed.ncbi.nlm.nih.gov/30440622/  
+
+Also: https://github.com/simeon-spasov/MCI uses 3D separable convolutions
+from: Spasov et al. https://www.biorxiv.org/content/early/2018/11/15/383687
+
+Or a standard Monai DenseNet 3D model from MONAI: 
+
