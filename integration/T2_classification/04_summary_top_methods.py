@@ -114,6 +114,57 @@ def cleaned_name(row):
     return core
 
 
+def decompose(row):
+    """Split a row into (Clinical, Visits, MRI, MRI_visit) for the int_t2 table. Mirrors cleaned_name's
+    framing / cl_tp / regex logic. MRI shows '<model> (<detector>)'; '—' where a modality is absent."""
+    m = str(row["method"]); tf = row["timeframe"]; fam = str(row.get("family", ""))
+    model = row.get("mri_model") or ""                         # BrainMVP / BrainDINO
+    mfr = re.match(r"^(M12X|M12_DET|M12|BL)\s*/\s*", m)
+    framing = mfr.group(1) if mfr else ""
+    core = m[mfr.end():] if mfr else m
+    if framing == "BL" or "CLbl" in fam:
+        cl_tp = "@bl"
+    elif framing in ("M12X", "M12", "M12_DET") or "CLm12" in fam:
+        cl_tp = "@m12"
+    else:
+        cl_tp = {"baseline_only": "@bl", "m12_only": "@m12"}.get(tf, "@m12")
+
+    def mri(detector):
+        return (f"{model} ({detector})" if model else f"({detector})"), "@m12"
+
+    if "MRI-only" in core:
+        mr, mv = mri("T2 3-class")
+        return "—", "—", mr, mv
+    mm2 = re.match(r"^(weighted-avg(?:-J)?|elastic-net|logreg)\s*/\s*(\w+)$", core)
+    if mm2 and ("CLbl" in fam or "CLm12" in fam):
+        mr, mv = mri("T2 3-class")
+        return "BioClin-L-ft T2", cl_tp, mr, mv
+    if "clinical-only" in core:
+        return "BioClin-L-ft T2", cl_tp, "—", "—"
+    if "clinical-temporal-EN" in core:
+        return "BioClin-L-ft T2", "@bl+m06+m12", "—", "—"
+    mm = re.match(r"^([AB])_(LR|EN|meanP)\s*/\s*(CL\+MRI|CL\+T1b|CL)$", core)
+    if mm:
+        form, _comb, src = mm.groups()
+        clin = "BioClin-L-ft T2" if form == "A" else "BioClin-B-ft T1 + MBERT-B-ft T1b"
+        if src == "CL":
+            return clin, "@bl+m06+m12", "—", "—"
+        mr, mv = mri("T1+T1b" if src == "CL+MRI" else "T1b")
+        return clin, "@bl+m06+m12", mr, mv
+    mm3 = re.match(r"^detector-(structured|EN)\s*/\s*(CL\+MRI|CL)$", core)
+    if mm3:
+        _meth, src = mm3.groups()
+        clin = "BioClin-B-ft T1 + MBERT-B-ft T1b"
+        if src == "CL":
+            return clin, "@bl+m06+m12", "—", "—"
+        mr, mv = mri("T1+T1b")
+        return clin, "@bl+m06+m12", mr, mv
+    if fam in ("flat", "hierarchical"):
+        mr, mv = mri("T2 3-class")
+        return "BioClin-L-ft T2", "@bl+m06+m12", mr, mv
+    return core, "—", ("—" if not model else f"{model}"), "—"
+
+
 def agg_method(row):
     """The fusion combiner / aggregation architecture (its own table column)."""
     fam = str(row.get("family", "")); m = str(row["method"])
@@ -335,6 +386,12 @@ def render_cleaned(inc) -> int:
     render_house(appendix, OUT / "summary_t2_integration_appendix_no_n.png", N_TEST_SUBTITLE,
                  show_n=False)
 
+    # easier-to-read int_t2: split the packed Method into Clinical | Visits | MRI | Visit | Aggregation,
+    # references grouped at the bottom (clinical-only block above MRI-only block). Same rows as `sel`.
+    render_int_t2(sel, N_TEST_SUBTITLE)
+    # int_t2_simple: plain-English Method + full model names (Clinical (Task) | MRI (Task) | Aggregation).
+    render_int_t2_simple(sel, N_TEST_SUBTITLE)
+
     print("=" * 90)
     print(f"  T2 cross-model summary — CLEANED ({len(sel)} rows) + APPENDIX ({len(appendix)} rows)")
     print("=" * 90)
@@ -343,6 +400,349 @@ def render_cleaned(inc) -> int:
     print(f"\n  wrote -> summary_t2_integration_cleaned{{,_no_n}}.png + "
           f"summary_t2_integration_appendix{{,_no_n}}.png (+ .csv)")
     return 0
+
+
+def render_int_t2(sel, subtitle=""):
+    """Easier-to-read T2 integration table: Clinical | Visits | MRI | Visit | Aggregation + 6 metrics.
+    Fusion rows ranked on top; then clinical-only refs; then MRI-only refs (dashed rules between blocks).
+    Writes outputs/int_t2.{csv,png,pdf} + int_t2_no_n.{png,pdf}. Does NOT touch the existing outputs."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    matplotlib.rcParams["font.family"] = "DejaVu Serif"
+
+    rows = []
+    for _, r in sel.iterrows():
+        clin, visits, mri, mvisit = decompose(r)
+        is_mri_only = str(r["display"]).startswith("MRI-only")
+        no_mri = (str(r.get("mri_disp", "—")) == "—")
+        block = "mri" if is_mri_only else ("clin" if no_mri else "fusion")
+        rows.append({"block": block, "Clinical": clin, "Visits": visits, "MRI": mri, "Visit": mvisit,
+                     "Aggregation": str(r.get("combiner", "—")),
+                     "bacc_mean": r["bacc_mean"], "bacc_std": r.get("bacc_std"),
+                     "macro_auc_mean": r["macro_auc_mean"], "macro_f1_mean": r["macro_f1_mean"],
+                     "f1_CN_mean": r["f1_CN_mean"], "f1_MCI_mean": r["f1_MCI_mean"],
+                     "f1_AD_mean": r["f1_AD_mean"], "n_test_mean": r["n_test_mean"]})
+    df = pd.DataFrame(rows)
+    order = {"fusion": 0, "clin": 1, "mri": 2}
+    df = (df.assign(_o=df.block.map(order))
+          .sort_values(["_o", "bacc_mean"], ascending=[True, False], kind="stable")
+          .drop(columns="_o").reset_index(drop=True))
+
+    COLS = [("bacc_mean", "Test bACC", "bacc_std"), ("macro_auc_mean", "macro-AUC", None),
+            ("macro_f1_mean", "macro-F1", None), ("f1_CN_mean", "F1 CN", None),
+            ("f1_MCI_mean", "F1 MCI", None), ("f1_AD_mean", "F1 AD", None)]
+    LEAD = ["Clinical", "Visits", "MRI", "Visit", "Aggregation"]
+    df[LEAD + [c for c, _, _ in COLS] + ["n_test_mean"]].rename(
+        columns={"n_test_mean": "n"}).to_csv(OUT / "int_t2.csv", index=False, encoding="utf-8")
+
+    def _draw(show_n, out_path):
+        headers = LEAD + [c[1] for c in COLS] + (["n"] if show_n else [])
+        N_LEAD = len(LEAD)
+        body, numeric, rules = [], [], []
+        prev_b = None
+        for _, r in df.iterrows():
+            cells = [r.Clinical, r.Visits, r.MRI, r.Visit, r.Aggregation]
+            nums = []
+            for key, _, stdk in COLS:
+                v = r[key]
+                if pd.isna(v):
+                    cells.append("—"); nums.append(np.nan)
+                else:
+                    cells.append(f"{v:.3f}" + (f" ± {r[stdk]:.3f}" if stdk and pd.notna(r.get(stdk)) else ""))
+                    nums.append(float(v))
+            if show_n:
+                cells.append(str(int(round(r["n_test_mean"]))))
+            body.append(cells); numeric.append(nums)
+            rules.append(prev_b is not None and r.block != prev_b); prev_b = r.block
+        numeric = np.array(numeric, float)
+        best = [int(np.nanargmax(numeric[:, j])) if not np.all(np.isnan(numeric[:, j])) else -1
+                for j in range(len(COLS))]
+
+        COL_W = [4.55, 1.45, 2.45, 0.85, 2.55, 1.45, 1.15, 1.10, 0.90, 0.96, 0.90] + ([0.50] if show_n else [])
+        LEFT, RIGHT_PAD = 0.28, 0.28
+        SUB_H = 0.40 if subtitle else 0.0
+        TITLE_H, HEAD_H, ROW_H = 1.40 + SUB_H, 0.40, 0.44
+        TOP_PAD, BOT_PAD = 0.12, 0.12
+        fig_w = LEFT + sum(COL_W) + RIGHT_PAD
+        fig_h = TOP_PAD + TITLE_H + HEAD_H + ROW_H * len(body) + BOT_PAD
+        fig, ax = plt.subplots(figsize=(fig_w, fig_h))
+        ax.axis("off"); ax.set_xlim(0, fig_w); ax.set_ylim(0, fig_h)
+        col_left = [LEFT]
+        for w in COL_W:
+            col_left.append(col_left[-1] + w)
+        RIGHT = col_left[-1]
+        col_cx = [(col_left[i] + col_left[i + 1]) / 2 for i in range(len(COL_W))]
+
+        def hline(y, lw=1.0, ls="-"):
+            ax.plot([LEFT, RIGHT], [y, y], color="black", linewidth=lw, linestyle=ls,
+                    solid_capstyle="butt", zorder=3)
+
+        y = fig_h - TOP_PAD
+        y_title_top = y; y -= TITLE_H
+        cx = (LEFT + RIGHT) / 2
+        ax.text(cx, y + SUB_H + (TITLE_H - SUB_H) / 2,
+                "T2 Late Fusion — clinical ⊕ MRI\n"
+                "mean ± std across seeds 0/1/2 · fusion ranked by Test balanced accuracy; references below\n"
+                "clinical (full fine-tune): T2 3-class = BioClinical-ModernBERT-large (\"BioClin-L-ft\");"
+                " detectors T1 = BioClin-B-ft, T1b = MBERT-B-ft\n"
+                "MRI = BrainMVP (full fine-tune / stochastic) or BrainDINO (frozen / none); detector head"
+                " in parentheses\n"
+                "Visits = clinical visits used; Visit = MRI timepoint",
+                ha="center", va="center", fontsize=10.5, fontweight="bold", linespacing=1.5)
+        if subtitle:
+            ax.text(cx, y + SUB_H / 2, subtitle, ha="center", va="center",
+                    fontsize=8.5, fontstyle="italic")
+        hline(y_title_top, lw=1.5); hline(y, lw=1.2)
+
+        LEFT_COLS = {0, 2, 4}                                   # Clinical, MRI, Aggregation left-aligned
+        y_head_top = y; y -= HEAD_H
+        ymid = (y_head_top + y) / 2
+        for j in range(len(headers)):
+            if j in LEFT_COLS:
+                ax.text(col_left[j] + 0.06, ymid, headers[j], ha="left", va="center",
+                        fontsize=9.5, fontstyle="italic")
+            else:
+                ax.text(col_cx[j], ymid, headers[j], ha="center", va="center",
+                        fontsize=9.5, fontstyle="italic")
+        hline(y, lw=1.2)
+
+        y_data_top = y
+        for i, cells in enumerate(body):
+            if rules[i]:
+                hline(y, lw=0.6, ls=(0, (3, 3)))
+            yr_top = y; y -= ROW_H
+            ymid = (yr_top + y) / 2
+            for j in range(len(headers)):
+                metric_j = j - N_LEAD
+                bold = (0 <= metric_j < len(COLS) and best[metric_j] == i)
+                if j in LEFT_COLS:
+                    ax.text(col_left[j] + 0.06, ymid, cells[j], ha="left", va="center", fontsize=9.0)
+                else:
+                    ax.text(col_cx[j], ymid, cells[j], ha="center", va="center", fontsize=9.0,
+                            fontweight="bold" if bold else "normal")
+        BOTTOM = y
+        for x in col_left[1:-1]:
+            ax.plot([x, x], [BOTTOM, y_data_top], color="black", linewidth=0.7,
+                    linestyle=(0, (3, 3)), zorder=2)
+        hline(BOTTOM, lw=1.5)
+        ax.add_patch(plt.Rectangle((LEFT, BOTTOM), RIGHT - LEFT, y_title_top - BOTTOM,
+                                   facecolor="none", edgecolor="black", linewidth=1.5, zorder=5))
+        fig.savefig(out_path, bbox_inches="tight", dpi=300)
+        fig.savefig(out_path.with_suffix(".pdf"), bbox_inches="tight", dpi=300)
+        plt.close(fig)
+        print(f"  PNG: {out_path}")
+
+    _draw(True, OUT / "int_t2.png")
+    _draw(False, OUT / "int_t2_no_n.png")
+
+
+def render_int_t2_simple(sel, subtitle=""):
+    """Simplified T2 integration table: plain-English Method + full model names.
+    Columns: Method | Clinical (Task) | MRI (Task) | Aggregation + 6 metrics. Fusion ranked on top, then
+    clinical-only refs, then MRI-only refs. Writes outputs/int_t2_simple.{csv,png,pdf} (+ _no_n)."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    matplotlib.rcParams["font.family"] = "DejaVu Serif"
+
+    VISIT_PHRASE = {"@bl": "at baseline", "@m12": "at 12 months", "@bl+m06+m12": "longitudinal"}
+    # clinical-table abbreviations + training strategy (all clinical are full fine-tune) + task in parens
+    CLIN_ABBR = {"BioClin-L-ft T2": "BioClin-MBERT-L-ft (T2)",
+                 "BioClin-B-ft T1 + MBERT-B-ft T1b":
+                     "BioClin-MBERT-B-ft (T1a) + ModernBERT-B-ft (T1b)"}
+    MRI_STRAT = {"BrainMVP": "ft", "BrainDINO": "frozen"}            # BrainMVP full fine-tune; BrainDINO frozen
+    MRI_TASK = {"T1+T1b": "T1a/T1b", "T2 3-class": "T2", "T1b": "T1b"}
+
+    def mri_simple(mri):
+        mm = re.match(r"^(\w+)\s*\((.+)\)$", str(mri))
+        if not mm:
+            return mri
+        model, det = mm.groups()
+        strat = MRI_STRAT.get(model, "")
+        det = MRI_TASK.get(det, det)
+        return f"{model}-{strat} ({det})" if strat else f"{model} ({det})"
+
+    rows = []
+    for _, r in sel.iterrows():
+        clin, visits, mri, _mvisit = decompose(r)
+        is_mri_only = str(r["display"]).startswith("MRI-only")
+        no_mri = (str(r.get("mri_disp", "—")) == "—")
+        block = "mri" if is_mri_only else ("clin" if no_mri else "fusion")
+        if is_mri_only:
+            method = "MRI at 12 months"
+        else:
+            phrase = VISIT_PHRASE.get(visits, visits)
+            method = f"CL {phrase}" + ("" if no_mri else " + MRI at 12 months")
+        rows.append({"block": block, "Method": method,
+                     "Clinical (Task)": ("—" if clin == "—" else CLIN_ABBR.get(clin, clin)),
+                     "MRI (Task)": ("—" if mri == "—" else mri_simple(mri)),
+                     "Aggregation": str(r.get("combiner", "—")),
+                     "bacc_mean": r["bacc_mean"], "bacc_std": r.get("bacc_std"),
+                     "macro_auc_mean": r["macro_auc_mean"], "macro_f1_mean": r["macro_f1_mean"],
+                     "f1_CN_mean": r["f1_CN_mean"], "f1_MCI_mean": r["f1_MCI_mean"],
+                     "f1_AD_mean": r["f1_AD_mean"], "n_test_mean": r["n_test_mean"]})
+    df = pd.DataFrame(rows)
+    order = {"fusion": 0, "clin": 1, "mri": 2}
+    df = (df.assign(_o=df.block.map(order))
+          .sort_values(["_o", "bacc_mean"], ascending=[True, False], kind="stable")
+          .drop(columns="_o").reset_index(drop=True))
+
+    COLS = [("bacc_mean", "Test bACC", "bacc_std"), ("macro_auc_mean", "macro-AUC", None),
+            ("macro_f1_mean", "macro-F1", None), ("f1_CN_mean", "F1 CN", None),
+            ("f1_MCI_mean", "F1 MCI", None), ("f1_AD_mean", "F1 AD", None)]
+    LEAD = ["Method", "Clinical (Task)", "MRI (Task)", "Aggregation"]
+    df[LEAD + [c for c, _, _ in COLS] + ["n_test_mean"]].rename(
+        columns={"n_test_mean": "n"}).to_csv(OUT / "int_t2_simple.csv", index=False, encoding="utf-8")
+
+    def write_latex(out_path):
+        def esc(s):
+            return (str(s).replace("—", "--").replace("&", r"\&").replace("%", r"\%")
+                    .replace("_", r"\_").replace("#", r"\#"))
+        mkeys = [("bacc_mean", "bacc_std")] + [(c, None) for c, _, _ in COLS[1:]]
+        mat = np.array([[r[k] for k, _ in mkeys] for _, r in df.iterrows()], float)
+        best = [int(np.nanargmax(mat[:, j])) if not np.all(np.isnan(mat[:, j])) else -1
+                for j in range(len(mkeys))]
+        BLOCK_LABEL = {"fusion": r"Clinical $\oplus$ MRI late fusion",
+                       "clin": "Clinical-only references", "mri": "MRI-only references"}
+
+        def cell(m, s, bold):
+            if pd.isna(m):
+                return "--"
+            txt = f"{m:.3f} \\pm {s:.3f}" if s is not None and pd.notna(s) else f"{m:.3f}"
+            return f"$\\mathbf{{{txt}}}$" if bold else f"${txt}$"
+
+        head = [r"\textbf{Method}", r"\textbf{Clinical (Task)}", r"\textbf{MRI (Task)}",
+                r"\textbf{Aggregation}", r"\textbf{Test bACC}", r"\textbf{macro-AUC}",
+                r"\textbf{macro-F1}", r"\textbf{F1 CN}", r"\textbf{F1 MCI}", r"\textbf{F1 AD}"]
+        L = [r"% T2 Late Fusion -- clinical + MRI late fusion (simplified).",
+             r"% Requires: \usepackage{rotating, booktabs, graphicx}",
+             r"\begin{sidewaystable}[ht]", r"\centering",
+             r"\resizebox{\textwidth}{!}{%", r"\normalsize",
+             r"\begin{tabular}{llll cccccc}", r"\toprule",
+             r"\multicolumn{10}{c}{\textbf{T2 Late Fusion}} \\", r"\midrule",
+             " & ".join(head) + r" \\", r"\midrule"]
+        prev = None
+        for i, (_, r) in enumerate(df.iterrows()):
+            if r.block != prev:
+                if prev is not None:
+                    L.append(r"\midrule")
+                L.append(r"\multicolumn{10}{l}{\textit{" + BLOCK_LABEL[r.block] + r"}} \\")
+            cells = [esc(r.Method), esc(r["Clinical (Task)"]), esc(r["MRI (Task)"]), esc(r.Aggregation)]
+            cells += [cell(r[mk], r[sk] if sk else None, best[j] == i) for j, (mk, sk) in enumerate(mkeys)]
+            L.append(" & ".join(cells) + r" \\")
+            prev = r.block
+        L += [r"\bottomrule", r"\end{tabular}%", r"}",
+              r"\caption{T2 late fusion of clinical and MRI encoders (mean $\pm$ std across seeds 0/1/2), "
+              r"ranked by Test balanced accuracy; fusion rows on top, single-modality references below. "
+              r"\textit{Method} indicates which clinical visits and the MRI timepoint are fused. "
+              r"\textit{Clinical (Task)} / \textit{MRI (Task)} give the exact model and task formulation: "
+              r"T2 = 3-class CN/MCI/AD; T1a (CN vs MCI+AD) and T1b (CN+MCI vs AD) = binary detectors; "
+              r"-ft = full fine-tune, -frozen = frozen encoder. N(test), mean per seed: "
+              r"CL baseline $n=58$ (CN 22 / MCI 33 / AD 3); CL 12 months $n=53$ (CN 19 / MCI 26 / AD 8); "
+              r"CL and MRI both present at 12 months $n=48$ (CN 17 / MCI 29 / AD 3). Bold = best per column.}",
+              r"\label{tab:t2_late_fusion}", r"\end{sidewaystable}"]
+        Path(out_path).write_text("\n".join(L) + "\n", encoding="utf-8")
+        print(f"  TEX: {out_path}")
+
+    write_latex(OUT / "int_t2_simple.tex")
+
+    def _draw(show_n, out_path):
+        headers = LEAD + [c[1] for c in COLS] + (["n"] if show_n else [])
+        N_LEAD = len(LEAD)
+        body, numeric, rules = [], [], []
+        prev_b = None
+        for _, r in df.iterrows():
+            cells = [r["Method"], r["Clinical (Task)"], r["MRI (Task)"], r["Aggregation"]]
+            nums = []
+            for key, _, stdk in COLS:
+                v = r[key]
+                if pd.isna(v):
+                    cells.append("—"); nums.append(np.nan)
+                else:
+                    cells.append(f"{v:.3f}" + (f" ± {r[stdk]:.3f}" if stdk and pd.notna(r.get(stdk)) else ""))
+                    nums.append(float(v))
+            if show_n:
+                cells.append(str(int(round(r["n_test_mean"]))))
+            body.append(cells); numeric.append(nums)
+            rules.append(prev_b is not None and r.block != prev_b); prev_b = r.block
+        numeric = np.array(numeric, float)
+        best = [int(np.nanargmax(numeric[:, j])) if not np.all(np.isnan(numeric[:, j])) else -1
+                for j in range(len(COLS))]
+
+        COL_W = [3.55, 5.05, 2.95, 2.55, 1.45, 1.15, 1.10, 0.90, 0.96, 0.90] + ([0.50] if show_n else [])
+        LEFT, RIGHT_PAD = 0.28, 0.28
+        SUB_H = 0.40 if subtitle else 0.0
+        TITLE_H, HEAD_H, ROW_H = 1.25 + SUB_H, 0.40, 0.44
+        TOP_PAD, BOT_PAD = 0.12, 0.12
+        fig_w = LEFT + sum(COL_W) + RIGHT_PAD
+        fig_h = TOP_PAD + TITLE_H + HEAD_H + ROW_H * len(body) + BOT_PAD
+        fig, ax = plt.subplots(figsize=(fig_w, fig_h))
+        ax.axis("off"); ax.set_xlim(0, fig_w); ax.set_ylim(0, fig_h)
+        col_left = [LEFT]
+        for w in COL_W:
+            col_left.append(col_left[-1] + w)
+        RIGHT = col_left[-1]
+        col_cx = [(col_left[i] + col_left[i + 1]) / 2 for i in range(len(COL_W))]
+
+        def hline(y, lw=1.0, ls="-"):
+            ax.plot([LEFT, RIGHT], [y, y], color="black", linewidth=lw, linestyle=ls,
+                    solid_capstyle="butt", zorder=3)
+
+        y = fig_h - TOP_PAD
+        y_title_top = y; y -= TITLE_H
+        cx = (LEFT + RIGHT) / 2
+        ax.text(cx, y + SUB_H + (TITLE_H - SUB_H) / 2,
+                "T2 Late Fusion — clinical ⊕ MRI (simplified)\n"
+                "mean ± std across seeds 0/1/2 · fusion ranked by Test balanced accuracy; references below\n"
+                "Method = which clinical visits + MRI timepoint are fused\n"
+                "Clinical (Task) / MRI (Task) = exact model and task formulation",
+                ha="center", va="center", fontsize=10.5, fontweight="bold", linespacing=1.5)
+        if subtitle:
+            ax.text(cx, y + SUB_H / 2, subtitle, ha="center", va="center",
+                    fontsize=8.5, fontstyle="italic")
+        hline(y_title_top, lw=1.5); hline(y, lw=1.2)
+
+        LEFT_COLS = {0, 1, 2, 3}                                # all 4 descriptive cols left-aligned
+        y_head_top = y; y -= HEAD_H
+        ymid = (y_head_top + y) / 2
+        for j in range(len(headers)):
+            if j in LEFT_COLS:
+                ax.text(col_left[j] + 0.06, ymid, headers[j], ha="left", va="center",
+                        fontsize=9.5, fontstyle="italic")
+            else:
+                ax.text(col_cx[j], ymid, headers[j], ha="center", va="center",
+                        fontsize=9.5, fontstyle="italic")
+        hline(y, lw=1.2)
+
+        y_data_top = y
+        for i, cells in enumerate(body):
+            if rules[i]:
+                hline(y, lw=0.6, ls=(0, (3, 3)))
+            yr_top = y; y -= ROW_H
+            ymid = (yr_top + y) / 2
+            for j in range(len(headers)):
+                metric_j = j - N_LEAD
+                bold = (0 <= metric_j < len(COLS) and best[metric_j] == i)
+                if j in LEFT_COLS:
+                    ax.text(col_left[j] + 0.06, ymid, cells[j], ha="left", va="center", fontsize=9.0)
+                else:
+                    ax.text(col_cx[j], ymid, cells[j], ha="center", va="center", fontsize=9.0,
+                            fontweight="bold" if bold else "normal")
+        BOTTOM = y
+        for x in col_left[1:-1]:
+            ax.plot([x, x], [BOTTOM, y_data_top], color="black", linewidth=0.7,
+                    linestyle=(0, (3, 3)), zorder=2)
+        hline(BOTTOM, lw=1.5)
+        ax.add_patch(plt.Rectangle((LEFT, BOTTOM), RIGHT - LEFT, y_title_top - BOTTOM,
+                                   facecolor="none", edgecolor="black", linewidth=1.5, zorder=5))
+        fig.savefig(out_path, bbox_inches="tight", dpi=300)
+        fig.savefig(out_path.with_suffix(".pdf"), bbox_inches="tight", dpi=300)
+        plt.close(fig)
+        print(f"  PNG: {out_path}")
+
+    _draw(True, OUT / "int_t2_simple.png")
+    _draw(False, OUT / "int_t2_simple_no_n.png")
 
 
 def render_house(sel, out_path, subtitle="", show_n=True):

@@ -74,6 +74,8 @@ SNP_ROOT = Path(r"D:/ADNI_SNP_Omni2.5M_20140220")
 ANCHORS = SNP_ROOT / "outputs" / "multimodal_anchors"
 NEW_TASKS_PERPT = (SNP_ROOT / "outputs" / "new_tasks" / "sCN_vs_pCN"
                    / "ld_1000kb_r2_0.8" / "per_patient")
+NEW_TASKS_PERPT_PRSCS = (SNP_ROOT / "outputs" / "new_tasks"
+                         / "sCN_vs_pCN__prscs" / "per_patient")
 OUT_DIR_DEFAULT = Path(__file__).resolve().parent / "outputs" / "baseline"
 
 CLIN_VARIANTS = [
@@ -110,6 +112,54 @@ SNP_VARIANTS = [
      "short": "Kosteridis_PRS",
      "parquet_tmpl": str(NEW_TASKS_PERPT
                          / "Kosteridis__prs+age+sex+apoe4__seed{seed}.parquet")},
+    # top FM model per family on the sCN_vs_pCN validation set (attn conditioned on the task)
+    {"key": "bmfm_none_mlp",
+     "display": "BMFM-SNP none chrom_hier MLP",
+     "short": "BMFM/none-MLP",
+     "parquet_tmpl": str(ANCHORS / "bmfm_snp__none__chrom_hier__mlp2__101bp__attn_sCN_vs_pCN"
+                         / "task_sCN_vs_pCN" / "seed_{seed}" / "prs+age+sex+apoe4"
+                         / "predictions.parquet")},
+    {"key": "ntv2_permod_mlp",
+     "display": "NTv2 attn_bias_per_modality chrom_hier MLP",
+     "short": "NTv2/per-mod-MLP",
+     "parquet_tmpl": str(ANCHORS / "ntv2__attn_bias_per_modality__chrom_hier__mlp2__101bp__attn_sCN_vs_pCN"
+                         / "task_sCN_vs_pCN" / "seed_{seed}" / "prs+age+sex+apoe4"
+                         / "predictions.parquet")},
+    {"key": "meta_prs_filtered",
+     "display": "meta_prs_EN_filtered",
+     "short": "meta_PRS_filt",
+     "parquet_tmpl": str(NEW_TASKS_PERPT
+                         / "meta_prs_EN_filtered__prs+age+sex+apoe4__seed{seed}.parquet")},
+    {"key": "kosteridis_shared_AD_CV",
+     "display": "Kosteridis_shared_AD_CV",
+     "short": "Kost_shared",
+     "parquet_tmpl": str(NEW_TASKS_PERPT
+                         / "Kosteridis_shared_AD_CV__prs+age+sex+apoe4__seed{seed}.parquet")},
+    {"key": "prscs_bellenguez",
+     "display": "Bellenguez (PRS-CS)",
+     "short": "PRSCS_Bell",
+     "parquet_tmpl": str(NEW_TASKS_PERPT_PRSCS
+                         / "Bellenguez__prs+age+sex+apoe4__seed{seed}.parquet")},
+    {"key": "prscs_derojas",
+     "display": "DeRojas (PRS-CS)",
+     "short": "PRSCS_DeR",
+     "parquet_tmpl": str(NEW_TASKS_PERPT_PRSCS
+                         / "DeRojas__prs+age+sex+apoe4__seed{seed}.parquet")},
+    {"key": "prscs_kunkle",
+     "display": "Kunkle (PRS-CS)",
+     "short": "PRSCS_Kunk",
+     "parquet_tmpl": str(NEW_TASKS_PERPT_PRSCS
+                         / "Kunkle__prs+age+sex+apoe4__seed{seed}.parquet")},
+    {"key": "prs_all_dedup",
+     "display": "prs_all_dedup",
+     "short": "PRS_dedup",
+     "parquet_tmpl": str(NEW_TASKS_PERPT
+                         / "prs_all_dedup__prs+age+sex+apoe4__seed{seed}.parquet")},
+    {"key": "prs_all_dedup_ivw",
+     "display": "prs_all_dedup_ivw",
+     "short": "PRS_dedup_ivw",
+     "parquet_tmpl": str(NEW_TASKS_PERPT
+                         / "prs_all_dedup_ivw__prs+age+sex+apoe4__seed{seed}.parquet")},
 ]
 
 

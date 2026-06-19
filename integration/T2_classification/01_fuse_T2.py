@@ -722,16 +722,19 @@ def render_confusions(preds, framing, picks, out_path, task_label="T2"):
         y = s["y_true"].to_numpy(int)
         p = s["pred"].to_numpy(int)
         cm = confusion_matrix(y, p, labels=list(range(N_CLASSES)))
-        bacc = balanced_accuracy_score(y, p) if len(np.unique(y)) > 1 else float("nan")
+        pooled_bacc = balanced_accuracy_score(y, p) if len(np.unique(y)) > 1 else float("nan")
+        per = [balanced_accuracy_score(g["y_true"].to_numpy(int), g["pred"].to_numpy(int))
+               if g["y_true"].nunique() > 1 else float("nan") for _, g in s.groupby("seed")]
+        mbacc = float(np.nanmean(per)) if per else float("nan")   # per-seed mean (matches the table)
         n_per_seed = len(s) // s["seed"].nunique() if s["seed"].nunique() else len(s)
-        panels.append((label, tp, cm, n_per_seed, len(s), bacc))
+        panels.append((label, tp, cm, n_per_seed, len(s), mbacc, pooled_bacc))
     if not panels:
         return
     n = len(panels)
-    fig, axes = plt.subplots(1, n, figsize=(3.6 * n, 4.3))
+    fig, axes = plt.subplots(1, n, figsize=(3.6 * n, 4.5))
     if n == 1:
         axes = [axes]
-    for ax, (label, tp, cm, n_per_seed, n_tot, bacc) in zip(axes, panels):
+    for ax, (label, tp, cm, n_per_seed, n_tot, mbacc, pooled_bacc) in zip(axes, panels):
         row = cm.sum(1, keepdims=True)
         pct = np.divide(cm, np.where(row == 0, 1, row)) * 100
         ax.imshow(pct, cmap="Blues", vmin=0, vmax=100)
@@ -743,13 +746,14 @@ def render_confusions(preds, framing, picks, out_path, task_label="T2"):
                 ax.text(j, i, f"{cm[i, j]}\n{pct[i, j]:.0f}%", ha="center", va="center",
                         fontsize=8.5, color="white" if pct[i, j] > 55 else "black")
         tp_line = f"{tp}\n" if tp else ""
-        ax.set_title(f"{label}\n{tp_line}{n_per_seed}/seed TEST (Σ{n_tot})  bACC {bacc:.3f}",
-                     fontsize=9)
-    fig.suptitle("Multimodal late integration: Confusion matrix", fontsize=13, fontweight="bold",
-                 y=0.99)
-    fig.text(0.5, 0.925, "counts pooled across seeds, row-normalised %",
+        ax.set_title(f"{label}\n{tp_line}{n_per_seed}/seed TEST (Σ{n_tot})\n"
+                     f"bACC: mean {mbacc:.3f} · pooled {pooled_bacc:.3f}", fontsize=9)
+    fig.suptitle(f"{task_label} multimodal late integration: Confusion matrix", fontsize=13,
+                 fontweight="bold", y=0.99)
+    fig.text(0.5, 0.93, "counts pooled across seeds, row-normalised %  ·  "
+             "bACC reported as per-seed mean and seed-pooled",
              ha="center", va="center", fontsize=9.5, fontstyle="italic")
-    fig.tight_layout(rect=(0, 0, 1, 0.86))
+    fig.tight_layout(rect=(0, 0, 1, 0.85))
     fig.savefig(out_path, dpi=170, bbox_inches="tight", pad_inches=0.08)
     plt.close(fig)
     print(f"  confusion: {out_path}")
@@ -1035,10 +1039,10 @@ def main() -> int:
         clin_tp = _tp_word("m12" if "m12" in (args.clin_probs_task or args.clin_task) else "bl")
         for framing in framings_run:
             mri_tp = _tp_word(args.mri_timepoint or ("bl" if framing == "BL" else "m12"))
-            picks = [("clinical_only", "-", f"clinical-only [{args.clin_model}]", clin_tp),
+            picks = [("clinical_only", "-", f"Clinical-only [{args.clin_model}]", clin_tp),
                      ("mri_only", "-", f"MRI-only [{args.mri_name}]", mri_tp)]
             if best is not None:
-                picks.append((best[0], best[1], f"best fusion [{best[0]} / {best[1]}]",
+                picks.append((best[0], best[1], f"Best fusion [{best[0]} / {best[1]}]",
                               f"CL {clin_tp} + MRI {mri_tp}"))
             render_confusions(preds, framing, picks,
                               out_dir / f"confusion_{args.table_tag or framing}.png",

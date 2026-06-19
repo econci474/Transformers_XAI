@@ -31,10 +31,15 @@ MRI_ABBR = {"3yr": "BrainMVP-ft (plus-orig)", "5yr": "BrainMVP-frozen (none)"}
 HZLAB = {"3yr": "≤3y", "5yr": "≤5y"}
 
 
+def _bacc(y, p):
+    return balanced_accuracy_score(y, p) if len(np.unique(y)) > 1 else float("nan")
+
+
 def panels_for(hk):
     cfg = t3.HORIZONS[hk]
     tmpl = t3._mri_template(cfg)
-    pooled = {"clin": [[], []], "mri": [[], []], "fuse": [[], []]}  # each: [y_true, pred]
+    pooled = {"clin": [[], []], "mri": [[], []], "fuse": [[], []]}  # each: [y_true, pred] (counts)
+    per = {"clin": [], "mri": [], "fuse": []}                       # per-seed bACC (to average)
     for seed in t3.SEEDS:
         clin = h.load_clinical(seed, t3.CLIN_ROOT, cfg["model"], "full_ft", cfg["clin_task"])
         mri = h.load_mri(seed, tmpl, "m12")
@@ -46,30 +51,34 @@ def panels_for(hk):
         tm = (f["split"] == "test").to_numpy()
         cpt, mpt, prt, yt = cp[tm], mp[tm], pres[tm], y[tm]
         # clinical-only (full cohort)
-        pooled["clin"][0] += list(yt); pooled["clin"][1] += list(cpt.argmax(1))
+        pc = cpt.argmax(1)
+        pooled["clin"][0] += list(yt); pooled["clin"][1] += list(pc); per["clin"].append(_bacc(yt, pc))
         # MRI-only (MRI-present subset)
-        pooled["mri"][0] += list(yt[prt]); pooled["mri"][1] += list(mpt[prt].argmax(1))
+        ym, pm = yt[prt], mpt[prt].argmax(1)
+        pooled["mri"][0] += list(ym); pooled["mri"][1] += list(pm); per["mri"].append(_bacc(ym, pm))
         # best fusion = equal-weight avg where both present, else CL (full cohort)
         fuse = cpt.copy()
         if prt.any():
             fuse[prt] = 0.5 * cpt[prt] + 0.5 * mpt[prt]
-        pooled["fuse"][0] += list(yt); pooled["fuse"][1] += list(fuse.argmax(1))
+        pf = fuse.argmax(1)
+        pooled["fuse"][0] += list(yt); pooled["fuse"][1] += list(pf); per["fuse"].append(_bacc(yt, pf))
     return [
-        (f"clinical-only [{CLIN_ABBR[hk]}]", "clinical @bl · full cohort", *pooled["clin"]),
-        (f"MRI-only [{MRI_ABBR[hk]}]", "MRI @m12 · MRI-present subset", *pooled["mri"]),
-        ("best fusion [weighted-avg (equal)]", "CL @bl ⊕ MRI @m12 · full cohort", *pooled["fuse"]),
+        (f"clinical-only [{CLIN_ABBR[hk]}]", "clinical @bl · full cohort", *pooled["clin"], per["clin"]),
+        (f"MRI-only [{MRI_ABBR[hk]}]", "MRI @m12 · MRI-present subset", *pooled["mri"], per["mri"]),
+        ("best fusion [weighted-avg (equal)]", "CL @bl ⊕ MRI @m12 · full cohort", *pooled["fuse"], per["fuse"]),
     ]
 
 
 def render(hk):
     panels = panels_for(hk)
-    fig, axes = plt.subplots(1, 3, figsize=(3.6 * 3, 4.3))
-    for ax, (label, tp, y, pred) in zip(axes, panels):
+    fig, axes = plt.subplots(1, 3, figsize=(3.6 * 3, 4.5))
+    for ax, (label, tp, y, pred, per) in zip(axes, panels):
         y = np.asarray(y, int); pred = np.asarray(pred, int)
         cm = confusion_matrix(y, pred, labels=[0, 1])
         row = cm.sum(1, keepdims=True)
         pct = np.divide(cm, np.where(row == 0, 1, row)) * 100
-        bacc = balanced_accuracy_score(y, pred) if len(np.unique(y)) > 1 else float("nan")
+        mbacc = float(np.nanmean(per))                        # per-seed mean (matches the table)
+        pooled_bacc = _bacc(y, pred)                          # seed-pooled (robust to seed imbalance)
         n_tot = len(y); n_ps = round(n_tot / len(t3.SEEDS))
         ax.imshow(pct, cmap="Blues", vmin=0, vmax=100)
         ax.set_xticks([0, 1]); ax.set_yticks([0, 1])
@@ -80,19 +89,21 @@ def render(hk):
             for j in range(2):
                 ax.text(j, i, f"{cm[i, j]}\n{pct[i, j]:.0f}%", ha="center", va="center",
                         fontsize=9, color="white" if pct[i, j] > 55 else "black")
-        ax.set_title(f"{label}\n{tp}\n{n_ps}/seed TEST (Σ{n_tot})  bACC {bacc:.3f}", fontsize=9)
+        ax.set_title(f"{label}\n{tp}\n{n_ps}/seed TEST (Σ{n_tot})\n"
+                     f"bACC: mean {mbacc:.3f} · pooled {pooled_bacc:.3f}", fontsize=9)
     fig.suptitle(f"T3 {HZLAB[hk]} Multimodal late integration: Confusion matrix",
                  fontsize=13, fontweight="bold", y=0.99)
-    fig.text(0.5, 0.925, "counts pooled across seeds, row-normalised %",
+    fig.text(0.5, 0.93, "counts pooled across seeds, row-normalised %  ·  "
+             "bACC reported as per-seed mean and seed-pooled",
              ha="center", va="center", fontsize=9.5, fontstyle="italic")
-    fig.tight_layout(rect=(0, 0, 1, 0.86))
+    fig.tight_layout(rect=(0, 0, 1, 0.85))
     out = os.path.join(HERE, f"confusion_T3_{HZLAB[hk].replace('≤', '').strip()}.png")
     fig.savefig(out, dpi=170, bbox_inches="tight", pad_inches=0.08)
     fig.savefig(out.replace(".png", ".pdf"), bbox_inches="tight", pad_inches=0.08)
     plt.close(fig)
     print(f"wrote {out}")
-    for label, tp, y, pred in panels:
-        print(f"  {label:40s} n={len(y)} bACC={balanced_accuracy_score(y, pred):.3f}")
+    for label, tp, y, pred, per in panels:
+        print(f"  {label:40s} n={len(y)} bACC mean={np.nanmean(per):.3f} pooled={_bacc(y, pred):.3f}")
 
 
 def main():

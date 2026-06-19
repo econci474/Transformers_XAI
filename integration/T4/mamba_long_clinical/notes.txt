@@ -1,0 +1,27 @@
+
+use clinical extracted embedings from best model at T2 classification task
+e.g. BioClinBERT L ft 
+
+v0 = conc[clinical_embedding at baseline, 0]
+v1 = conc[clinical_embedding at 6 months, 0.5]
+v2 = conc[clinical_embedding at 12 months, 1]
+
+longitudinal_clinical_embedding = MAMBA(v0, v1, v2)
+e.g. 
+https://huggingface.co/state-spaces/mamba2-130m 
+https://huggingface.co/state-spaces/mamba-130m
+
+feed the embeddings directly
+For Hugging Face Mamba2Model, yes, it supports the standard idea of passing inputs_embeds instead of input_ids, provided the embeddings have the right hidden size.
+We may need an MLP to project v0, v1, v2 each to the input dimension e.g. 768
+
+then add 
+- a classification head to MAMBA output for 3-class classification for conversion to AD being <3 years, 3-7, >7 years
+- a regression head to MAMBA output that parametrises the Weibull time-to-conversion parameters (pre-threshold shape, rate, threshold time, post-threshold exp rate)
+
+compare the regression head to parametrisations of other distributions cox PH, Weimnull exponential, Neural ODE, and repeat for other metric i.e. age-to-conversion 
+
+
+Compare against extracting embeddings again from 
+Biomamba: https://huggingface.co/zmzfpc/biomamba-130m 
+
