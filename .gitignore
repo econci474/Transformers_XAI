@@ -37,6 +37,16 @@ snp_pipeline/v3_funcon_results/
 snp_pipeline/alphagenome/*.csv
 snp_pipeline/alphagenome/*.parquet
 snp_pipeline/alphagenome/*.npz
+snp_pipeline/alphagenome/*.png
+
+# ADNI patient-level split files (data-use agreement — NEVER commit)
+snp_pipeline/_colab_assets/splits_T4/
+
+# Explainability figures/SHAP values (regenerable; backed up on D:, not in repo)
+explainability/**/*.png
+explainability/**/*.pdf
+explainability/**/*.csv
+explainability/**/*.npy
 mri_pipeline/outputs/
 mri_pipeline/outputs_mri/
 debug_logs/
