@@ -1,3 +1,6 @@
+# ── Project instructions (local only; NOT for the public repo) ──────────────
+/tool.md
+
 # ── ADNI patient-level data (do not commit to public repo) ──────────────────
 snp_pipeline/phenotype.pheno
 snp_pipeline/covariates.cov
@@ -35,6 +38,7 @@ snp_pipeline/alphagenome/*.csv
 snp_pipeline/alphagenome/*.parquet
 snp_pipeline/alphagenome/*.npz
 mri_pipeline/outputs/
+mri_pipeline/outputs_mri/
 debug_logs/
 env_logs/
 
@@ -44,10 +48,16 @@ mri_pipeline/tools/
 
 # tool Code local config
 .tool/
+mri_pipeline/.tool_mri/
+**/.tool_mri/
 
 #Wandb
 wandb_api.txt
 wandb/
+
+# Local-only tooling (W&B run logs + non-core table/helper scripts) — kept on disk,
+# out of the examiner-facing repo. (Mirrors mri_pipeline/tools/ above.)
+/tools/
 
 # AlphaGenome API key (NEVER commit)
 snp_pipeline/alphagenome/alphagenome_api.txt
