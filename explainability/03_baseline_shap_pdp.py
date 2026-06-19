@@ -32,6 +32,8 @@ import shap
 matplotlib.rcParams["font.family"] = "DejaVu Serif"
 
 HERE = Path(__file__).resolve().parent
+# Figures/CSVs are OUTPUTS — they live on D: (off the code repo), like every other derivative.
+OUT_BASE = Path(r"D:\ADNI_BIDS_project\derivatives\explainability")
 SPLIT_DIR = Path(r"D:\ADNI_BIDS_project\derivatives\clinical\no_cdr_stratified_post_exclusion"
                  r"\tabular\baseline")
 SEEDS = (0, 1, 2)
@@ -39,15 +41,15 @@ SEEDS = (0, 1, 2)
 TASKS = {
     "T1d": dict(label_col="conversion_group", label_map={"sMCI": 0, "pMCI": 1},
                 task_type="binary", classes=["sMCI", "pMCI"],
-                title="T1d - pMCI vs sMCI (baseline MCI)"),
+                title="T2a - pMCI vs sMCI (baseline MCI)"),
     "T1e": dict(label_col="conversion_group", label_map={"sCN": 0, "pCN_to_MCI": 1, "pCN_to_AD": 1},
                 task_type="binary", classes=["sCN", "pCN"],
-                title="T1e - sCN vs pCN (baseline CN)"),
+                title="T2b - sCN vs pCN (baseline CN)"),
     "T2":  dict(label_col="Label_bl_multi", label_map={"CN": 0, "MCI": 1, "AD": 2},
                 task_type="multiclass", classes=["CN", "MCI", "AD"],
-                title="T2 - CN / MCI / AD"),
+                title="T1c - CN / MCI / AD"),
 }
-CHANCE_NOTE = {"T1e": "  [!] baseline near chance (val bACC 0.44) - shows what a FAILED model keys on"}
+CHANCE_NOTE = {"T1e": "  (val bACC 0.44)"}
 
 DROP_ALWAYS = [
     "Patient_ID", "VISCODE_long", "VISCODE_2", "Date", "Generated_Text",
@@ -123,10 +125,13 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--seed_for_plots", type=int, default=0)
     ap.add_argument("--topk", type=int, default=6)
+    ap.add_argument("--out_dir", type=str, default=str(OUT_BASE),
+                    help="output root (default: D: derivatives/explainability; off the repo)")
     args = ap.parse_args()
+    out_base = Path(args.out_dir)
 
     for sub, cfg in TASKS.items():
-        out = HERE / sub; out.mkdir(parents=True, exist_ok=True)
+        out = out_base / sub; out.mkdir(parents=True, exist_ok=True)
         print(f"\n{'='*70}\n  {cfg['title']}{CHANCE_NOTE.get(sub, '')}\n{'='*70}")
 
         imp_per_seed, feat, plot_pack = [], None, None

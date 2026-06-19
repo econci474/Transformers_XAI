@@ -37,6 +37,8 @@ import matplotlib.pyplot as plt
 from matplotlib import cm, colors
 
 HERE = Path(__file__).resolve().parent
+# Figures are OUTPUTS — written off the code repo (D: locally; pass --out_dir on HPC, then scp to D:).
+OUT_BASE = Path(r"D:\ADNI_BIDS_project\derivatives\explainability")
 DATA_DIR = Path(r"D:\ADNI_BIDS_project\derivatives\clinical\no_cdr_stratified_post_exclusion"
                 r"\verbose\baseline")
 CKPT_ROOT_DEFAULT = Path(r"D:\ADNI_BIDS_project\derivatives\clinical\encoder_explain_checkpoints")
@@ -202,11 +204,15 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--n_per_class", type=int, default=3, help="correct exemplars per class")
     ap.add_argument("--n_wrong", type=int, default=2, help="high-confidence misclassifications")
+    ap.add_argument("--out_dir", type=str, default=str(OUT_BASE),
+                    help="output root for figures (default: D: derivatives/explainability; "
+                         "on HPC pass a Linux path, then scp results to D:)")
     args = ap.parse_args()
     ckpt_root = Path(args.ckpt_root)
+    out_base = Path(args.out_dir)
 
     for sub, cfg in TASKS.items():
-        out = HERE / sub; out.mkdir(parents=True, exist_ok=True)
+        out = out_base / sub; out.mkdir(parents=True, exist_ok=True)
         slug = cfg["model_id"].split("/")[-1]
         ckpt = ckpt_root / slug / cfg["task_key"] / f"seed_{args.seed}" / "full_ft" / "best_checkpoint"
         if not ckpt.exists():

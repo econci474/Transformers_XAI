@@ -88,10 +88,13 @@ done
 # ── Step 2: attention rollout overlays (same GPU, after the checkpoints exist) ──
 echo ""
 echo "=== attention rollout ==="
+FIG_DIR="/home/ec474/rds/hpc-work/ADNI_CL/explainability"   # outputs off the repo; scp to D: after
 conda run -n clinical python "${ATTN}" \
   --ckpt_root "${OUT_DIR}" \
   --data_dir  "${DATA_DIR}" \
+  --out_dir   "${FIG_DIR}" \
   --seed      "${SEED}" || exit 1
 
 echo ""
-echo "Done. Attention figures: ${REPO}/explainability/<task>/  (commit/scp back to local)."
+echo "Done. Attention figures: ${FIG_DIR}/<task>/"
+echo "  -> scp back to D:\\ADNI_BIDS_project\\derivatives\\explainability\\<task>\\ (off the repo)."
