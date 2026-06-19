@@ -79,3 +79,6 @@ snp_pipeline/alphagenome/*api*
 # D:/ADNI_SNP_Omni2.5M_20140220/.opengwas_jwt.txt
 *.opengwas_jwt*
 *opengwas*jwt*.txt
+# Integration rendered tables/figures (artifacts; regenerable, not committed)
+integration/**/*.pdf
+integration/**/*.png
