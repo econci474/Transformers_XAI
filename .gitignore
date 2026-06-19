@@ -82,3 +82,7 @@ snp_pipeline/alphagenome/*api*
 # Integration rendered tables/figures (artifacts; regenerable, not committed)
 integration/**/*.pdf
 integration/**/*.png
+
+# ADNI patient-level conversion labels (data-use agreement — NEVER commit)
+snp_pipeline/_colab_assets/conversion_labels.tsv
+snp_pipeline/_colab_assets/
