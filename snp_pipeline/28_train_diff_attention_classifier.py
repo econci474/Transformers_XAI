@@ -150,7 +150,14 @@ def main() -> None:
                           .str.startswith("drop_"), "rsID"].astype(str))
     snp = snp[snp["rsID"].astype(str).isin(keep_rs)].reset_index(drop=True)
 
-    diff_npz = (args.diffs_root / args.model /
+    # Drive-folder alias: caduceus npz dirs carry a `_d256` suffix on Drive
+    # (e.g. `caduceus_ph_d256/`) while the model key in MODEL_DIMS is the
+    # bare `caduceus_ph`. Map driver-side names → on-disk dir names. Default
+    # is identity so bmfm_ref / bmfm_snp / ntv2 are unaffected.
+    _MODEL_DIR_ALIAS = {"caduceus_ph": "caduceus_ph_d256",
+                         "caduceus_ps": "caduceus_ps_d256"}
+    model_dir = _MODEL_DIR_ALIAS.get(args.model, args.model)
+    diff_npz = (args.diffs_root / model_dir /
                 f"{sset}_snp_embeddings.npz")
     diff, rs_emb = fl.load_diff(diff_npz, snp)             # asserts alignment
     H = diff.shape[1]

@@ -775,7 +775,7 @@ GRCh38_refcorr.bed/bim/fam has correct REF/ALT
 
 https://www.ensembl.org/Homo_sapiens/Tools/AssemblyConverter 
 
-###Prepare relaxed LD 0.7###
+###Prepare relaxed LD 0.7### >> Should have done 0.8 instead
 for comparison window 100kb step 1 r2 0.7
 
 python -u "C:/Users/elena/iCloudDrive/Desktop/ACS_MPhil/Thesis/git/Transformers_XAI/snp_pipeline/ld_07_comparison_script.py"
@@ -811,3 +811,10 @@ ref2vec takes in sequence data
 
 snp2vec takes in snpified data with chinese characters to encode biallelic site in a sequence
 https://github.com/BiomedSciAI/biomed-multi-omic/blob/main/bmfm_targets/datasets/SNPdb/tabix_converter.py 
+
+
+## MAF FILTERING ##
+Forgot to do it before, filtered to maf >=0.01
+plink --bfile SNP_filtered_with_mri_rsid_clean_current_GRCh38_refcorr --maf 0.01 --make-bed --out SNP_filtered_with_mri_rsid_clean_current_GRCh38_refcorr_maf001
+
+Went from 2,248,376 to 1,491,403 SNP variants

@@ -31,7 +31,11 @@ from sklearn.linear_model import ElasticNet
 from _prs_strict_qc_lib import (ALL_SOURCES, PRSCS_SOURCES, per_source_prs_table,
                                   load_subject_covariates,
                                   get_dedup_dosage_matrix,
+                                  render_en_weights_png,
+                                  META_FILTERED_SOURCES,
                                   DEFAULT_LD_CONFIG)  # noqa: E402
+
+EN_COEFS = {"dosage": {}, "meta": {}, "meta_filtered": {}}
 
 AAO_SPLITS_ROOT = Path("D:/ADNI_BIDS_project/derivatives/clinical/"
                         "no_cdr_stratified_post_exclusion_aao")
@@ -74,25 +78,27 @@ def _metrics(y_true, y_pred) -> dict:
 
 
 def _fit_en_aao_dosage(dos_feat: pd.DataFrame, parts: dict,
-                          seed: int) -> pd.Series:
+                          seed: int):
+    """Return (model, prediction-series). model=None when fit skipped/failed."""
     train_y = parts["train"].set_index("Patient_ID")["AAO"].astype(float)
     common = [p for p in train_y.index if p in dos_feat.index]
-    if len(common) < 30: return pd.Series(np.nan, index=dos_feat.index)
+    if len(common) < 30: return None, pd.Series(np.nan, index=dos_feat.index)
     X = dos_feat.fillna(dos_feat.mean()).astype(float)
     try:
         en = ElasticNet(alpha=0.1, l1_ratio=0.5, max_iter=5000, random_state=seed)
         en.fit(X.loc[common].values, train_y.loc[common].values)
         scores = en.predict(X.values)
-        return pd.Series(scores, index=X.index)
+        return en, pd.Series(scores, index=X.index)
     except Exception:
-        return pd.Series(np.nan, index=X.index)
+        return None, pd.Series(np.nan, index=X.index)
 
 
 def _fit_en_aao_meta_prs(source_prs: pd.DataFrame, parts: dict,
-                            seed: int) -> pd.Series:
+                            seed: int):
+    """Return (model, prediction-series). model=None when fit skipped/failed."""
     train_y = parts["train"].set_index("Patient_ID")["AAO"].astype(float)
     common = [p for p in train_y.index if p in source_prs.index]
-    if len(common) < 30: return pd.Series(np.nan, index=source_prs.index)
+    if len(common) < 30: return None, pd.Series(np.nan, index=source_prs.index)
     X = source_prs.copy()
     keep_cols = [c for c in X.columns if X[c].notna().any()]
     X = X[keep_cols].fillna(X.mean()).astype(float)
@@ -100,28 +106,94 @@ def _fit_en_aao_meta_prs(source_prs: pd.DataFrame, parts: dict,
         en = ElasticNet(alpha=0.1, l1_ratio=0.5, max_iter=5000, random_state=seed)
         en.fit(X.loc[common].values, train_y.loc[common].values)
         scores = en.predict(X.values)
-        return pd.Series(scores, index=X.index)
+        en._feature_names = keep_cols
+        return en, pd.Series(scores, index=X.index)
     except Exception:
-        return pd.Series(np.nan, index=X.index)
+        return None, pd.Series(np.nan, index=X.index)
+
+
+def _run_covariates_only(seed: int, mode: str, covars: list,
+                           cov: pd.DataFrame) -> dict | None:
+    """Clinical baseline: fit LinearRegression(AAO ~ covariates) — no PRS.
+
+    yrs_per_sd_prs is NaN; val/test R² + RMSE + Pearson come from the
+    covariates-only model."""
+    if not covars: return None
+    parts = {sp: _load_aao_split(seed, sp) for sp in ("train","val","test")}
+    fits = {sp: parts[sp].merge(cov, on="Patient_ID", how="left")
+             for sp in ("train","val","test")}
+    needed = covars + ["AAO"]
+    tr_in   = fits["train"][needed].dropna()
+    val_in  = fits["val"][  needed].dropna()
+    test_in = fits["test"][ needed].dropna()
+    if len(tr_in) < 10 or len(val_in) < 3: return None
+    pipe = Pipeline([("imp", SimpleImputer(strategy="median")),
+                      ("reg", LinearRegression())])
+    pipe.fit(tr_in[covars].astype(float), tr_in["AAO"].astype(float))
+    val_pred  = pipe.predict(val_in[covars].astype(float))
+    test_pred = (pipe.predict(test_in[covars].astype(float))
+                   if len(test_in) else np.array([]))
+    val_m  = _metrics(val_in["AAO"].values, val_pred)
+    test_m = (_metrics(test_in["AAO"].values, test_pred) if len(test_in)
+                else _metrics(np.zeros(0), np.zeros(0)))
+    out = {"source": "covariates_only", "covar_mode": mode, "seed": seed,
+            "n_train": len(tr_in), "n_val": len(val_in), "n_test": len(test_in),
+            "yrs_per_sd_prs": float("nan")}
+    for k, v in val_m.items():  out[f"val_{k}"]  = v
+    for k, v in test_m.items(): out[f"test_{k}"] = v
+    return out
 
 
 def _run_one(src: str, prs_full: pd.DataFrame, cov: pd.DataFrame,
               seed: int, mode: str, covars: list,
               dedup_dosage: pd.DataFrame | None = None) -> dict | None:
+    if src == "covariates_only":
+        return _run_covariates_only(seed, mode, covars, cov)
     parts = {sp: _load_aao_split(seed, sp) for sp in ("train","val","test")}
     if src == "prs_all_dedup_EN_dosage":
         if dedup_dosage is None: return None
-        en_prs = _fit_en_aao_dosage(dedup_dosage, parts, seed)
+        en_mod, en_prs = _fit_en_aao_dosage(dedup_dosage, parts, seed)
         if en_prs.isna().all(): return None
+        if en_mod is not None:
+            EN_COEFS["dosage"][seed] = pd.Series(
+                en_mod.coef_, index=list(dedup_dosage.columns))
         base = pd.DataFrame({"Patient_ID": en_prs.index.astype(str),
                               "PRS": en_prs.values})
     elif src == "meta_prs_EN_combined":
+        # Drop dedup columns and Kosteridis SUBGROUPS (Kosteridis full =
+        # MTAG_AD ∪ shared_AD_CV) to avoid triple-counting the same Kosteridis
+        # SNPs in the meta-EN.
         source_cols = [c for c in prs_full.columns if c.startswith("PRS_")
-                        and c not in ("PRS_prs_all_dedup",)]
+                        and c not in ("PRS_prs_all_dedup",
+                                        "PRS_prs_all_dedup_ivw",
+                                        "PRS_prs_all_dedup_filtered",
+                                        "PRS_Kosteridis_MTAG_AD",
+                                        "PRS_Kosteridis_shared_AD_CV",
+                                        "PRS_Kosteridis_novel_AD")]
         sp_df = prs_full[["PTID"] + source_cols].set_index("PTID")
         sp_df.index = sp_df.index.astype(str)
-        en_prs = _fit_en_aao_meta_prs(sp_df, parts, seed)
+        en_mod, en_prs = _fit_en_aao_meta_prs(sp_df, parts, seed)
         if en_prs.isna().all(): return None
+        if en_mod is not None:
+            feats = getattr(en_mod, "_feature_names", source_cols)
+            EN_COEFS["meta"][seed] = pd.Series(
+                en_mod.coef_,
+                index=[c.replace("PRS_", "", 1) for c in feats])
+        base = pd.DataFrame({"Patient_ID": en_prs.index, "PRS": en_prs.values})
+    elif src == "meta_prs_EN_filtered":
+        source_cols = [f"PRS_{s}" for s in META_FILTERED_SOURCES
+                        if f"PRS_{s}" in prs_full.columns
+                        and prs_full[f"PRS_{s}"].notna().any()]
+        if not source_cols: return None
+        sp_df = prs_full[["PTID"] + source_cols].set_index("PTID")
+        sp_df.index = sp_df.index.astype(str)
+        en_mod, en_prs = _fit_en_aao_meta_prs(sp_df, parts, seed)
+        if en_prs.isna().all(): return None
+        if en_mod is not None:
+            feats = getattr(en_mod, "_feature_names", source_cols)
+            EN_COEFS["meta_filtered"][seed] = pd.Series(
+                en_mod.coef_,
+                index=[c.replace("PRS_", "", 1) for c in feats])
         base = pd.DataFrame({"Patient_ID": en_prs.index, "PRS": en_prs.values})
     else:
         prs_col = f"PRS_{src}"
@@ -188,13 +260,24 @@ def main():
     n_snp_per_src["prs_all_dedup_EN_dosage"] = dedup_dosage.shape[1]
     n_snp_per_src["meta_prs_EN_combined"] = dedup_dosage.shape[1]
     if args.beta_source == "prscs":
-        source_list = list(PRSCS_SOURCES)
+        source_list = list(PRSCS_SOURCES) + ["covariates_only"]
     else:
         source_list = ALL_SOURCES + ["prs_all_dedup",
+                                       "prs_all_dedup_ivw",
+                                       "prs_all_dedup_filtered",
                                        "prs_all_dedup_EN_dosage",
-                                       "meta_prs_EN_combined"]
-    sources = [args.source] if args.source else [s for s in source_list
-                                                    if n_snp_per_src.get(s, 0) > 0]
+                                       "meta_prs_EN_combined",
+                                       "meta_prs_EN_filtered",
+                                       "covariates_only"]
+    n_snp_per_src["covariates_only"] = 0
+    if "prs_all_dedup_ivw" in snps_per_src:
+        n_snp_per_src["prs_all_dedup_ivw"] = len(snps_per_src["prs_all_dedup_ivw"])
+    if "prs_all_dedup_filtered" in snps_per_src:
+        n_snp_per_src["prs_all_dedup_filtered"] = len(snps_per_src["prs_all_dedup_filtered"])
+    n_snp_per_src["meta_prs_EN_filtered"] = dedup_dosage.shape[1]
+    sources = [args.source] if args.source else [
+        s for s in source_list
+        if s == "covariates_only" or n_snp_per_src.get(s, 0) > 0]
     print(f"Sources with >=1 SNP after LD prune + orient: {len(sources)}")
 
     rows = []
@@ -218,6 +301,10 @@ def main():
         val_rmse_mean=("val_rmse","mean"),
         val_pearson_r_mean=("val_pearson_r","mean"),
         val_pearson_p_min=("val_pearson_p","min"),
+        test_r2_mean=("test_r2","mean"), test_r2_std=("test_r2","std"),
+        test_rmse_mean=("test_rmse","mean"),
+        test_pearson_r_mean=("test_pearson_r","mean"),
+        test_pearson_p_min=("test_pearson_p","min"),
         yrs_per_sd_mean=("yrs_per_sd_prs","mean"), yrs_per_sd_std=("yrs_per_sd_prs","std"),
     ).reset_index().sort_values(["covar_mode","val_r2_mean"], ascending=[True, False])
     lb_p = out_dir / "leaderboard.csv"
@@ -247,6 +334,61 @@ def main():
     png = out_dir / "leaderboard.png"
     fig.savefig(png, dpi=200, bbox_inches="tight"); plt.close(fig)
     print(f"wrote PNG: {png}")
+
+    # EN coefficient bar chart for the AAO EN models.
+    dos_df  = pd.DataFrame(EN_COEFS["dosage"]) if EN_COEFS["dosage"] else None
+    meta_df = pd.DataFrame(EN_COEFS["meta"])   if EN_COEFS["meta"]   else None
+    if dos_df is not None or meta_df is not None:
+        en_png = out_dir / "en_weights.png"
+        render_en_weights_png(
+            dos_df, meta_df, en_png,
+            title=(f"AAO regression — EN coefficients (TRAIN-fold fit)   "
+                    f"LD={args.ld_config}  beta_source={args.beta_source}\n"
+                    f"top: per-SNP dosage-EN years per +1 A1   ·   "
+                    f"bottom: meta-EN years per +1 source-PRS"))
+        print(f"wrote EN weights PNG: {en_png}")
+
+    # Test-fold EN coefficient refit for the AAO leaderboard.
+    # NB: AAO test fold is converters-only (small ~10-20 patients), so the
+    # min-30 check inside _fit_en_aao_* may reject and produce no PNG.
+    EN_COEFS_TEST = {"dosage": {}, "meta": {}}
+    for seed in SEEDS:
+        parts_seed = {sp: _load_aao_split(seed, sp) for sp in ("train","val","test")}
+        parts_fit = {"train": parts_seed["test"],
+                      "val":   parts_seed["val"],
+                      "test":  parts_seed["train"]}
+        mod_d, _ = _fit_en_aao_dosage(dedup_dosage, parts_fit, seed)
+        if mod_d is not None:
+            EN_COEFS_TEST["dosage"][seed] = pd.Series(
+                mod_d.coef_, index=list(dedup_dosage.columns))
+        meta_source_cols = [
+            c for c in prs_full.columns if c.startswith("PRS_")
+            and c not in ("PRS_prs_all_dedup", "PRS_prs_all_dedup_ivw",
+                            "PRS_Kosteridis_MTAG_AD",
+                            "PRS_Kosteridis_shared_AD_CV",
+                            "PRS_Kosteridis_novel_AD")]
+        sp_df = prs_full[["PTID"] + meta_source_cols].set_index("PTID")
+        sp_df.index = sp_df.index.astype(str)
+        mod_m, _ = _fit_en_aao_meta_prs(sp_df, parts_fit, seed)
+        if mod_m is not None:
+            feats = getattr(mod_m, "_feature_names", meta_source_cols)
+            EN_COEFS_TEST["meta"][seed] = pd.Series(
+                mod_m.coef_,
+                index=[c.replace("PRS_", "", 1) for c in feats])
+    dos_df_t  = pd.DataFrame(EN_COEFS_TEST["dosage"]) if EN_COEFS_TEST["dosage"] else None
+    meta_df_t = pd.DataFrame(EN_COEFS_TEST["meta"])   if EN_COEFS_TEST["meta"]   else None
+    if dos_df_t is not None or meta_df_t is not None:
+        en_png_t = out_dir / "en_weights_test.png"
+        render_en_weights_png(
+            dos_df_t, meta_df_t, en_png_t,
+            title=(f"AAO regression — EN coefficients (TEST-fold refit)   "
+                    f"LD={args.ld_config}  beta_source={args.beta_source}\n"
+                    f"top: per-SNP dosage-EN years per +1 A1   ·   "
+                    f"bottom: meta-EN years per +1 source-PRS\n"
+                    f"caveat: AAO test fold is converters-only -> may be very small"))
+        print(f"wrote EN weights PNG (TEST): {en_png_t}")
+    else:
+        print("[skip] AAO test-fold EN refit — fold too small (min 30 patients)")
 
 
 if __name__ == "__main__":

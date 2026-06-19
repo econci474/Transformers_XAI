@@ -167,7 +167,7 @@ mkdir -p results/hwe
 # ══════════════════════════════════════════════════════════════════════════════
 # Exclude SNPs with HWE exact-test p < 1e-7.
 # Threshold chosen to remove clear genotyping errors while retaining
-# SNPs under genuine selection (stricter than 1e-6 but not overly aggressive).
+# SNPs under genuine selection (more lenient than 1e-6 but not overly aggressive).
 "$PLINK" --bfile SNP_filtered \
     --hwe 1e-7 \
     --make-bed \

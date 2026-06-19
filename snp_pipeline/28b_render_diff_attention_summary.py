@@ -85,8 +85,10 @@ def render(summ: pd.DataFrame, out_png: Path, out_md: Path) -> None:
     cols = left + [m[0] for m in metr]
     hdr = [c.replace("_", " ") for c in KEYS] + ["n"] + [m[1] for m in metr]
     n = len(summ)
+    # Layout: 1 title row + 3 subtitle rows + 1 header row + n data rows
+    # All rows share height `rh = 1/(n+5)`. fig_h grows linearly with n.
     fig_w = 6 + 1.5 * len(metr)
-    fig_h = 0.9 + 0.34 * (n + 1) + 0.4
+    fig_h = 0.9 + 0.34 * (n + 4) + 0.4
     fig, ax = plt.subplots(figsize=(fig_w, fig_h))
     ax.set_axis_off(); ax.set_xlim(0, 1); ax.set_ylim(0, 1)
     nc = len(cols)
@@ -96,7 +98,7 @@ def render(summ: pd.DataFrame, out_png: Path, out_md: Path) -> None:
     xs = [0.0]
     for w in lw:
         xs.append(xs[-1] + w)
-    rh = 1.0 / (n + 2)
+    rh = 1.0 / (n + 5)
 
     def box(x, y, w, h):
         ax.add_patch(plt.Rectangle((x, y), w, h, transform=ax.transAxes,
@@ -107,22 +109,50 @@ def render(summ: pd.DataFrame, out_png: Path, out_md: Path) -> None:
         ax.text(x, y, s, ha=ha, va="center", fontsize=fs,
                 transform=ax.transAxes)
 
+    # Title (slot 0)
     txt(0.5, 1 - rh * 0.5,
         "Frozen DNA-FM diff-embedding → β-biased attention — "
-        "ad_case vs stable_CN (TEST, mean ± std over seeds; primary BalAcc)",
+        "ad_case vs stable_CN  (TEST fold; mean ± std over seeds; "
+        "primary BalAcc; bold > 0.5)",
         fs=10)
-    yb = 1 - 2 * rh
+    # Subtitles (slots 1,2,3). Definitions match scripts 22/15:
+    #   ad_case  = bl_dx=='AD' ∪ ever_conversion_AD (CN/MCI reaching AD,
+    #              AD-confirmed at last visit) — baseline-AD plus strict
+    #              converters
+    #   stable_CN = bl_dx=='CN' AND never any non-CN visit (sustained CN)
+    # The two are mutually exclusive; labeled cohort = ad_case ∪ stable_CN.
+    sub1 = ("Labels: ad_case = baseline-AD ∪ ever-conversion-AD (CN/MCI "
+            "reaching AD, AD at last visit)  ·  stable_CN = sustained CN "
+            "(mutually exclusive)")
+    sub2 = ("Cohort (SNP+MRI, n=616):  ad_case=182  ·  stable_CN=152  ·  "
+            "labeled total=334  (the rest = MCI, reverters, "
+            "non-AD-converters — excluded)")
+    sub3 = ("N(test) per seed (mean): 36 subjects  ·  ad_case≈20  ·  "
+            "stable_CN≈16  (val ≈ 36; train ≈ 262)")
+    txt(0.5, 1 - rh * 1.5, sub1, fs=7.6)
+    txt(0.5, 1 - rh * 2.5, sub2, fs=7.6)
+    txt(0.5, 1 - rh * 3.5, sub3, fs=7.6)
+    # Header row (slot 4)
+    yb = 1 - 5 * rh
     for i, h in enumerate(hdr):
         box(xs[i], yb, xs[i + 1] - xs[i], rh)
         txt((xs[i] + xs[i + 1]) / 2, yb + rh / 2, h, fs=8)
     for ri in range(n):
         y0 = yb - (ri + 1) * rh
         row = summ.iloc[ri]
+        # Bold the BalAcc cell when mean > 0.5 (matches 20b convention)
+        bacc = pd.to_numeric(row.get("test_balanced_accuracy_mean"),
+                              errors="coerce")
+        bacc_bold = pd.notna(bacc) and float(bacc) > 0.5
         for ci, c in enumerate(cols):
             box(xs[ci], y0, xs[ci + 1] - xs[ci], rh)
             v = str(row.get(c, ""))
-            txt((xs[ci] + xs[ci + 1]) / 2, y0 + rh / 2, v,
-                fs=6.8 if ci >= len(left) else 7.0)
+            weight = "bold" if (c == "test_balanced_accuracy"
+                                  and bacc_bold) else "normal"
+            ax.text((xs[ci] + xs[ci + 1]) / 2, y0 + rh / 2, v,
+                     ha="center", va="center", transform=ax.transAxes,
+                     fontsize=6.8 if ci >= len(left) else 7.0,
+                     fontweight=weight)
         if ri < n - 1 and str(summ.iloc[ri]["model"]) != \
                 str(summ.iloc[ri + 1]["model"]):
             ax.plot([0, 1], [y0, y0], transform=ax.transAxes,
@@ -134,13 +164,22 @@ def render(summ: pd.DataFrame, out_png: Path, out_md: Path) -> None:
 
     lines = ["# Frozen DNA-FM diff-attention — ad_case vs stable_CN", "",
              "TEST metrics, mean ± std over seeds; primary = balanced "
-             "accuracy. Rows with n<3 seeds are under-powered.", "",
+             "accuracy. **Bold BalAcc > 0.5.** Rows with n<3 seeds are "
+             "under-powered.", "",
              "| " + " | ".join(hdr) + " |",
              "|" + "|".join(["---"] * len(hdr)) + "|"]
     for ri in range(n):
         row = summ.iloc[ri]
-        lines.append("| " + " | ".join(str(row.get(c, "")) for c in cols)
-                     + " |")
+        bacc = pd.to_numeric(row.get("test_balanced_accuracy_mean"),
+                              errors="coerce")
+        bacc_bold = pd.notna(bacc) and float(bacc) > 0.5
+        cells = []
+        for c in cols:
+            v = str(row.get(c, ""))
+            if c == "test_balanced_accuracy" and bacc_bold and v:
+                v = f"**{v}**"
+            cells.append(v)
+        lines.append("| " + " | ".join(cells) + " |")
     out_md.write_text("\n".join(lines), encoding="utf-8")
     print(f"Wrote {out_md}")
 

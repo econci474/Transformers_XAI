@@ -4,6 +4,9 @@ https://www.nature.com/articles/s41586-025-10014-0#Sec17
 Hugging face: 
 https://huggingface.co/google/alphagenome-all-folds 
 
+AlphaGeonome docs: 
+https://www.alphagenomedocs.com/index.html
+
 AlphaGenome fine tuning colab: 
 https://colab.research.google.com/drive/1QsKf6NUEhWFN2zBne274BmWtNIVi-YsI#scrollTo=tHjm3TE11a_H 
 
@@ -11,9 +14,37 @@ https://colab.research.google.com/drive/1QsKf6NUEhWFN2zBne274BmWtNIVi-YsI#scroll
 tokenises at nucleotide level so 1 token is 1bp
 max input sequence length is 1 Mb, precisely up to about 2²⁰ bp
 
+But in their variant scoring guides they use 501bp windows: https://www.alphagenomedocs.com/variant_scoring.html 
+
 Could try: 
-- frozen embeddings with classification head (with the various aggregation variants as per BMFM)
-- finetuning on the patient sequences directly for the classification task (ever converter)
-- for each GWAS significant SNP extract the AlphaGenome predicted eQTL (RNA expression) / aQTL (accessibility, ATAC) >> concatenate these, check if with MLP possible to predict z score for disease association
-once it sees patient sequence with the alleles, it should be able to produce like a polygenic risk score (PRS) that's based on the eQTLs/aQTLs of the GWAS hits, and correctly predict higher risk of ever converting to MCI/AD?? 
-Need to think about this idea more
+- for each GWAS significant SNP extract the AlphaGenome predict: 
+- RNAseq: Using score_variant + GeneMaskLFCScorer:
+    exon mask is provided internally, based on GENCODE v46
+
+from alphagenome.models import variant_scorers
+from alphagenome.models import dna_client
+
+scorer = variant_scorers.GeneMaskLFCScorer(
+    requested_output=dna_client.OutputType.RNA_SEQ
+)
+
+For best eQTL-style scoring, use the 1 Mb context
+
+- ATAC
+DNase-seq uses DNase I digestion: accessible DNA is more easily cut.
+ATAC-seq uses Tn5 transposase insertion: accessible DNA is more easily tagged/inserted into.
+accessibility_impact = max_signed(ATAC, DNase)
+
+- Cage/PRO-CAP
+AGE	5′ capped ends of relatively stable RNA molecules	Promoter/TSS usage and accumulated capped transcript output
+PRO-cap	5′ capped nascent RNA associated with actively engaged RNA polymerase	Very immediate promoter-proximal transcription initiation/activity
+TSS_impact = max_signed(CAGE, PRO-cap)
+
+positive = ALT increases signal
+negative = ALT decreases signal
+
+Merged splicing score: 
+alphagenome_splicing =
+    max(splice_sites)
+  + max(splice_site_usage)
+  + max(splice_junctions) / 5

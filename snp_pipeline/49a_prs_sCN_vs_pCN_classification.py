@@ -40,7 +40,8 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from _prs_strict_qc_lib import (per_source_prs_table,
                                   load_subject_covariates,
-                                  DEFAULT_LD_CONFIG)  # noqa: E402
+                                  DEFAULT_LD_CONFIG,
+                                  META_FILTERED_SOURCES)  # noqa: E402
 # Reuse the meta-EN fit from script 45 (zero drift — same training-fold rule).
 import importlib
 mod_45 = importlib.import_module("45_prs_classification_strictQC")
@@ -68,8 +69,14 @@ COVAR_MODES = {
     "prs+age+sex+apoe4+apoe2":    ["age_at_baseline", "Sex_M", "APOE4_Dosage", "APOE2_Dosage"],
 }
 SOURCES = ("meta_prs_EN_combined", "Kosteridis",
-            "Kosteridis_MTAG_AD", "Kosteridis_shared_AD_CV")
+            "Kosteridis_MTAG_AD", "Kosteridis_shared_AD_CV",
+            "meta_prs_EN_filtered",
+            "prs_all_dedup", "prs_all_dedup_ivw",
+            "Bellenguez", "DeRojas", "Kunkle")
 META_SOURCE = "meta_prs_EN_combined"
+META_FILTERED_SOURCE = "meta_prs_EN_filtered"
+# Sources that only make sense under PRS-CS β (skipped under --beta-source raw).
+PRSCS_ONLY = {"Bellenguez", "DeRojas", "Kunkle"}
 
 TASK_NAME = "sCN_vs_pCN"
 
@@ -124,6 +131,19 @@ def _build_prs_base(src: str, prs_full: pd.DataFrame,
                                         "PRS_Kosteridis_novel_AD")
                         and not c.endswith("EN_dosage")
                         and not c.endswith("EN_combined")]
+        sp_df = prs_full[["PTID"] + source_cols].set_index("PTID")
+        sp_df.index = sp_df.index.astype(str)
+        _clf, en_prs = _fit_en_meta_prs(sp_df, parts, seed)
+        if en_prs.isna().all(): return None
+        return pd.DataFrame({"Patient_ID": en_prs.index.astype(str),
+                              "PRS": en_prs.values})
+    if src == META_FILTERED_SOURCE:
+        # Same shape as meta_prs_EN_combined but restricted to the 7 curated
+        # high-N European AD GWAS sources (META_FILTERED_SOURCES).
+        source_cols = [f"PRS_{s}" for s in META_FILTERED_SOURCES
+                        if f"PRS_{s}" in prs_full.columns
+                        and prs_full[f"PRS_{s}"].notna().any()]
+        if not source_cols: return None
         sp_df = prs_full[["PTID"] + source_cols].set_index("PTID")
         sp_df.index = sp_df.index.astype(str)
         _clf, en_prs = _fit_en_meta_prs(sp_df, parts, seed)
@@ -224,6 +244,10 @@ def main():
 
     rows, capture_rows = [], []
     for src in SOURCES:
+        # PRS-CS-only sources (Bellenguez, DeRojas, Kunkle) have no
+        # raw-β meta-leaderboard row in this project; skip under raw mode.
+        if args.beta_source == "raw" and src in PRSCS_ONLY:
+            continue
         for mode, covars in COVAR_MODES.items():
             for seed in SEEDS:
                 r = _run_one(src, prs_full, cov, seed, mode, covars,

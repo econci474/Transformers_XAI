@@ -86,7 +86,21 @@ _s30b = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_s30b)
 _build_rsmerge_map = _s30b._build_rsmerge_map
 
-SOURCES = ("Bellenguez", "Wightman", "Kunkle", "Desikan")
+# 16 PRS-usable sources (existing 8 + 8 new tonight 2026-05-25) + 2 audit
+SOURCES = ("Bellenguez", "Wightman", "Kunkle", "Desikan",
+           "Lambert", "DeRojas", "Schwanzentruber", "Najar",
+           # new 2026-05-25:
+           "Ebenau", "Leonenko", "Vesilievick", "Zhang",
+           "Felsky_MF", "Felsky_IT",
+           "ONeil_NPY", "ONeil_GHR",
+           "Kosteridis_novel_AD", "Kosteridis_shared_AD_CV",
+           # Yang 2023 cell-type-partitioned PRS (added 2026-05-25 night)
+           "Yang_Ex", "Yang_In", "Yang_Ast",
+           "Yang_Mic", "Yang_Oli", "Yang_Opc",
+           # audit-only sources (produced by 30g; processed for on-chip /
+           # on-MAF accounting but not used as PRS):
+           "Huang", "ONeil_SST_candidates")
+AUDIT_ONLY_SOURCES = {"Huang", "ONeil_SST_candidates"}
 _RSID_RE = re.compile(r"^rs\d+$")
 
 
@@ -262,15 +276,22 @@ def _kgp_lookup(rsid: str,
 def _base_row(r, src, assembly, in_maf_bim) -> dict:
     return {
         "source": src,
+        "pheno_class": str(r.get("pheno_class", "")),
         "rsID_pub": str(r["rsID_pub"]),
         "rsID_canonical": str(r["rsID_canonical"]),
         "original_assembly": assembly,
         "CHR_pub": str(r.get("CHR_pub", "")),
         "BP_pub": str(r.get("BP_pub", "")),
         "effect_allele_pub": str(r.get("effect_allele_pub", "")),
+        "other_allele_pub": str(r.get("other_allele_pub", "")),
         "OR_or_beta_pub": str(r.get("OR_or_beta_pub", "")),
+        "SE_pub": str(r.get("SE_pub", "")),
         "P_pub": str(r.get("P_pub", "")),
         "locus_name": str(r.get("locus_name", "")),
+        "MTAG_origins": str(r.get("MTAG_origins", "")),
+        "qc_verdict": str(r.get("qc_verdict", "")),
+        "published_exception": str(r.get("published_exception", "")),
+        "audit_only": str(r.get("audit_only", "")),
         "drop_reason_30b": str(r["drop_reason"]),
         "in_maf_bim": in_maf_bim,
     }

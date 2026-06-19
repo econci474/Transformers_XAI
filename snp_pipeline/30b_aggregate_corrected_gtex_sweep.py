@@ -181,12 +181,16 @@ def render_png(agg: pd.DataFrame, out_path: Path):
         cells.append(row)
         row_idx_seq.append(idx)
 
-    # Family group separators: dashed line after each family block ends
+    # Family group separators: dashed line between family blocks.
+    # block_boundaries holds plot_df row indices of the FIRST row of each
+    # non-leading block. cells_dict uses (table_row, col) where table_row=0
+    # is the header and table_row=k is plot_df row k-1, so the corresponding
+    # cells_dict row is plot_df_idx + 1.
     family_seq = plot_df["family"].tolist()
-    block_end_rows = []
+    block_boundaries = []  # plot_df indices of next-block-first-row
     for i in range(len(family_seq) - 1):
         if family_seq[i] != family_seq[i + 1]:
-            block_end_rows.append(i + 1)  # 1-based row index of next-block start in table
+            block_boundaries.append(i + 1)
 
     # Map column key -> table column index (2-based since cols 0,1 are family/mode)
     col_idx = {
@@ -266,9 +270,11 @@ def render_png(agg: pd.DataFrame, out_path: Path):
     ax.plot([x0, x1], [y_below_header, y_below_header],
             color="#222", lw=1.0, transform=ax.transAxes, zorder=6)
 
-    # Dashed family separators
-    for r in block_end_rows:
-        cell = cells_dict[(r, 0)]
+    # Dashed family separators — line at TOP of next-block's first cell,
+    # which equals the BOTTOM of the previous block's last cell (the
+    # boundary between the two blocks).
+    for r_pdf in block_boundaries:
+        cell = cells_dict[(r_pdf + 1, 0)]   # +1 to skip header row
         y_sep = cell.get_y() + cell.get_height()
         ax.plot([x0, x1], [y_sep, y_sep], color="#666", lw=0.8,
                  linestyle=(0, (4, 3)), transform=ax.transAxes, zorder=6)
