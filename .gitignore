@@ -27,6 +27,7 @@ hugging_face/brainiac
 
 #Outputs
 outputs/
+outputs_*/
 clinical_pipeline/outputs
 classification_results/
 classification_results_wBCE/
@@ -56,10 +57,10 @@ env_logs/
 # out of the examiner-facing repo.
 mri_pipeline/tools/
 
-# tool Code local config
+# tool Code local config (any per-pipeline variant: .tool_mri / .tool_clinical / .tool_snp / ...)
 .tool/
-mri_pipeline/.tool_mri/
-**/.tool_mri/
+**/.tool/
+**/.tool_*/
 
 #Wandb
 wandb_api.txt
