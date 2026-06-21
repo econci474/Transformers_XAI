@@ -1,5 +1,5 @@
 # WandB sweep — diff-attention v2, mlp3 head
-# Run: wandb sweep snp_pipeline/30a_sweeps/mlp3.yaml
+# Run: wandb sweep snp_pipeline/diff_attention_sweeps/mlp3.yaml
 #      wandb agent <returned-sweep-id> --count 120
 program: snp_pipeline/30_train_diff_attention_v2.py
 method: grid

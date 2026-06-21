@@ -31,7 +31,6 @@ classification_results_wBCE/
 T3b_conv5y/
 snp_pipeline/outputs_snp/
 snp_pipeline/tools/
-snp_pipeline/30a_sweeps/
 snp_pipeline/v3_funcon_results/
 snp_pipeline/alphagenome/*.csv
 snp_pipeline/alphagenome/*.parquet

@@ -18,7 +18,7 @@
 #   --output-root = outputs/corrected_gtex/diff_attn_v3
 #
 # Usage:
-#   pwsh Transformers_XAI/snp_pipeline/30a_sweeps/v3_func/run_corrected_gtex_sweep.ps1
+#   pwsh Transformers_XAI/snp_pipeline/diff_attention_sweeps/func_integration_sweeps/run_corrected_gtex_sweep.ps1
 #   pwsh ... -SkipNone    # skip the 9 `none` control runs (assumes original values)
 #   pwsh ... -SeedSubset 0,1   # only seeds 0 + 1
 #   pwsh ... -Families bmfm_mlp,ntv2_mlp   # subset of the 3 families

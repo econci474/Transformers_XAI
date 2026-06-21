@@ -5,7 +5,7 @@
 # predictions.tsv with per-patient val + test scores.
 #
 # Run on Colab (or wherever Drive is mounted):
-#   bash <repo>/snp_pipeline/30a_sweeps/extract_fm_top_predictions.sh
+#   bash <repo>/snp_pipeline/diff_attention_sweeps/extract_fm_top_predictions.sh
 #
 # Outputs at outputs/diff_attn_v3/fm_top_predictions/mlp2/101bp_bmfm_snp_attn_bias_per_modality_chrom_hier_s{0,1,2}/predictions.tsv
 set -euo pipefail

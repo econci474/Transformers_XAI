@@ -7,7 +7,7 @@
 # flag is present in 30v3_train_diff_attention_func.py:
 #
 #   cd /content/drive/MyDrive/ADNI_SNP/diff_attn_v2_upload
-#   bash <repo>/snp_pipeline/30a_sweeps/drop_splice_top2.sh
+#   bash <repo>/snp_pipeline/diff_attention_sweeps/drop_splice_top2.sh
 #
 # Time: ~6 × ~60s on A100 ≈ 6 minutes.
 set -euo pipefail

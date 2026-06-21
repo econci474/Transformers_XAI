@@ -1,5 +1,5 @@
 # WandB sweep — diff-attention v2, xgb head (XGBoost, fixed γ=δ=1 aggregator)
-# Run: wandb sweep snp_pipeline/30a_sweeps/xgb.yaml
+# Run: wandb sweep snp_pipeline/diff_attention_sweeps/xgb.yaml
 #      wandb agent <returned-sweep-id> --count 120
 program: snp_pipeline/30_train_diff_attention_v2.py
 method: grid
