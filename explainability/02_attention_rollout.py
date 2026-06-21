@@ -45,17 +45,27 @@ CKPT_ROOT_DEFAULT = Path(r"D:\ADNI_BIDS_project\derivatives\clinical\encoder_exp
 TEXT_COL = "Generated_Text"
 MAX_LEN = 1024
 
+# Harmonised class colours. T1c (CN/MCI/AD) shares CN/MCI/AD verbatim with 03_baseline_shap_pdp.py; the
+# binary tasks are coloured by baseline-diagnosis family (T2b=CN→green, T2a=MCI→orange) with the
+# progressive class a ~18%-darker shade of the same hue (stable x ~0.82 per channel).
+CLASS_HEX = {
+    "CN": "#CCFFCC", "MCI": "#FFCC99", "AD": "#F4CCCC",
+    "sCN": "#CCFFCC", "pCN": "#A7D1A7",      # CN family: stable / progressive (darker)
+    "sMCI": "#FFCC99", "pMCI": "#D1A77D",    # MCI family: stable / progressive (darker)
+}
+CLASS_ORDER = ["CN", "MCI", "AD", "sCN", "pCN", "sMCI", "pMCI"]   # stable before progressive in the legend
+
 # task subdir -> (model_id, task_key, label_col, label_map, class names). Mirrors 03_encoder_finetune.
 TASKS = {
     "T1d": dict(model_id="answerdotai/ModernBERT-large", task_key="T1d_pmci_smci",
                 label_col="conversion_group", label_map={"sMCI": 0, "pMCI": 1},
-                classes=["sMCI", "pMCI"], title="T1d - pMCI vs sMCI"),
+                classes=["sMCI", "pMCI"], title="T2a - pMCI vs sMCI"),
     "T1e": dict(model_id="answerdotai/ModernBERT-base", task_key="T1e_scn_pcn",
                 label_col="conversion_group", label_map={"sCN": 0, "pCN_to_MCI": 1, "pCN_to_AD": 1},
-                classes=["sCN", "pCN"], title="T1e - sCN vs pCN"),
+                classes=["sCN", "pCN"], title="T2b - sCN vs pCN"),
     "T2":  dict(model_id="thomas-sounack/BioClinical-ModernBERT-large", task_key="T2_multiclass",
                 label_col="Label_bl_multi", label_map={"CN": 0, "MCI": 1, "AD": 2},
-                classes=["CN", "MCI", "AD"], title="T2 - CN / MCI / AD"),
+                classes=["CN", "MCI", "AD"], title="T1c - CN / MCI / AD"),
 }
 
 # Clinical-section anchors (case-insensitive substrings) in the order they appear in the generated
@@ -64,11 +74,12 @@ TASKS = {
 BLOCK_ANCHORS = [
     ("APOE",            "APOE4 allele status"),
     ("Plasma",          "Plasma "),
+    ("CSF",             "CSF biomarkers"),     # "CSF biomarkers at baseline" — was being folded into Plasma
     ("Depression/GDS",  "Geriatric Depression"),
     ("Hachinski",       "Hachinski"),
     ("ADAS-Cog13",      "Alzheimer's Disease Assessment"),
     ("CDR",             "Clinical Dementia Rating"),
-    ("MMSE",            "Mini-Mental"),
+    ("MMSE",            "Mini Mental"),     # summaries write "Mini Mental State Examination" (no hyphen)
     ("MoCA",            "Montreal Cognitive"),
     ("Clock Drawing",   "Clock Drawing"),
     ("Category Fluency", "Category Fluency"),
@@ -281,7 +292,16 @@ def main():
         block_cols = [c for c in bdf.columns if c not in ("pid", "y", "pred", "correct")]
         summ = bdf[bdf["correct"]].groupby("y")[block_cols].mean()
         if len(summ):
-            ax = summ.T.plot(kind="barh", figsize=(8.5, 6.5), width=0.8)
+            colT = summ.T
+            colT = colT.loc[colT.mean(axis=1).sort_values().index]   # blocks by mean attn fraction; barh puts
+            #                                                           the largest at the TOP (ascending sort)
+            if all(c in CLASS_HEX for c in colT.columns):     # harmonised colours, mapped by class name
+                colT = colT[[c for c in CLASS_ORDER if c in colT.columns]]
+                ax = colT.plot(kind="barh", figsize=(8.5, 6.5), width=0.8,
+                               color=[CLASS_HEX[c] for c in colT.columns],
+                               edgecolor="black", linewidth=0.4)
+            else:
+                ax = colT.plot(kind="barh", figsize=(8.5, 6.5), width=0.8)
             ax.set_xlabel("mean attention fraction (correct test predictions)")
             ax.set_title(f"{cfg['title']} - per-block attention by class ({slug})", fontsize=10)
             ax.legend(title="true class", fontsize=8)

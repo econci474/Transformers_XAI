@@ -51,6 +51,9 @@ TASKS = {
 }
 CHANCE_NOTE = {"T1e": "  (val bACC 0.44)"}
 
+# Harmonised class colours (shared verbatim with 02_attention_rollout.py) for the multiclass T1c figure.
+CLASS_HEX = {"CN": "#CCFFCC", "MCI": "#FFCC99", "AD": "#F4CCCC"}
+
 DROP_ALWAYS = [
     "Patient_ID", "VISCODE_long", "VISCODE_2", "Date", "Generated_Text",
     "Label_bl_multi", "Label_visit_diag", "Label_visit_granular",
@@ -167,16 +170,25 @@ def main():
             for ci, cname in enumerate(cfg["classes"]):
                 plt.figure()
                 shap.summary_plot(sv.values[:, :, ci], Xt, feature_names=feat_used, show=False, max_display=15)
-                plt.title(f"{cfg['title']} - SHAP beeswarm (class {cname}, seed {args.seed_for_plots})", fontsize=9)
+                plt.title(f"{cfg['title']} - XGBoost SHAP beeswarm (class {cname}, seed {args.seed_for_plots})",
+                          fontsize=9)
                 plt.tight_layout(); plt.savefig(out / f"shap_beeswarm_{cname}.png", dpi=200); plt.close()
+            # all-classes stacked bar — colour each class by the harmonised palette (map by NAME), and keep
+            # the legend in CN/MCI/AD order (class_inds="original") to match the attention figure.
+            color_ok = all(c in CLASS_HEX for c in cfg["classes"])
             shap.summary_plot(sv.values, Xt, feature_names=feat_used, show=False, max_display=15,
-                              class_names=cfg["classes"], plot_type="bar")
-            plt.title(f"{cfg['title']} - SHAP (all classes)", fontsize=9)
+                              class_names=cfg["classes"], plot_type="bar",
+                              **(dict(class_inds="original", color=lambda i: CLASS_HEX[cfg["classes"][i]])
+                                 if color_ok else {}))
+            if color_ok:                                  # thin edge so the pale pastels read on white
+                for p in plt.gca().patches:
+                    p.set_edgecolor("#444444"); p.set_linewidth(0.4)
+            plt.title(f"{cfg['title']} - XGBoost SHAP (all classes)", fontsize=9)
             plt.tight_layout(); plt.savefig(out / "shap_beeswarm.png", dpi=200); plt.close()
         else:
             plt.figure()
             shap.summary_plot(sv.values, Xt, feature_names=feat_used, show=False, max_display=15)
-            plt.title(f"{cfg['title']} - SHAP beeswarm (seed {args.seed_for_plots})\n{cap}", fontsize=9)
+            plt.title(f"{cfg['title']} - XGBoost SHAP beeswarm (seed {args.seed_for_plots})\n{cap}", fontsize=9)
             plt.tight_layout(); plt.savefig(out / "shap_beeswarm.png", dpi=200); plt.close()
 
         if sv.values.ndim == 2:
