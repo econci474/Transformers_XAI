@@ -41,10 +41,10 @@ SEEDS = (0, 1, 2)
 TASKS = {
     "T1d": dict(label_col="conversion_group", label_map={"sMCI": 0, "pMCI": 1},
                 task_type="binary", classes=["sMCI", "pMCI"],
-                title="T2a - pMCI vs sMCI (baseline MCI)"),
+                title="T2a - pMCI vs sMCI"),
     "T1e": dict(label_col="conversion_group", label_map={"sCN": 0, "pCN_to_MCI": 1, "pCN_to_AD": 1},
                 task_type="binary", classes=["sCN", "pCN"],
-                title="T2b - sCN vs pCN (baseline CN)"),
+                title="T2b - sCN vs pCN"),
     "T2":  dict(label_col="Label_bl_multi", label_map={"CN": 0, "MCI": 1, "AD": 2},
                 task_type="multiclass", classes=["CN", "MCI", "AD"],
                 title="T1c - CN / MCI / AD"),
@@ -163,7 +163,8 @@ def main():
         ax.barh(top["feature"], top["mean_abs_shap"], xerr=top["std_abs_shap"],
                 color="#4576b5", error_kw=dict(ecolor="#888", lw=0.8))
         ax.set_xlabel("mean |SHAP| (mean +/- std over seeds 0/1/2)")
-        ax.set_title(f"{cfg['title']} - XGBoost global feature importance\n{cap}", fontsize=9.5)
+        ax.set_title(f"{cfg['title']}\nXGBoost global feature importance{CHANCE_NOTE.get(sub, '')}",
+                     fontsize=9.5)
         fig.tight_layout(); fig.savefig(out / "shap_bar.png", dpi=200); fig.savefig(out / "shap_bar.pdf"); plt.close(fig)
 
         if sv.values.ndim == 3:
