@@ -61,5 +61,5 @@ mri_pipeline/
 ## Conventions
 `*_submit_csd3.sh` are CSD3 SLURM wrappers kept beside the `.py` they launch (the ViT submits in `vit_mae/`
 point `SCRIPT_DIR` at `mri_pipeline/` since they invoke the shared trainer there). Scripts carry a LOCAL/HPC
-path block at the top — switch it when porting. See the root `tool.md` for account/partition/wall-time
-specifics. Run a submit from the output folder so relative SLURM logs land beside the checkpoints.
+path block at the top — switch it when porting. See the project setup / CSD3 SLURM notes for
+account/partition/wall-time specifics. Run a submit from the output folder so relative SLURM logs land beside the checkpoints.

@@ -1,6 +1,3 @@
-# ── Project instructions (local only; NOT for the public repo) ──────────────
-/tool.md
-
 # ── ADNI patient-level data (do not commit to public repo) ──────────────────
 snp_pipeline/phenotype.pheno
 snp_pipeline/covariates.cov
@@ -56,11 +53,6 @@ env_logs/
 # Local-only provenance/tooling (W&B sync scripts, cached CSVs) — kept on disk,
 # out of the examiner-facing repo.
 mri_pipeline/tools/
-
-# tool Code local config (any per-pipeline variant: .tool_mri / .tool_clinical / .tool_snp / ...)
-.tool/
-**/.tool/
-**/.tool_*/
 
 #Wandb
 wandb_api.txt

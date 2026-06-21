@@ -8,7 +8,7 @@ flat CSVs that downstream `09_join_freesurfer_to_mri_master.py` can consume:
     derivatives/freesurfer_unified/fs_xs_per_scan.csv     # cross-sectional
     derivatives/freesurfer_unified/fs_long_per_scan.csv   # longitudinal-pipeline
 
-Per the project plan (see `.tool/plans/snug-honking-aho.md`):
+Per the project plan:
 
   Cross-sectional priority cascade (FS6 > FS5.1 > FS5.1 ADNI1 3T):
     UCSFFSX6_07_06_23_31May2026.csv             (FS 6.0)

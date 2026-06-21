@@ -6,7 +6,7 @@ onto the post-exclusion MRI master, derive within-subject longitudinal deltas
 (Delta from baseline + percent change + annualised slope), and write the
 column-extended copy to the `_with_FSL/` sister directory.
 
-Per the project plan (.tool/plans/snug-honking-aho.md):
+Per the project plan:
 
   Anchor:
     D:/ADNI_BIDS_project/derivatives/mri_clinical_matched/
