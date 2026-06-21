@@ -61,6 +61,8 @@ wandb/
 # Local-only tooling (W&B run logs + non-core table/helper scripts) — kept on disk,
 # out of the examiner-facing repo. (Mirrors mri_pipeline/tools/ above.)
 /tools/
+# Dev-only conda env-snapshot helper (writes to gitignored env_logs/) — local provenance, not for the repo.
+/snapshot_env.sh
 
 # AlphaGenome API key (NEVER commit)
 snp_pipeline/alphagenome/alphagenome_api.txt
