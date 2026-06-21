@@ -71,6 +71,11 @@ TEST_MODELS = [
 DISP = {k: f"{head} · {agg}" if agg != "—" else f"{head} (tabular)"
         for k, _, head, agg in TEST_MODELS}                # display string per model key
 MAMBA_CFGS = {"A_ctrl_gru", "A_ctrl_meanpool", "A_default_mamba1_frozen", "B_cox", "B_soden", "B_weibull_aft"}
+
+# Targeted 2nd-reference comparison (user): the CANONICAL deep longitudinal Weibull-pw vs the cross-sectional
+# Weibull-pw baseline (same parametric family) — paired with the SAME bootstrap resamples as the vs-RSF test.
+XSEC_WPW = "Weibull piecewise"             # cross-sectional tabular Weibull-pw (its 2nd reference)
+DEEP_WPW = "A_default_mamba1_frozen"       # canonical deep longitudinal Weibull-pw (MAMBA frozen)
 ALL_MODELS = [m for m, *_ in TEST_MODELS] + [REF]
 
 
@@ -236,6 +241,7 @@ def main():
     rng = np.random.default_rng(args.seed)
     B = args.B
     boot = {(m, k): np.full(B, np.nan) for m, *_ in TEST_MODELS for k in MC}
+    boot_x = {k: np.full(B, np.nan) for k in MC}              # deep Weibull-pw − cross-sectional Weibull-pw
     for b in range(B):
         smet = {}
         for s in SEEDS:
@@ -247,6 +253,10 @@ def main():
                 with warnings.catch_warnings():               # all-NaN seeds (rare AUC@10y resamples)
                     warnings.simplefilter("ignore", RuntimeWarning)
                     boot[(m, k)][b] = np.nanmean(dseed)
+        for k in MC:                                          # 2nd-reference test: deep vs cross-sectional Wpw
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", RuntimeWarning)
+                boot_x[k][b] = np.nanmean([smet[s][DEEP_WPW][k] - smet[s][XSEC_WPW][k] for s in SEEDS])
         if (b + 1) % 250 == 0:
             print(f"  bootstrap {b + 1}/{B}")
 
@@ -278,6 +288,26 @@ def main():
     nsig = (res["p"] < 0.05).sum()
     print(f"\n{nsig}/{len(res)} model×metric comparisons significant at raw p<0.05 "
           f"({(res['p_bh'] < 0.05).sum()} survive BH-FDR).")
+
+    # ── targeted 2nd-reference test: canonical DEEP longitudinal Weibull-pw vs cross-sectional Weibull-pw ──
+    # (same parametric family; quantifies the longitudinal-embedding lift) — paired via boot_x above.
+    xrecs = []
+    for k in MC:
+        delta = pt[DEEP_WPW][k] - pt[XSEC_WPW][k]            # signed (IBS: negative = deep better)
+        reps = boot_x[k]; effB = int(np.isfinite(reps).sum())
+        se = float(np.nanstd(reps, ddof=1)) if effB > 1 else np.nan
+        z = delta / se if (se and se > 0 and np.isfinite(delta)) else np.nan
+        p = float(2 * norm.sf(abs(z))) if np.isfinite(z) else np.nan
+        xrecs.append(dict(metric=k, mode=MODE[k], deep_mean=pt[DEEP_WPW][k], xsec_mean=pt[XSEC_WPW][k],
+                          delta=delta, se_boot=se, z=z, p=p, eff_B=effB,
+                          better=(delta < 0 if MODE[k] == "min" else delta > 0)))
+    xres = pd.DataFrame(xrecs)
+    xres["p_bh"] = bh_adjust(xres["p"].to_numpy())
+    xres["sig"] = xres["p"].map(stars)
+    for d in (COMP, HERE):
+        xres.to_csv(d / "wald_deep_vs_xsec_wpw.csv", index=False, encoding="utf-8")
+    print("\nDeep longitudinal Weibull-pw (MAMBA frozen) − cross-sectional Weibull-pw (Δ, z, p):")
+    print(xres[["metric", "delta", "se_boot", "z", "p", "sig"]].round(3).to_string(index=False))
 
     render(res, args.B)
     write_tex(res, args.B)
