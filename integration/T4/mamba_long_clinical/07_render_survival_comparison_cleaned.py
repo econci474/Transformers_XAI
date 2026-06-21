@@ -50,20 +50,6 @@ def load_wald():
     return {(str(r.model), str(r.metric)): ("" if pd.isna(r.sig) else str(r.sig))
             for r in w.itertuples()}
 
-# Targeted 2nd-reference test (08's wald_deep_vs_xsec_wpw.csv): the canonical DEEP longitudinal Weibull-pw
-# row carries † significance vs the cross-sectional Weibull-pw baseline (not RSF).
-DEEP_WPW_KEY = "A_default_mamba1_frozen"   # row that gets the † (deep MAMBA-frozen Weibull-pw)
-XSEC_WPW_KEY = "Weibull piecewise"         # cross-sectional Weibull-pw baseline = the † reference
-
-
-def load_dagger():
-    """metric -> stars, from 08's deep(MAMBA-frozen)-vs-cross-sectional Weibull-pw test. {} if absent."""
-    f = COMP / "wald_deep_vs_xsec_wpw.csv"
-    if not f.exists():
-        return {}
-    w = pd.read_csv(f)
-    return {str(r.metric): ("" if pd.isna(r.sig) else str(r.sig)) for r in w.itertuples()}
-
 # model key -> (group, Model = survival head, Aggregation = sequence aggregator)
 #   group: "mamba_agg" (aggregation ablation), "mamba_head" (head ablation), "baseline"
 ROWS = [
@@ -105,13 +91,11 @@ SUBTITLE = (
     "Model = survival head;  Aggregation = sequence aggregator over the bl/m06/m12 visits (risk = 1 − S(t_ref))\n"
     "MAMBA = deep heads on clinical embeddings  ·  baselines = RSF / Cox PH / Weibull AFT / Weibull piecewise "
     "on an 8-feature clinical baseline vector  ·  N(val+test) = 108 (≈25 events)\n"
-    "* p<0.05  ** p<0.01  *** p<0.001 : two-sided Wald test vs RSF (reference), paired seed-stratified bootstrap SE\n"
-    "† deep longitudinal Weibull-piecewise (MAMBA frozen) instead tested vs the cross-sectional Weibull-piecewise baseline († ref), not RSF")
+    "* p<0.05  ** p<0.01  *** p<0.001 : two-sided Wald test vs RSF (reference), paired seed-stratified bootstrap SE")
 
 
-def render(df, out_path, wald=None, dagger=None):
+def render(df, out_path, wald=None):
     wald = wald or {}
-    dagger = dagger or {}
     headers = ["Model", "Aggregation", "N (events)"] + [lbl for _, lbl, _ in METRICS]
     LEFT_COLS = {0, 1}
     # best per metric column (max, or min for IBS)
@@ -132,13 +116,9 @@ def render(df, out_path, wald=None, dagger=None):
             rule = "light"
         else:
             rule = None
-        agg_disp = f"{r.Aggregation}  († ref)" if r.key == XSEC_WPW_KEY else r.Aggregation
-        cells = [r.Model, agg_disp, f"{r['n']:.0f} ({r['events']:.0f})"]
+        cells = [r.Model, r.Aggregation, f"{r['n']:.0f} ({r['events']:.0f})"]
         for m, _, _ in METRICS:
-            if r.key == DEEP_WPW_KEY:
-                mark = "†" + dagger.get(m, "")         # tested vs cross-sectional Weibull-pw (2nd reference)
-            else:
-                mark = wald.get((r.key, m), "")        # "" for RSF (reference) and absent files
+            mark = wald.get((r.key, m), "")            # "" for RSF (reference) and absent files
             cells.append(f"{r[f'{m}_m']:.3f} ± {r[f'{m}_s']:.3f}{mark}")
         body.append(cells)
         bolds.append({3 + j: (best[m] == i) for j, (m, _, _) in enumerate(METRICS)})
@@ -220,8 +200,7 @@ TEX_HEAD = [("c_index", r"C-index $\uparrow$"), ("c_index_ipcw", r"C-idx IPCW $\
 _TEX_STAR = {"*": "^{*}", "**": "^{**}", "***": "^{***}"}
 
 
-def write_tex(df, wald, out_path, dagger=None):
-    dagger = dagger or {}
+def write_tex(df, wald, out_path):
     best = {}
     for m, _, mode in METRICS:
         col = df[f"{m}_m"].to_numpy(float)
@@ -232,15 +211,10 @@ def write_tex(df, wald, out_path, dagger=None):
         core = f"{v:.2f} \\pm {s:.2f}"
         if round(v, 2) == round(best[m], 2):
             core = r"\mathbf{" + core + "}"
-        if r.key == DEEP_WPW_KEY:                       # significance vs cross-sectional Weibull-pw (†)
-            st = dagger.get(m, "")
-            return f"${core}^{{{st}\\dagger}}$"
         return f"${core}{_TEX_STAR.get(wald.get((r.key, m), ''), '')}$"
 
     def row(r):
         agg = "---" if str(r.Aggregation) in ("—", "-") else str(r.Aggregation)
-        if r.key == XSEC_WPW_KEY:                       # the † reference
-            agg = agg + r"$^{\dagger}$"
         return f"{r.Model} & {agg} & " + " & ".join(cell(r, m) for m, _, _ in METRICS) + r" \\"
 
     longi = df[df.group != "baseline"]; cross = df[df.group == "baseline"]
@@ -264,10 +238,7 @@ def write_tex(df, wald, out_path, dagger=None):
         r"bold = best per column. Significance markers ($^{*}p{<}0.05$, $^{**}p{<}0.01$, "
         r"$^{***}p{<}0.001$) denote a two-sided Wald test of each model against the RSF baseline on that "
         r"metric, with the standard error of the difference estimated by a paired, seed-stratified "
-        r"bootstrap ($B{=}2000$) of the per-patient predictions. The dagger ($\dagger$) marks the canonical "
-        r"deep longitudinal Weibull-piecewise (MAMBA frozen), which is instead tested against the "
-        r"cross-sectional Weibull-piecewise baseline ($\dagger$ ref, same parametric family), not RSF. "
-        r"Benjamini--Hochberg FDR-adjusted "
+        r"bootstrap ($B{=}2000$) of the per-patient predictions; Benjamini--Hochberg FDR-adjusted "
         r"$q$-values are reported in the supplementary \texttt{wald\_significance\_vs\_rsf.csv}. "
         r"IPCW: Inverse Probability of Censoring Weighting. GRU: Gated Recurrent Unit. "
         r"SODEN: Survival Neural ODE. RSF: Random Survival Forest. AFT: Accelerated Failure Time.}",
@@ -279,18 +250,20 @@ def write_tex(df, wald, out_path, dagger=None):
 def main():
     df = aggregate()
     wald = load_wald()
-    dagger = load_dagger()
     if not wald:
         print("  [note] wald_significance_vs_rsf.csv not found — rendering without significance markers.")
-    if not dagger:
-        print("  [note] wald_deep_vs_xsec_wpw.csv not found — no † (deep-vs-cross-sectional) markers.")
     out_cols = ["Model", "Aggregation", "n", "events"] \
         + [f"{m}_m" for m, _, _ in METRICS] + [f"{m}_s" for m, _, _ in METRICS]
-    for d in OUT_DIRS:
-        df[out_cols].to_csv(d / "survival_comparison_table_cleaned.csv", index=False, encoding="utf-8")
-        render(df, d / "survival_comparison_table_cleaned.png", wald, dagger)
-        print(f"  CSV: {d / 'survival_comparison_table_cleaned.csv'}")
-    write_tex(df, wald, TEX_OUT, dagger)
+    # Emit under both names: the existing "cleaned" and the explicit "vs_rsf_complete" (same content —
+    # all 10 rows incl. SODEN + cross-sectional Weibull-pw, significance vs RSF for every non-RSF row).
+    for base, tex in (("survival_comparison_table_cleaned", TEX_OUT),
+                      ("survival_comparison_table_vs_rsf_complete",
+                       HERE / "survival_comparison_table_vs_rsf_complete.tex")):
+        for d in OUT_DIRS:
+            df[out_cols].to_csv(d / f"{base}.csv", index=False, encoding="utf-8")
+            render(df, d / f"{base}.png", wald)
+            print(f"  CSV: {d / (base + '.csv')}")
+        write_tex(df, wald, tex)
     print(f"  ({len(df)} rows)")
     print(df[["Model", "Aggregation", "c_index_m", "ibs_m"]].to_string(index=False))
 

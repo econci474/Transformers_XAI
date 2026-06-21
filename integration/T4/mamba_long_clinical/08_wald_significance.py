@@ -71,12 +71,26 @@ TEST_MODELS = [
 DISP = {k: f"{head} · {agg}" if agg != "—" else f"{head} (tabular)"
         for k, _, head, agg in TEST_MODELS}                # display string per model key
 MAMBA_CFGS = {"A_ctrl_gru", "A_ctrl_meanpool", "A_default_mamba1_frozen", "B_cox", "B_soden", "B_weibull_aft"}
-
-# Targeted 2nd-reference comparison (user): the CANONICAL deep longitudinal Weibull-pw vs the cross-sectional
-# Weibull-pw baseline (same parametric family) — paired with the SAME bootstrap resamples as the vs-RSF test.
-XSEC_WPW = "Weibull piecewise"             # cross-sectional tabular Weibull-pw (its 2nd reference)
-DEEP_WPW = "A_default_mamba1_frozen"       # canonical deep longitudinal Weibull-pw (MAMBA frozen)
 ALL_MODELS = [m for m, *_ in TEST_MODELS] + [REF]
+
+# ── second reference: the cross-sectional Weibull-pw baseline → an analogous "..._vs_weibull_pw" table ──
+# Every OTHER model (incl. RSF) is tested against it, quantifying the longitudinal lift over the SAME
+# parametric family. RSF becomes a tested cross-sectional row here; Weibull-pw is the reference (omitted).
+WPW_REF = "Weibull piecewise"
+TEST_MODELS_WPW = [t for t in TEST_MODELS if t[0] != WPW_REF] + [("RSF", "Cross-sectional", "RSF", "—")]
+DISP_WPW = {k: (f"{head} · {agg}" if agg != "—" else f"{head} (tabular)")
+            for k, _, head, agg in TEST_MODELS_WPW}
+
+# Per-reference render specs. The vs-RSF table is byte-identical to before; vs-Weibull-pw is the new analogue.
+REF_SPECS = [
+    dict(ref=REF, short="RSF", paren="best tabular baseline", tms=TEST_MODELS, disp=DISP,
+         desc="cross-sectional Random Survival Forest on the baseline-visit-only tabular features",
+         basename="wald_significance_vs_rsf", label="wald_vs_rsf"),
+    dict(ref=WPW_REF, short="Weibull-pw", paren="cross-sectional baseline",
+         tms=TEST_MODELS_WPW, disp=DISP_WPW,
+         desc="cross-sectional Weibull-piecewise on the baseline-visit-only tabular features",
+         basename="wald_significance_vs_weibull_pw", label="wald_vs_weibull_pw"),
+]
 
 
 def _load_02l():
@@ -208,9 +222,10 @@ def main():
     args = ap.parse_args()
 
     if args.render_only:                                   # re-draw from saved results, no re-bootstrap
-        res = pd.read_csv(COMP / "wald_significance_vs_rsf.csv")
-        render(res, args.B); write_tex(res, args.B); write_tex_detailed(res, args.B)
-        print(f"Re-rendered PNG + .tex (compact + detailed) from {COMP / 'wald_significance_vs_rsf.csv'}")
+        for sp in REF_SPECS:
+            res = pd.read_csv(COMP / f"{sp['basename']}.csv")
+            render(res, args.B, sp); write_tex(res, args.B, sp); write_tex_detailed(res, args.B, sp)
+            print(f"Re-rendered {sp['basename']} (PNG + .tex) from {COMP / (sp['basename'] + '.csv')}")
         return
 
     # ── build geometry + per-patient predictions for every seed ──────────────────
@@ -237,86 +252,65 @@ def main():
     print(f"\nPoint-estimate reproduction vs master CSV: max|Δ| = {maxdiff:.2e} "
           f"({'OK' if maxdiff < 1e-3 else 'CHECK — exceeds 1e-3'})")
 
-    # ── paired, seed-stratified bootstrap of the metric difference vs RSF ─────────
+    # ── paired, seed-stratified bootstrap of each model−reference metric difference (BOTH references) ──
+    # ONE resample per (seed, b) shared by all models AND both references → fully paired; the vs-RSF numbers
+    # are unchanged by adding the second reference (same rng draw sequence).
     rng = np.random.default_rng(args.seed)
     B = args.B
-    boot = {(m, k): np.full(B, np.nan) for m, *_ in TEST_MODELS for k in MC}
-    boot_x = {k: np.full(B, np.nan) for k in MC}              # deep Weibull-pw − cross-sectional Weibull-pw
+    boot = {(sp["ref"], m, k): np.full(B, np.nan)
+            for sp in REF_SPECS for m, *_ in sp["tms"] for k in MC}
     for b in range(B):
         smet = {}
         for s in SEEDS:
             idx = rng.integers(0, GEO[s]["n"], GEO[s]["n"])       # ONE resample / (seed,b), shared by all
             smet[s] = {m: seed_metrics(idx, *PRE[s][m], GEO[s]) for m in ALL_MODELS}
-        for m, *_ in TEST_MODELS:
-            for k in MC:
-                dseed = [smet[s][m][k] - smet[s][REF][k] for s in SEEDS]
-                with warnings.catch_warnings():               # all-NaN seeds (rare AUC@10y resamples)
-                    warnings.simplefilter("ignore", RuntimeWarning)
-                    boot[(m, k)][b] = np.nanmean(dseed)
-        for k in MC:                                          # 2nd-reference test: deep vs cross-sectional Wpw
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore", RuntimeWarning)
-                boot_x[k][b] = np.nanmean([smet[s][DEEP_WPW][k] - smet[s][XSEC_WPW][k] for s in SEEDS])
+        for sp in REF_SPECS:
+            ref = sp["ref"]
+            for m, *_ in sp["tms"]:
+                for k in MC:
+                    with warnings.catch_warnings():           # all-NaN seeds (rare AUC@10y resamples)
+                        warnings.simplefilter("ignore", RuntimeWarning)
+                        boot[(ref, m, k)][b] = np.nanmean([smet[s][m][k] - smet[s][ref][k] for s in SEEDS])
         if (b + 1) % 250 == 0:
             print(f"  bootstrap {b + 1}/{B}")
 
-    # ── assemble Wald table ──────────────────────────────────────────────────────
-    recs = []
-    for m, group, head, agg in TEST_MODELS:
-        for k in MC:
-            delta = pt[m][k] - pt[REF][k]                         # signed (IBS: negative = better)
-            reps = boot[(m, k)]; effB = int(np.isfinite(reps).sum())
-            se = float(np.nanstd(reps, ddof=1)) if effB > 1 else np.nan
-            z = delta / se if (se and se > 0 and np.isfinite(delta)) else np.nan
-            p = float(2 * norm.sf(abs(z))) if np.isfinite(z) else np.nan
-            recs.append(dict(model=m, group=group, head=head, aggregation=agg, display=DISP[m],
-                             metric=k, mode=MODE[k], model_mean=pt[m][k], rsf_mean=pt[REF][k],
-                             delta=delta, se_boot=se, z=z, p=p, eff_B=effB,
-                             better=(delta < 0 if MODE[k] == "min" else delta > 0)))
-    res = pd.DataFrame(recs)
-    res["p_bh"] = bh_adjust(res["p"].to_numpy())
-
     def stars(p):
         return "" if not np.isfinite(p) else ("***" if p < 1e-3 else "**" if p < 1e-2 else "*" if p < 5e-2 else "")
-    res["sig"] = res["p"].map(stars)
 
-    for d in (COMP, HERE):
-        res.to_csv(d / "wald_significance_vs_rsf.csv", index=False, encoding="utf-8")
-    print(f"\nWald tests vs {REF} (Δ = model − RSF; bootstrap B={B}):")
-    show = res.pivot(index="display", columns="metric", values="z").reindex([DISP[m] for m, *_ in TEST_MODELS])[MC]
-    print(show.round(2).to_string())
-    nsig = (res["p"] < 0.05).sum()
-    print(f"\n{nsig}/{len(res)} model×metric comparisons significant at raw p<0.05 "
-          f"({(res['p_bh'] < 0.05).sum()} survive BH-FDR).")
-
-    # ── targeted 2nd-reference test: canonical DEEP longitudinal Weibull-pw vs cross-sectional Weibull-pw ──
-    # (same parametric family; quantifies the longitudinal-embedding lift) — paired via boot_x above.
-    xrecs = []
-    for k in MC:
-        delta = pt[DEEP_WPW][k] - pt[XSEC_WPW][k]            # signed (IBS: negative = deep better)
-        reps = boot_x[k]; effB = int(np.isfinite(reps).sum())
-        se = float(np.nanstd(reps, ddof=1)) if effB > 1 else np.nan
-        z = delta / se if (se and se > 0 and np.isfinite(delta)) else np.nan
-        p = float(2 * norm.sf(abs(z))) if np.isfinite(z) else np.nan
-        xrecs.append(dict(metric=k, mode=MODE[k], deep_mean=pt[DEEP_WPW][k], xsec_mean=pt[XSEC_WPW][k],
-                          delta=delta, se_boot=se, z=z, p=p, eff_B=effB,
-                          better=(delta < 0 if MODE[k] == "min" else delta > 0)))
-    xres = pd.DataFrame(xrecs)
-    xres["p_bh"] = bh_adjust(xres["p"].to_numpy())
-    xres["sig"] = xres["p"].map(stars)
-    for d in (COMP, HERE):
-        xres.to_csv(d / "wald_deep_vs_xsec_wpw.csv", index=False, encoding="utf-8")
-    print("\nDeep longitudinal Weibull-pw (MAMBA frozen) − cross-sectional Weibull-pw (Δ, z, p):")
-    print(xres[["metric", "delta", "se_boot", "z", "p", "sig"]].round(3).to_string(index=False))
-
-    render(res, args.B)
-    write_tex(res, args.B)
-    write_tex_detailed(res, args.B)
-    print(f"\nDone → {COMP}\\wald_significance_vs_rsf.csv / .png / .tex (+ _detailed.tex)")
+    # ── assemble + render each reference's Wald table ─────────────────────────────
+    for sp in REF_SPECS:
+        ref, tms, disp = sp["ref"], sp["tms"], sp["disp"]
+        recs = []
+        for m, group, head, agg in tms:
+            for k in MC:
+                delta = pt[m][k] - pt[ref][k]                    # signed (IBS: negative = better)
+                reps = boot[(ref, m, k)]; effB = int(np.isfinite(reps).sum())
+                se = float(np.nanstd(reps, ddof=1)) if effB > 1 else np.nan
+                z = delta / se if (se and se > 0 and np.isfinite(delta)) else np.nan
+                p = float(2 * norm.sf(abs(z))) if np.isfinite(z) else np.nan
+                recs.append(dict(model=m, group=group, head=head, aggregation=agg, display=disp[m],
+                                 metric=k, mode=MODE[k], model_mean=pt[m][k], ref_mean=pt[ref][k],
+                                 delta=delta, se_boot=se, z=z, p=p, eff_B=effB,
+                                 better=(delta < 0 if MODE[k] == "min" else delta > 0)))
+        res = pd.DataFrame(recs)
+        res["p_bh"] = bh_adjust(res["p"].to_numpy())
+        res["sig"] = res["p"].map(stars)
+        for d in (COMP, HERE):
+            res.to_csv(d / f"{sp['basename']}.csv", index=False, encoding="utf-8")
+        print(f"\nWald tests vs {sp['short']} (Δ = model − {ref}; bootstrap B={B}):")
+        show = res.pivot(index="display", columns="metric", values="z").reindex([disp[m] for m, *_ in tms])[MC]
+        print(show.round(2).to_string())
+        nsig = (res["p"] < 0.05).sum()
+        print(f"  {nsig}/{len(res)} model×metric comparisons significant at raw p<0.05 "
+              f"({(res['p_bh'] < 0.05).sum()} survive BH-FDR).")
+        render(res, args.B, sp)
+        write_tex(res, args.B, sp)
+        write_tex_detailed(res, args.B, sp)
+        print(f"  Done → {COMP}\\{sp['basename']}.csv / .png / .tex (+ _detailed.tex)")
 
 
 # ── house-style standalone table (DejaVu-Serif / bordered / ruled / dashed-divider) ──
-def render(res, B):
+def render(res, B, sp):
     METlbl = [("c_index", "C-index"), ("c_index_ipcw", "IPCW C"), ("ibs", "IBS"),
               ("auc_3y", "AUC@3y"), ("auc_5y", "AUC@5y"), ("auc_7y", "AUC@7y"), ("auc_10y", "AUC@10y")]
     headers = ["Model", "Aggregation"] + [lbl for _, lbl in METlbl]
@@ -330,7 +324,7 @@ def render(res, B):
 
     body, rules, sigflags = [], [], []
     prev_g = None
-    for key, group, head, agg in TEST_MODELS:
+    for key, group, head, agg in sp["tms"]:
         rule = "strong" if (prev_g is not None and group != prev_g) else None
         sub = {r.metric: r for r in res[res.model == key].itertuples()}
         cells = [head, agg]
@@ -346,15 +340,18 @@ def render(res, B):
 
     COL_W = [1.9, 1.5] + [1.5] * len(METlbl)
     LEFT, RIGHT_PAD = 0.28, 0.28
-    TITLE = "T4 Survival — Wald significance vs RSF (best tabular baseline)"
+    nq = int((res[res.group == "Longitudinal"]["p_bh"] < 0.05).sum())
+    bh_note = ("no longitudinal gain has q<0.05" if nq == 0
+               else f"{nq} longitudinal gain(s) survive BH-FDR (q<0.05)")
+    TITLE = f"T4 Survival — Wald significance vs {sp['short']} ({sp['paren']})"
     SUBTITLE = (
-        "cell = Δ(model − RSF) on the held-out (val+test) metric  ·  SE_boot  ·  z = Δ/SE_boot  ·  "
-        "p (raw two-sided Wald)  ·  q (Benjamini–Hochberg FDR over all 8×7 tests)\n"
+        f"cell = Δ(model − {sp['ref']}) on the held-out (val+test) metric  ·  SE_boot  ·  z = Δ/SE_boot  ·  "
+        f"p (raw two-sided Wald)  ·  q (Benjamini–Hochberg FDR over all {len(sp['tms'])}×7 tests)\n"
         f"SE from a paired, seed-stratified bootstrap (B={B}) of the metric difference\n"
-        "* p<0.05  ** p<0.01  *** p<0.001 (raw)  ·  bold Δ = significant AND better than RSF  ·  "
-        "no longitudinal gain has q<0.05\n"
+        f"* p<0.05  ** p<0.01  *** p<0.001 (raw)  ·  bold Δ = significant AND better than {sp['short']}  ·  "
+        f"{bh_note}\n"
         "IBS is lower-better (negative Δ = better)  ·  N(val+test) = 108 per seed (≈25 events), 3 seeds\n"
-        "reference RSF = cross-sectional Random Survival Forest on the baseline-visit-only tabular features")
+        f"reference {sp['short']} = {sp['desc']}")
     SUB_LINES = SUBTITLE.count("\n") + 1
     SUB_H = 0.27 * SUB_LINES
     TITLE_H, HEAD_H, ROW_H = 0.5 + SUB_H, 0.40, 1.30   # 1.30: 5-line cells (Δ / SE / z / p / q)
@@ -408,8 +405,8 @@ def render(res, B):
     ax.add_patch(plt.Rectangle((LEFT, BOTTOM), RIGHT - LEFT, y_title_top - BOTTOM,
                                facecolor="none", edgecolor="black", linewidth=1.5, zorder=5))
     for d in (COMP, HERE):
-        fig.savefig(d / "wald_significance_vs_rsf.png", bbox_inches="tight", dpi=300)
-        fig.savefig(d / "wald_significance_vs_rsf.pdf", bbox_inches="tight", dpi=300)
+        fig.savefig(d / f"{sp['basename']}.png", bbox_inches="tight", dpi=300)
+        fig.savefig(d / f"{sp['basename']}.pdf", bbox_inches="tight", dpi=300)
     plt.close(fig)
 
 
@@ -419,10 +416,13 @@ TEX_METLBL = [("c_index", r"C-index"), ("c_index_ipcw", r"IPCW C"), ("ibs", r"IB
               ("auc_3y", r"AUC@3y"), ("auc_5y", r"AUC@5y"), ("auc_7y", r"AUC@7y"), ("auc_10y", r"AUC@10y")]
 
 
-def write_tex(res, B, out_path=None):
-    """Wald-vs-RSF table as LaTeX. Each metric cell stacks Δ (with raw-p stars) / bootstrap SE / z via
-    \\makecell. Bold Δ = significant AND better than RSF. Requires \\usepackage{makecell,booktabs}."""
-    out_path = out_path or (HERE / "wald_significance_vs_rsf.tex")
+def write_tex(res, B, sp, out_path=None):
+    """Wald table (vs sp['ref']) as LaTeX. Each metric cell stacks Δ (with raw-p stars) / bootstrap SE / z
+    via \\makecell. Bold Δ = significant AND better than the reference. Requires \\usepackage{makecell,booktabs}."""
+    out_path = out_path or (HERE / f"{sp['basename']}.tex")
+    nq = int((res[res.group == "Longitudinal"]["p_bh"] < 0.05).sum())
+    bh_clause = ("none survive Benjamini--Hochberg FDR correction" if nq == 0
+                 else f"{nq} longitudinal comparison(s) survive Benjamini--Hochberg FDR correction")
 
     def stars(p):
         return "" if not np.isfinite(p) else ("***" if p < 1e-3 else "**" if p < 1e-2 else "*" if p < 5e-2 else "")
@@ -442,8 +442,8 @@ def write_tex(res, B, out_path=None):
         agg_tex = "---" if agg == "—" else agg
         return f"{head_name} & {agg_tex} & " + " & ".join(cell(sub[mk]) for mk, _ in TEX_METLBL) + r" \\"
 
-    longi = [(h, a, m) for m, g, h, a in TEST_MODELS if g == "Longitudinal"]
-    cross = [(h, a, m) for m, g, h, a in TEST_MODELS if g != "Longitudinal"]
+    longi = [(h, a, m) for m, g, h, a in sp["tms"] if g == "Longitudinal"]
+    cross = [(h, a, m) for m, g, h, a in sp["tms"] if g != "Longitudinal"]
     head = (r"\textbf{Model} & \textbf{Aggregation} & "
             + " & ".join(rf"\textbf{{{h}}}" for _, h in TEX_METLBL) + r" \\")
     lines = [
@@ -458,25 +458,29 @@ def write_tex(res, B, out_path=None):
         r"\multicolumn{9}{l}{\textit{Cross-sectional (tabular baseline vector)}} \\",
         *[row(h, a, m) for h, a, m in cross],
         r"\bottomrule", r"\end{tabular}%", r"}",
-        r"\caption{Significance of each survival model against the RSF reference (a cross-sectional Random "
-        r"Survival Forest fit on the baseline-visit-only tabular features) on the held-out "
-        r"(validation+test) set. Each cell reports $\Delta = (\text{model}-\text{RSF})$ for that metric, "
-        r"the bootstrap standard error of the difference, and the Wald statistic $z=\Delta/\mathrm{SE}$. "
-        r"The SE is from a paired, seed-stratified bootstrap ($B=" + str(B) + r"$) that resamples the 108 "
-        r"held-out patients within each seed and recomputes the model$-$RSF difference (paired, so the "
-        r"strong model$-$RSF correlation is captured). Markers denote the two-sided Wald test: "
-        r"$^{*}p{<}0.05$, $^{**}p{<}0.01$, $^{***}p{<}0.001$ (raw); none survive Benjamini--Hochberg "
-        r"FDR correction across the $8\times7$ comparisons ($q$ in the supplementary CSV). Bold $\Delta$ = "
-        r"significant and better than RSF. IBS is lower-better (negative $\Delta$ = better). "
+        r"\caption{Significance of each survival model against the " + sp["short"] + r" reference (" +
+        sp["desc"] + r") on the held-out (validation+test) set. Each cell reports "
+        r"$\Delta = (\text{model}-\text{ref})$ for that metric, the bootstrap standard error of the "
+        r"difference, and the Wald statistic $z=\Delta/\mathrm{SE}$. The SE is from a paired, "
+        r"seed-stratified bootstrap ($B=" + str(B) + r"$) that resamples the 108 held-out patients within "
+        r"each seed and recomputes the model$-$reference difference (paired, so the strong correlation is "
+        r"captured). Markers denote the two-sided Wald test: $^{*}p{<}0.05$, $^{**}p{<}0.01$, "
+        r"$^{***}p{<}0.001$ (raw); " + bh_clause + r" across the $" + str(len(sp["tms"])) +
+        r"\times7$ comparisons ($q$ in the supplementary CSV). Bold $\Delta$ = significant and better than " +
+        sp["short"] + r". IBS is lower-better (negative $\Delta$ = better). "
         r"$N=108$ per seed ($\approx$25 events), 3 seeds.}",
-        r"\label{tab:wald_vs_rsf}", r"\end{table}", ""]
+        r"\label{tab:" + sp["label"] + r"}", r"\end{table}", ""]
     out_path.write_text("\n".join(lines), encoding="utf-8")
     print(f"  TeX: {out_path}")
 
 
-def write_tex_detailed(res, B, out_path=None):
-    """Detailed Wald-vs-RSF table: each cell stacks Δ^stars / SE / z / p (raw) / q (BH-FDR)."""
-    out_path = out_path or (HERE / "wald_significance_vs_rsf_detailed.tex")
+def write_tex_detailed(res, B, sp, out_path=None):
+    """Detailed Wald table (vs sp['ref']): each cell stacks Δ^stars / SE / z / p (raw) / q (BH-FDR)."""
+    out_path = out_path or (HERE / f"{sp['basename']}_detailed.tex")
+    nq = int((res[res.group == "Longitudinal"]["p_bh"] < 0.05).sum())
+    ntest = len(sp["tms"])
+    bh_clause = ("none survive Benjamini--Hochberg FDR ($q<0.05$)" if nq == 0
+                 else f"{nq} longitudinal comparison(s) survive Benjamini--Hochberg FDR ($q<0.05$)")
 
     def stars(p):
         return "" if not np.isfinite(p) else ("***" if p < 1e-3 else "**" if p < 1e-2 else "*" if p < 5e-2 else "")
@@ -497,8 +501,8 @@ def write_tex_detailed(res, B, out_path=None):
         agg_tex = "---" if agg == "—" else agg
         return f"{head_name} & {agg_tex} & " + " & ".join(cell(sub[mk]) for mk, _ in TEX_METLBL) + r" \\"
 
-    longi = [(h, a, m) for m, g, h, a in TEST_MODELS if g == "Longitudinal"]
-    cross = [(h, a, m) for m, g, h, a in TEST_MODELS if g != "Longitudinal"]
+    longi = [(h, a, m) for m, g, h, a in sp["tms"] if g == "Longitudinal"]
+    cross = [(h, a, m) for m, g, h, a in sp["tms"] if g != "Longitudinal"]
     head = (r"\textbf{Model} & \textbf{Aggregation} & "
             + " & ".join(rf"\textbf{{{h}}}" for _, h in TEX_METLBL) + r" \\")
     lines = [
@@ -513,16 +517,16 @@ def write_tex_detailed(res, B, out_path=None):
         r"\multicolumn{9}{l}{\textit{Cross-sectional (tabular baseline-visit features)}} \\",
         *[row(h, a, m) for h, a, m in cross],
         r"\bottomrule", r"\end{tabular}%", r"}",
-        r"\caption{Significance of each survival model against the RSF reference (a cross-sectional Random "
-        r"Survival Forest fit on the baseline-visit-only tabular features) on the held-out "
-        r"(validation+test) set. Each cell reports $\Delta=(\text{model}-\text{RSF})$ for that metric, the "
-        r"paired seed-stratified bootstrap standard error of the difference ($B=" + str(B) + r"$), the Wald "
-        r"statistic $z=\Delta/\mathrm{SE}$, the raw two-sided $p$-value, and the Benjamini--Hochberg "
-        r"FDR-adjusted $q$-value across all $8\times7=56$ comparisons. Stars mark the raw $p$ "
-        r"($^{*}p{<}0.05$, $^{**}p{<}0.01$, $^{***}p{<}0.001$); note that no longitudinal advantage has "
-        r"$q<0.05$. Bold $\Delta$ = significant (raw) and better than RSF. IBS is lower-better (negative "
-        r"$\Delta$ = better). $N=108$ per seed ($\approx$25 events), 3 seeds.}",
-        r"\label{tab:wald_vs_rsf_detailed}", r"\end{table}", ""]
+        r"\caption{Significance of each survival model against the " + sp["short"] + r" reference (" +
+        sp["desc"] + r") on the held-out (validation+test) set. Each cell reports "
+        r"$\Delta=(\text{model}-\text{ref})$ for that metric, the paired seed-stratified bootstrap standard "
+        r"error of the difference ($B=" + str(B) + r"$), the Wald statistic $z=\Delta/\mathrm{SE}$, the raw "
+        r"two-sided $p$-value, and the Benjamini--Hochberg FDR-adjusted $q$-value across all $" +
+        str(ntest) + r"\times7=" + str(ntest * 7) + r"$ comparisons. Stars mark the raw $p$ "
+        r"($^{*}p{<}0.05$, $^{**}p{<}0.01$, $^{***}p{<}0.001$); " + bh_clause +
+        r". Bold $\Delta$ = significant (raw) and better than " + sp["short"] + r". IBS is lower-better "
+        r"(negative $\Delta$ = better). $N=108$ per seed ($\approx$25 events), 3 seeds.}",
+        r"\label{tab:" + sp["label"] + r"_detailed}", r"\end{table}", ""]
     out_path.write_text("\n".join(lines), encoding="utf-8")
     print(f"  TeX (detailed): {out_path}")
 
