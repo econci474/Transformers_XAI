@@ -11,8 +11,8 @@ Changes vs the raw table (per request):
   - split the cryptic `Model` name into two columns: `Model` (survival head) and `Aggregation`
     (sequence aggregator over the bl/m06/m12 visits);
   - drop the finetune / time-prepend / align ablations (A_q2/q3/q4) and A_q1_mamba2;
-  - keep the three tabular baselines (RSF, Cox PH, Weibull AFT) at the bottom (clinical baseline vector,
-    no aggregator).
+  - keep the four tabular baselines (RSF, Cox PH, Weibull AFT, Weibull piecewise) at the bottom (clinical
+    baseline vector, no aggregator).
 
 Reads the per-seed master CSV (no re-fit). Saves into the same comparison folder.
 
@@ -62,6 +62,7 @@ ROWS = [
     ("RSF",                     "baseline",   "RSF",               "—"),
     ("Cox PH",                  "baseline",   "Cox PH",            "—"),
     ("Weibull AFT",             "baseline",   "Weibull AFT",       "—"),
+    ("Weibull piecewise",       "baseline",   "Weibull piecewise", "—"),
 ]
 METRICS = [("c_index", "C-index", "max"), ("c_index_ipcw", "IPCW C", "max"), ("ibs", "IBS", "min"),
            ("auc_3y", "AUC@3y", "max"), ("auc_5y", "AUC@5y", "max"),
@@ -88,8 +89,8 @@ TITLE = "T4 Survival — longitudinal-MAMBA heads vs tabular baselines (CN+MCI �
 SUBTITLE = (
     "held-out = val+test pooled  ·  mean ± std over 3 seeds  ·  bold = best per column\n"
     "Model = survival head;  Aggregation = sequence aggregator over the bl/m06/m12 visits (risk = 1 − S(t_ref))\n"
-    "MAMBA = deep heads on clinical embeddings  ·  baselines = RSF / Cox PH / Weibull AFT on an "
-    "8-feature clinical baseline vector  ·  N(val+test) = 108 (≈25 events)\n"
+    "MAMBA = deep heads on clinical embeddings  ·  baselines = RSF / Cox PH / Weibull AFT / Weibull piecewise "
+    "on an 8-feature clinical baseline vector  ·  N(val+test) = 108 (≈25 events)\n"
     "* p<0.05  ** p<0.01  *** p<0.001 : two-sided Wald test vs RSF (reference), paired seed-stratified bootstrap SE")
 
 

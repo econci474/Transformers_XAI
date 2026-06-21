@@ -49,7 +49,7 @@ matplotlib.rcParams["font.family"] = "DejaVu Serif"
 HERE = Path(__file__).resolve().parent
 PRED = Path(r"D:\ADNI_BIDS_project\derivatives\mamba_survival\survival")
 COMP = PRED / "comparison"
-CLIN = Path(r"C:\Users\elena\iCloudDrive\Desktop\ACS_MPhil\Thesis\git\Transformers_XAI\clinical_pipeline")
+CLIN = Path(__file__).resolve().parents[3] / "clinical_pipeline"   # repo-relative (repo moved off iCloud)
 SEEDS = (0, 1, 2)
 REF = "RSF"                                            # reference baseline (locked with user)
 MC = ["c_index", "c_index_ipcw", "ibs", "auc_3y", "auc_5y", "auc_7y", "auc_10y"]
@@ -66,6 +66,7 @@ TEST_MODELS = [
     ("B_weibull_aft",           "Longitudinal",    "Weibull-AFT", "MAMBA (frozen)"),
     ("Cox PH",                  "Cross-sectional", "Cox PH",      "—"),
     ("Weibull AFT",             "Cross-sectional", "Weibull-AFT", "—"),
+    ("Weibull piecewise",       "Cross-sectional", "Weibull-pw",  "—"),
 ]
 DISP = {k: f"{head} · {agg}" if agg != "—" else f"{head} (tabular)"
         for k, _, head, agg in TEST_MODELS}                # display string per model key
@@ -125,7 +126,7 @@ def build_seed(seed):
 
     PRE = {}
     # baselines: refit per seed on TRAIN, predict S on the fixed grid + at t_ref (canonical order)
-    for name in ("RSF", "Cox PH", "Weibull AFT"):
+    for name in ("RSF", "Cox PH", "Weibull AFT", "Weibull piecewise"):
         sf = L.fit_model(name, Xtr, etr, ttr)
         S = np.clip(np.asarray(sf(Xvt, grid), float), 1e-8, 1.0)
         risk = 1.0 - np.clip(np.asarray(sf(Xvt, np.array([t_ref])), float)[:, 0], 1e-8, 1.0)

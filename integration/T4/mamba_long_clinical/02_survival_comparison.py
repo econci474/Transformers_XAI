@@ -24,11 +24,11 @@ from sklearn.metrics import balanced_accuracy_score, f1_score
 from sksurv.util import Surv
 
 HERE = Path(__file__).resolve().parent
-PRED_ROOT = HERE / "outputs" / "survival"
+PRED_ROOT = Path(r"D:\ADNI_BIDS_project\derivatives\mamba_survival\survival")
 OUT = PRED_ROOT / "comparison"
 OUT.mkdir(parents=True, exist_ok=True)
 SEEDS = (0, 1, 2)
-CLIN = Path(r"C:\Users\elena\iCloudDrive\Desktop\ACS_MPhil\Thesis\git\Transformers_XAI\clinical_pipeline")
+CLIN = HERE.parents[2] / "clinical_pipeline"   # repo-relative (repo moved off iCloud → C:\Users\elena\repos)
 
 
 def _load_02l():
@@ -38,7 +38,7 @@ def _load_02l():
 
 
 L = _load_02l()
-BASELINES = ["RSF", "Cox PH", "Weibull AFT"]
+BASELINES = ["RSF", "Cox PH", "Weibull AFT", "Weibull piecewise"]
 
 
 def interp_surv_fn(Sgrid, grid_times):
