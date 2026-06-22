@@ -67,10 +67,12 @@ TEST_MODELS = [
     ("Cox PH",                  "Cross-sectional", "Cox PH",      "—"),
     ("Weibull AFT",             "Cross-sectional", "Weibull-AFT", "—"),
     ("Weibull piecewise",       "Cross-sectional", "Weibull-pw",  "—"),
+    ("soden_xsec",              "Cross-sectional", "SODEN",       "—"),   # neural-ODE SODEN on 8 feats
 ]
 DISP = {k: f"{head} · {agg}" if agg != "—" else f"{head} (tabular)"
         for k, _, head, agg in TEST_MODELS}                # display string per model key
-MAMBA_CFGS = {"A_ctrl_gru", "A_ctrl_meanpool", "A_default_mamba1_frozen", "B_cox", "B_soden", "B_weibull_aft"}
+MAMBA_CFGS = {"A_ctrl_gru", "A_ctrl_meanpool", "A_default_mamba1_frozen", "B_cox", "B_soden", "B_weibull_aft",
+              "soden_xsec"}   # soden_xsec is parquet-loaded too (neural; can't be refit in survml)
 ALL_MODELS = [m for m, *_ in TEST_MODELS] + [REF]
 
 # ── second reference: the cross-sectional Weibull-pw baseline → an analogous "..._vs_weibull_pw" table ──
